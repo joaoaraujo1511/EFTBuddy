@@ -6,7 +6,18 @@ config :eft_buddy, EftBuddy.Repo,
   password: System.get_env("DB_PASSWORD"),
   hostname: System.get_env("DB_HOSTNAME"),
   database: System.get_env("DB_NAME"),
-  port: String.to_integer(System.get_env("DB_PORT")),
+  # DEFAULTED, not required. Mix evaluates this file for EVERY task in the dev
+  # environment, including ones that never open a connection — `hex.audit`,
+  # `deps.get`, `deps.update`, `format`. A bare `String.to_integer(nil)` here
+  # raised ArgumentError from :erlang.binary_to_integer and took all of them
+  # down with it, with a stacktrace pointing at erl_eval rather than at the
+  # missing variable.
+  #
+  # The other keys above are left undefaulted on purpose: they resolve to nil
+  # and fail later, at connection time, with an error that names the database.
+  # Only this line could fail at CONFIG time, which is why only this line needs
+  # a fallback. `config/test.exs` defaults its equivalent the same way.
+  port: String.to_integer(System.get_env("DB_PORT") || "5432"),
   stacktrace: true,
   show_sensitive_data_on_connection_error: true,
   pool_size: 10,
