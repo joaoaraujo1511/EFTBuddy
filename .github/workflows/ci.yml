@@ -43,11 +43,6 @@ jobs:
     name: Build & test
     runs-on: ubuntu-latest
 
-    # The mix project lives in the app/ subdirectory.
-    defaults:
-      run:
-        working-directory: app
-
     services:
       db:
         image: postgres:16
@@ -79,9 +74,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            app/deps
-            app/_build
-          key: ${{ runner.os }}-mix-${{ env.OTP_VERSION }}-${{ hashFiles('app/mix.lock') }}
+            deps
+            _build
+          key: ${{ runner.os }}-mix-${{ env.OTP_VERSION }}-${{ hashFiles('mix.lock') }}
           restore-keys: |
             ${{ runner.os }}-mix-${{ env.OTP_VERSION }}-
 
@@ -96,7 +91,7 @@ jobs:
       # is its own process, and that matters: `hex.audit` is a Hex ARCHIVE task, and
       # once `mix compile` has run in the same OS process Mix can no longer resolve
       # it. That is why the local alias has to run the audits FIRST — a constraint
-      # CI does not share. Keep this list in step with the alias in app/mix.exs.
+      # CI does not share. Keep this list in step with the alias in mix.exs.
       - name: Dependency vulnerability audit
         run: mix deps.audit
 

@@ -12,8 +12,8 @@ by the Free Software Foundation. See [`LICENSE`](LICENSE) for the full text.
 ## This repository is an aggregation, not a single work
 
 The AGPL-3.0 grant in `LICENSE` covers **the application source code** authored
-for this project — the Elixir under `app/lib`, the JavaScript and CSS under
-`app/assets`, the tests, and the configuration.
+for this project — the Elixir under `lib`, the JavaScript and CSS under
+`assets`, the tests, and the configuration.
 
 It does **not** relicense the third-party material bundled alongside it. Those
 files keep their own terms, and anyone redistributing this repository is bound by
@@ -25,13 +25,13 @@ whole.
 
 ### Map base artwork — CC BY-NC-SA 4.0
 
-`app/priv/static/images/maps/*.svg` (10 files) are derivative works of the
+`priv/static/images/maps/*.svg` (10 files) are derivative works of the
 [Escape from Tarkov SVG Maps Project](https://github.com/the-hideout/tarkov-dev-svg-maps)
 by Shebuka, re3mr and contributors, licensed
 [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/).
 
 Full provenance, the list of modifications, and the upstream terms are in
-[`app/priv/static/images/maps/ATTRIBUTION.md`](app/priv/static/images/maps/ATTRIBUTION.md).
+[`priv/static/images/maps/ATTRIBUTION.md`](priv/static/images/maps/ATTRIBUTION.md).
 
 Three terms carry over to you:
 
@@ -57,27 +57,27 @@ synced at runtime from the `maps.json` of
 application's database. MIT requires its notice to travel with copies, and that
 data is copied into our database and served to clients, so the notice
 (`Copyright (c) 2019 Oskar Risberg`) is reproduced in full in
-[`app/priv/static/images/maps/ATTRIBUTION.md`](app/priv/static/images/maps/ATTRIBUTION.md).
+[`priv/static/images/maps/ATTRIBUTION.md`](priv/static/images/maps/ATTRIBUTION.md).
 
 ### Typefaces — SIL Open Font License 1.1
 
-`app/priv/static/fonts/*.woff2`: Oswald (Copyright 2016 The Oswald Project
+`priv/static/fonts/*.woff2`: Oswald (Copyright 2016 The Oswald Project
 Authors) and Inter (Copyright 2020 The Inter Project Authors). Full licence texts
 ship beside the fonts as `OFL-Oswald.txt` and `OFL-Inter.txt`; see
-[`app/priv/static/fonts/README.md`](app/priv/static/fonts/README.md). Neither
+[`priv/static/fonts/README.md`](priv/static/fonts/README.md). Neither
 family declares a Reserved Font Name.
 
 ### Vendored JavaScript — MIT
 
-`app/assets/vendor/topbar.js` — topbar 3.0.0, Copyright (c) 2024 Buu Nguyen, MIT
-(notice retained in the file header). `app/assets/vendor/heroicons.js` is the
+`assets/vendor/topbar.js` — topbar 3.0.0, Copyright (c) 2024 Buu Nguyen, MIT
+(notice retained in the file header). `assets/vendor/heroicons.js` is the
 Phoenix generator's Tailwind plugin; the icons it inlines come from the
 [heroicons](https://github.com/tailwindlabs/heroicons) dependency (MIT).
 
 ### Elixir and JavaScript dependencies
 
 Fetched at build time, not redistributed here. All are permissively licensed
-(MIT, Apache-2.0, BSD-2/3-Clause); the lock file `app/mix.lock` is authoritative.
+(MIT, Apache-2.0, BSD-2/3-Clause); the lock file `mix.lock` is authoritative.
 No copyleft dependency is present.
 
 ## Escape from Tarkov content
@@ -95,7 +95,7 @@ redistributed by this repository.
 
 ### Game-derived images that ARE vendored here, under no grant
 
-**65 image files in `app/priv/static/images/` are derived from Battlestate Games'
+**65 image files in `priv/static/images/` are derived from Battlestate Games'
 own artwork and are covered by no licence from anyone**, including this NOTICE:
 
 | Directory | Files | What they are |
@@ -121,10 +121,10 @@ does so with no permission from the rights holder.** If you fork this, remove
 them. Takedown requests will be honoured immediately — see the contact link in the
 application footer.
 
-The 18 marker icons in `app/priv/static/images/maps/markers/` are a separate,
+The 18 marker icons in `priv/static/images/maps/markers/` are a separate,
 smaller unknown: their provenance is not recorded and this project makes no
 ownership claim over them. See
-[`app/priv/static/images/maps/ATTRIBUTION.md`](app/priv/static/images/maps/ATTRIBUTION.md).
+[`priv/static/images/maps/ATTRIBUTION.md`](priv/static/images/maps/ATTRIBUTION.md).
 
 The Escape from Tarkov Wiki licenses its contributors' **prose** under
 [CC BY-NC-SA 3.0](https://creativecommons.org/licenses/by-nc-sa/3.0/), which the

@@ -1,8 +1,10 @@
-# NOTE ON ANCHORING: patterns below are deliberately NOT all anchored to /app/.
-# Every rule in this file used to start with `/app/`, which is how 1,308
-# `.elixir_ls/` paths and 933 compiled `.beam` files reached the repository
-# history. Build artefacts can appear at any depth, so the rules that match them
-# are left unanchored.
+# NOTE ON ANCHORING: the artefact patterns below are deliberately NOT anchored.
+# Every rule in this file once started with `/app/`, back when the mix project
+# lived in that subdirectory, which is how 1,308 `.elixir_ls/` paths and 933
+# compiled `.beam` files reached the repository history. Build artefacts can
+# appear at any depth, so the rules that match them are left unanchored. The
+# project now sits at the repository root and the few anchored rules start at
+# `/priv/`.
 
 # The directory Mix will write compiled artifacts to.
 _build/
@@ -41,18 +43,18 @@ tmp/
 eft_buddy-*.tar
 
 # Ignore assets that are produced by build tools.
-/app/priv/static/assets/
+/priv/static/assets/
 
 # Ignore digested assets cache.
-/app/priv/static/cache_manifest.json
+/priv/static/cache_manifest.json
 
 # `mix phx.digest` — which `mix assets.deploy` runs, and which therefore runs on
 # every production build — writes a digested copy AND a .gz variant next to
 # EVERY source file throughout priv/static, not only under assets/.
 # Committing those would duplicate every image, font and svg in the repo (~100
 # files). Remove any that appear with `mix phx.digest.clean --all`.
-/app/priv/static/**/*.gz
-/app/priv/static/**/*-????????????????????????????????.*
+/priv/static/**/*.gz
+/priv/static/**/*-????????????????????????????????.*
 
 # In case you use Node.js/npm, you want to ignore these.
 npm-debug.log
