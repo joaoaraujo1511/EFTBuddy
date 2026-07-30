@@ -1,0 +1,140 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+# Toolchain, pinned in one place. OTP is pinned to the FULL patch version, not
+# `27.3`, which setup-beam resolves to whatever 27.3.x it publishes latest — so a
+# green run would otherwise say nothing about which patch level was tested, and
+# the same commit could pass and then fail a week later with no diff.
+#
+# Keep these in step with whatever the deploy target actually runs. That used to
+# be enforced mechanically by a second job building against the same values;
+# there is no such job now, so it is a manual check.
+env:
+  OTP_VERSION: "27.3.4.3"
+  ELIXIR_VERSION: "1.18.4"
+
+jobs:
+  test:
+    name: Build & test
+    runs-on: ubuntu-latest
+
+    # The mix project lives in the app/ subdirectory.
+    defaults:
+      run:
+        working-directory: app
+
+    services:
+      db:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      MIX_ENV: test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Elixir/OTP
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: ${{ env.OTP_VERSION }}
+          elixir-version: ${{ env.ELIXIR_VERSION }}
+
+      - name: Cache deps and _build
+        uses: actions/cache@v4
+        with:
+          path: |
+            app/deps
+            app/_build
+          key: ${{ runner.os }}-mix-${{ env.OTP_VERSION }}-${{ hashFiles('app/mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-mix-${{ env.OTP_VERSION }}-
+
+      - name: Install dependencies
+        run: mix deps.get
+
+      # The steps below mirror the `mix precommit` alias, in the same ORDER, with
+      # the `--check-*` variants so the build fails on unused deps or unformatted
+      # code instead of silently rewriting them like the local auto-fix alias does.
+      #
+      # They are spelled out rather than calling `mix precommit` because each `run:`
+      # is its own process, and that matters: `hex.audit` is a Hex ARCHIVE task, and
+      # once `mix compile` has run in the same OS process Mix can no longer resolve
+      # it. That is why the local alias has to run the audits FIRST — a constraint
+      # CI does not share. Keep this list in step with the alias in app/mix.exs.
+      - name: Dependency vulnerability audit
+        run: mix deps.audit
+
+      - name: Retired package audit
+        run: mix hex.audit
+
+      - name: Check for unused dependencies
+        run: mix deps.unlock --check-unused
+
+      - name: Compile (warnings as errors)
+        run: mix compile --warnings-as-errors
+
+      - name: Check formatting
+        run: mix format --check-formatted
+
+      # Security-focused static analysis. Blocking: a finding here (e.g. a missing
+      # CSP, an unsafe redirect, raw SQL) should fail CI. `--skip` honours the
+      # inline `# sobelow_skip` annotations for reviewed false positives.
+      - name: Sobelow security scan
+        run: mix sobelow --exit Low --skip
+
+      # The `test` alias runs `ecto.create` + `ecto.migrate` before the suite, so
+      # this also exercises every migration end-to-end.
+      - name: Run tests
+        run: mix test
+
+      # Prove every migration is reversible end-to-end: roll the whole schema back
+      # down and migrate it back up. Catches a migration that only works in the `up`
+      # direction before it ships.
+      - name: Migration rollback smoke test
+        run: mix ecto.rollback --all && mix ecto.migrate
+
+      # NO CREDO STEP, deliberately. There used to be a `mix credo --strict` step
+      # marked `continue-on-error: true`, with a comment saying to flip that "once
+      # the backlog is cleared". There is no `.credo.exs` in the project, so it ran
+      # on stock defaults against a codebase with a known nesting/complexity
+      # backlog: permanently red, permanently ignored, with no baseline to clear and
+      # no owner. A step that cannot fail is not a check, it is decoration that
+      # trains readers to ignore the annotations next to it. Bring it back with a
+      # `.credo.exs` tuned to this codebase and `continue-on-error: false`, or not at
+      # all.
+
+  # NO ARTEFACT-BUILD JOB. There was one: it built a container image and smoke-tested
+  # it. This project is not deployed as a container, so the job and everything it
+  # referenced were removed rather than left to fail.
+  #
+  # Two things went with it, and only one is actually covered elsewhere:
+  #
+  #   * The blank/missing PHX_HOST guard — COVERED. `test/eft_buddy_web/
+  #     runtime_config_test.exs` evaluates config/runtime.exs with `Config.Reader`
+  #     under `env: :prod` and asserts missing, blank and whitespace-only are all
+  #     refused, for every required variable. That is a stricter check than the
+  #     image job's single case, and it runs in the `test` job above.
+  #
+  #   * The prod COMPILE path — NOT covered anywhere. `config/prod.exs`
+  #     (`force_ssl`, `cache_static_manifest`), `mix assets.deploy` and `mix
+  #     release` are exercised by nothing in this pipeline. A `MIX_ENV=prod`
+  #     build step belongs here once the release target is decided; it needs a
+  #     `releases:` key in mix.exs, which does not exist yet.

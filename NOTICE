@@ -1,0 +1,138 @@
+# NOTICE — EFT Buddy
+
+EFT Buddy
+Copyright (C) 2026 the EFT Buddy contributors
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the **GNU Affero General Public License, version 3**, as published
+by the Free Software Foundation. See [`LICENSE`](LICENSE) for the full text.
+
+---
+
+## This repository is an aggregation, not a single work
+
+The AGPL-3.0 grant in `LICENSE` covers **the application source code** authored
+for this project — the Elixir under `app/lib`, the JavaScript and CSS under
+`app/assets`, the tests, and the configuration.
+
+It does **not** relicense the third-party material bundled alongside it. Those
+files keep their own terms, and anyone redistributing this repository is bound by
+those terms in addition to the AGPL. The practical consequences are set out
+below, because two of them restrict what you may do with the repository as a
+whole.
+
+## Bundled third-party material
+
+### Map base artwork — CC BY-NC-SA 4.0
+
+`app/priv/static/images/maps/*.svg` (10 files) are derivative works of the
+[Escape from Tarkov SVG Maps Project](https://github.com/the-hideout/tarkov-dev-svg-maps)
+by Shebuka, re3mr and contributors, licensed
+[CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/).
+
+Full provenance, the list of modifications, and the upstream terms are in
+[`app/priv/static/images/maps/ATTRIBUTION.md`](app/priv/static/images/maps/ATTRIBUTION.md).
+
+Three terms carry over to you:
+
+1. **ShareAlike** — adaptations of this artwork must stay under CC BY-NC-SA 4.0
+   and keep the credit above.
+2. **NonCommercial** — this artwork may not be used commercially. It is why EFT
+   Buddy carries no advertising, no paid tiers and no sponsorships. **A fork that
+   monetises this project while shipping these files would breach the artwork
+   licence, whatever the AGPL permits for the code.**
+3. **No cheating use** — the upstream terms forbid use in software that confers
+   an unfair in-game advantage (radar/ESP overlays, cheat-client maps,
+   automation, pixel bots), and state that such use revokes the licence
+   automatically. EFT Buddy renders these maps as static reference material: it
+   does not read game memory, parse game logs, hook the client, or track live
+   player position. **Any feature that changed that would void the licence and
+   must not be built.**
+
+### Map projection configuration — MIT
+
+The per-map transform, bounds, zoom range, floor layers and room labels are
+synced at runtime from the `maps.json` of
+[tarkov.dev](https://github.com/the-hideout/tarkov-dev) and stored in this
+application's database. MIT requires its notice to travel with copies, and that
+data is copied into our database and served to clients, so the notice
+(`Copyright (c) 2019 Oskar Risberg`) is reproduced in full in
+[`app/priv/static/images/maps/ATTRIBUTION.md`](app/priv/static/images/maps/ATTRIBUTION.md).
+
+### Typefaces — SIL Open Font License 1.1
+
+`app/priv/static/fonts/*.woff2`: Oswald (Copyright 2016 The Oswald Project
+Authors) and Inter (Copyright 2020 The Inter Project Authors). Full licence texts
+ship beside the fonts as `OFL-Oswald.txt` and `OFL-Inter.txt`; see
+[`app/priv/static/fonts/README.md`](app/priv/static/fonts/README.md). Neither
+family declares a Reserved Font Name.
+
+### Vendored JavaScript — MIT
+
+`app/assets/vendor/topbar.js` — topbar 3.0.0, Copyright (c) 2024 Buu Nguyen, MIT
+(notice retained in the file header). `app/assets/vendor/heroicons.js` is the
+Phoenix generator's Tailwind plugin; the icons it inlines come from the
+[heroicons](https://github.com/tailwindlabs/heroicons) dependency (MIT).
+
+### Elixir and JavaScript dependencies
+
+Fetched at build time, not redistributed here. All are permissively licensed
+(MIT, Apache-2.0, BSD-2/3-Clause); the lock file `app/mix.lock` is authoritative.
+No copyleft dependency is present.
+
+## Escape from Tarkov content
+
+Escape from Tarkov and related content are trademarks and copyrighted works of
+**Battlestate Games Limited** and its licensors. All rights reserved.
+
+EFT Buddy is an unofficial, non-commercial fan project and is **not affiliated
+with or endorsed by Battlestate Games**.
+
+Most game imagery displayed by the running application — item icons, trader
+portraits, quest banners, map renders and tile pyramids — is hot-linked from
+tarkov.dev and the Escape from Tarkov Wiki at request time and is **not**
+redistributed by this repository.
+
+### Game-derived images that ARE vendored here, under no grant
+
+**65 image files in `app/priv/static/images/` are derived from Battlestate Games'
+own artwork and are covered by no licence from anyone**, including this NOTICE:
+
+| Directory | Files | What they are |
+|---|---|---|
+| `ranks/` | 16 | PMC rank emblems |
+| `hideout/` | 26 | Hideout station icons |
+| `chapters/` | 10 | Storyline chapter art |
+| `items/missing/` | 9 | Item placeholder art |
+| `icons/` | 4 | Faction / game-mode icons |
+
+They are stated here rather than omitted because omitting them, next to the
+sentence above, would read as a claim that this repository redistributes no game
+imagery — which is not true. Neither Battlestate Games nor the Escape from Tarkov
+Wiki has granted a licence for them: the wiki licenses its contributors' **prose**
+under CC BY-NC-SA 3.0 and cannot sublicense Battlestate's material (see below), so
+no CC grant reaches these files. The four faction/mode icons additionally appear
+to originate from Battlestate's own website rather than the wiki.
+
+They are retained for now only because removing them breaks the running UI, and
+the intended resolution is to hot-link them the way item icons already are, or to
+replace them. **Anyone redistributing this repository redistributes them too, and
+does so with no permission from the rights holder.** If you fork this, remove
+them. Takedown requests will be honoured immediately — see the contact link in the
+application footer.
+
+The 18 marker icons in `app/priv/static/images/maps/markers/` are a separate,
+smaller unknown: their provenance is not recorded and this project makes no
+ownership claim over them. See
+[`app/priv/static/images/maps/ATTRIBUTION.md`](app/priv/static/images/maps/ATTRIBUTION.md).
+
+The Escape from Tarkov Wiki licenses its contributors' **prose** under
+[CC BY-NC-SA 3.0](https://creativecommons.org/licenses/by-nc-sa/3.0/), which the
+application credits beside the content it renders. The wiki **cannot** sublicense
+Battlestate's own material, so screenshots and extracted game icons hosted there
+are *not* covered by that grant and are never labelled as if they were. See
+`EftBuddy.Attribution` and [`docs/attribution/CONTEXT.md`](docs/attribution/CONTEXT.md)
+for the full reasoning.
+
+Corrections and takedown requests: see the contact link in the application
+footer.

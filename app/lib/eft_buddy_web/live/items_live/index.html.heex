@@ -1,0 +1,434 @@
+<% load_state = EftBuddyWeb.LoadState.resolve((@scope_counts[:all] || 0) > 0, :items) %>
+<Layouts.app
+  flash={@flash}
+  active={@active}
+  pmc_level={@pmc_level}
+  mode={@mode}
+  faction={@faction}
+  scav_karma={@scav_karma}
+  page_title="Item Database"
+  search_query={@query}
+  search_placeholder={if load_state == :loaded, do: "Search items by name or short name..."}
+  rail_collapsed={@rail_collapsed}
+>
+  <div class="max-w-[1800px] mx-auto px-4 sm:px-6 py-8 space-y-6">
+    <.controls :if={load_state == :loaded}>
+      <:tabs>
+        <.tabs
+          active={@scope}
+          items={[
+            %{
+              label: "All",
+              icon: "hero-squares-2x2",
+              patch: items_path(@query, :all, @active_category),
+              filter: "all",
+              count: @scope_counts[:all],
+              tone: :neutral
+            },
+            %{
+              label: "Quest",
+              icon: "hero-clipboard-document-list",
+              patch: items_path(@query, :quest, @active_category),
+              filter: "quest",
+              count: @scope_counts[:quest],
+              tone: :purple
+            },
+            %{
+              label: "Barter",
+              icon: "hero-arrows-right-left",
+              patch: items_path(@query, :barter, @active_category),
+              filter: "barter",
+              count: @scope_counts[:barter],
+              tone: :signal
+            },
+            %{
+              label: "Craft",
+              icon: "hero-wrench-screwdriver",
+              patch: items_path(@query, :craft, @active_category),
+              filter: "craft",
+              count: @scope_counts[:craft],
+              tone: :olive
+            },
+            %{
+              label: "Hideout",
+              icon: "hero-home",
+              patch: items_path(@query, :hideout, @active_category),
+              filter: "hideout",
+              count: @scope_counts[:hideout],
+              tone: :go
+            },
+            %{
+              label: "Watchlist",
+              icon: "hero-bookmark",
+              patch: items_path(@query, :watchlist, @active_category),
+              filter: "watchlist",
+              count: @watchlist_count,
+              tone: :amber
+            }
+          ]}
+        />
+      </:tabs>
+      <:filters>
+        <.chips
+          active={@active_category || "all"}
+          items={
+            [
+              %{
+                label: "All",
+                value: "all",
+                count: @scope_counts[:all],
+                patch: items_path(@query, @scope, nil)
+              }
+            ] ++
+              for group <- @category_groups do
+                %{
+                  label: group.name,
+                  value: group.id,
+                  count: group.count,
+                  patch: items_path(@query, @scope, group.id)
+                }
+              end
+          }
+        />
+      </:filters>
+    </.controls>
+
+    <.standby :if={load_state != :loaded} state={load_state} retry_to={~p"/items"} />
+
+    <.watchlist_empty
+      :if={@scope == :watchlist and @items_loaded == 0 and (@scope_counts[:all] || 0) > 0}
+      noun="item"
+    />
+
+    <%!-- No matches for the current search / category / scope (catalog
+         itself is non-empty, and we're not on the empty watchlist). --%>
+    <.no_results
+      :if={@scope != :watchlist and @items_loaded == 0 and (@scope_counts[:all] || 0) > 0}
+      noun="items"
+    />
+
+    <div
+      :if={(@scope_counts[:all] || 0) > 0 and @items_loaded > 0}
+      class="hud-panel overflow-hidden"
+    >
+      <%!-- `pr-12` matches the right padding every data row reserves for the
+           watchlist toggle, so this header grid is exactly as wide as the row
+           grids below it and each heading sits over its own column (same as
+           the Tasks page). --%>
+      <div class="hidden sm:grid grid-cols-12 px-5 pr-12 py-3 t-label text-[9px] text-fog-500 border-b border-line">
+        <div class="col-span-1">Icon</div>
+        <.sort_header
+          col="name"
+          label="Designation"
+          sort={@sort}
+          asc={:name_asc}
+          desc={:name_desc}
+          class="col-span-6"
+        />
+        <.sort_header
+          col="class"
+          label="Class"
+          sort={@sort}
+          asc={:class_asc}
+          desc={:class_desc}
+          class="col-span-3 sm:pl-6"
+        />
+        <%!-- Labels the expand affordance (Show/Hide + chevron) each row ends
+             with. A plain heading, not a `sort_header`: there's nothing to sort
+             on, and a sort control that doesn't sort would render a button
+             announcing "Sort by ..." to screen readers. --%>
+        <div class="col-span-2 text-right">Details</div>
+      </div>
+
+      <div
+        id="items-list"
+        phx-update="stream"
+        phx-viewport-bottom={!@end_of_items? && "load_more"}
+        phx-page-loading
+      >
+        <div
+          :for={{dom_id, row} <- @streams.items}
+          id={dom_id}
+          class="border-b border-line last:border-b-0"
+        >
+          <div class="relative">
+            <button
+              type="button"
+              phx-click="toggle_expand"
+              phx-value-id={row.id}
+              class="w-full grid grid-cols-12 items-center gap-3 sm:gap-0 pl-5 pr-12 py-3 text-left hover:bg-ink-900 transition-colors hud-focus"
+              aria-expanded={if row.expanded?, do: "true", else: "false"}
+            >
+              <%!-- 56px tile, not 64: the tile is the tallest thing in the row,
+                   so with `py-3` it sets the row height at 80px - exactly the
+                   Tasks page's row height (its 48px banner thumbnail plus
+                   `py-4`). Keeping the two list pages on the same rhythm
+                   matters because they're the same kind of view. --%>
+              <div class="col-span-2 sm:col-span-1">
+                <.item_tile item={row.item} size="w-14 h-14" link={false} />
+              </div>
+              <div class="col-span-7 sm:col-span-6 min-w-0 pr-6">
+                <div class="flex items-center gap-2 min-w-0">
+                  <span class="text-fog-100 font-medium truncate">
+                    {row.item && row.item.name}
+                  </span>
+                  <%!-- Availability pills (Quest / Barter / Craft / Hideout),
+                       coloured to match the scope tabs. Mirrors the Tasks
+                       page's Kappa/Lightkeeper badges; `shrink-0` keeps them
+                       intact while the name truncates to make room. --%>
+                  <.badge
+                    :for={pill <- item_category_pills(row.categories)}
+                    variant={pill.variant}
+                    class="shrink-0"
+                    title={pill.tooltip}
+                  >
+                    <span>{pill.main}</span>
+                    <span :if={pill.secondary} class="text-white">&</span>
+                    <span :if={pill.secondary}>{pill.secondary}</span>
+                  </.badge>
+                </div>
+                <div :if={row.item && row.item.short_name} class="text-xs text-fog-500 truncate">
+                  {row.item.short_name}
+                </div>
+              </div>
+              <div class="hidden sm:block sm:col-span-3 sm:pl-6 text-sm text-fog-500 truncate">
+                {if row.item && row.item.category, do: row.item.category.name, else: "-"}
+              </div>
+              <div class="col-span-3 sm:col-span-2 flex items-center justify-end gap-2 text-fog-500">
+                <span class="t-label text-[9px] hidden sm:inline">
+                  {if row.expanded?, do: "Hide", else: "Show"}
+                </span>
+                <.icon
+                  name={if row.expanded?, do: "hero-chevron-up", else: "hero-chevron-down"}
+                  class="w-4 h-4"
+                />
+              </div>
+            </button>
+
+            <%!-- Watchlist toggle. Sits outside the expand button (no nested
+                 buttons) and floats in the reserved right padding. `is-fav`
+                 is flipped client-side for instant feedback while the push
+                 persists the slug + re-streams so a watchlisted item jumps to
+                 the top. --%>
+            <button
+              :if={row.item}
+              type="button"
+              aria-label={"Toggle watchlist for #{row.item.name}"}
+              aria-pressed={row.watchlisted?}
+              title={if row.watchlisted?, do: "Remove from watchlist", else: "Add to watchlist"}
+              phx-click={
+                JS.push("toggle_watchlist", value: %{slug: row.item.normalized_name})
+                |> JS.toggle_class("is-fav")
+              }
+              class={[
+                "fav-mark absolute top-1/2 -translate-y-1/2 right-3 z-10 p-1 hud-focus",
+                row.watchlisted? && "is-fav"
+              ]}
+            >
+              <.icon name="hero-bookmark" class="fav-mark-off w-5 h-5" />
+              <.icon name="hero-bookmark-solid" class="fav-mark-on w-5 h-5" />
+            </button>
+          </div>
+
+          <%= if row.expanded? do %>
+            <div class="bg-ink-950 border-t border-line px-5 py-5">
+              <%= cond do %>
+                <% is_nil(row.details) -> %>
+                  <p class="text-sm text-fog-500">Item not found.</p>
+                <% true -> %>
+                  <% details = row.details %>
+                  <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    <%!-- LEFT: text sections --%>
+                    <div class="space-y-6 min-w-0">
+                      <section :if={
+                        details.item.description && String.trim(details.item.description) != ""
+                      }>
+                        <.eyebrow class="mb-2">Description</.eyebrow>
+                        <p class="text-sm text-fog-300 whitespace-pre-line break-words leading-relaxed">
+                          {fir_text(details.item.description)}
+                        </p>
+                      </section>
+
+                      <section :if={details.needed_by_tasks != []}>
+                        <.eyebrow class="mb-2">Needed by quests</.eyebrow>
+                        <ul class="space-y-1">
+                          <li
+                            :for={r <- details.needed_by_tasks}
+                            class="text-sm text-fog-300 leading-relaxed break-words"
+                          >
+                            {fir_text(quest_needed_sentence(r))}
+                            <a
+                              href={task_search_url(r.task_name)}
+                              target="_blank"
+                              rel="noopener"
+                              class="text-amber hover:underline"
+                            >
+                              {r.task_name}
+                            </a>
+                          </li>
+                        </ul>
+                      </section>
+
+                      <section :if={Map.get(details, :related_chapters, []) != []}>
+                        <.eyebrow class="mb-2">Featured in storyline</.eyebrow>
+                        <ul class="space-y-1">
+                          <li
+                            :for={chapter <- details.related_chapters}
+                            class="text-sm text-fog-300 leading-relaxed break-words"
+                          >
+                            Part of the story chapter
+                            <.link
+                              navigate={~p"/storyline/#{chapter.slug}"}
+                              class="text-amber hover:underline"
+                            >
+                              {chapter.title}
+                            </.link>
+                          </li>
+                        </ul>
+                      </section>
+
+                      <section :if={details.needed_by_hideout != []}>
+                        <.eyebrow class="mb-2">Needed for hideout</.eyebrow>
+                        <ul class="space-y-1">
+                          <li
+                            :for={r <- details.needed_by_hideout}
+                            class="text-sm text-fog-300 leading-relaxed break-words"
+                          >
+                            {hideout_needed_sentence(r)}
+                            <a
+                              href={hideout_search_url(r.station_name)}
+                              target="_blank"
+                              rel="noopener"
+                              class="text-amber hover:underline"
+                            >
+                              {hideout_module_label(r)}
+                            </a>
+                          </li>
+                        </ul>
+                      </section>
+
+                      <section :if={details.obtained_from_tasks != []}>
+                        <.eyebrow class="mb-2">Obtained from tasks</.eyebrow>
+                        <ul class="space-y-1">
+                          <li
+                            :for={r <- details.obtained_from_tasks}
+                            class="text-sm text-fog-300 leading-relaxed break-words"
+                          >
+                            {task_reward_sentence(r)}
+                            <a
+                              href={task_search_url(r.task_name)}
+                              target="_blank"
+                              rel="noopener"
+                              class="text-amber hover:underline"
+                            >
+                              {r.task_name}
+                            </a>
+                          </li>
+                        </ul>
+                      </section>
+
+                      <section :if={details.unlocked_from_tasks != []}>
+                        <.eyebrow class="mb-2">Unlocked from tasks</.eyebrow>
+                        <ul class="space-y-1">
+                          <li
+                            :for={r <- details.unlocked_from_tasks}
+                            class="text-sm text-fog-300 leading-relaxed break-words"
+                          >
+                            {task_unlock_sentence(r)}
+                            <a
+                              href={task_search_url(r.task_name)}
+                              target="_blank"
+                              rel="noopener"
+                              class="text-amber hover:underline"
+                            >
+                              {r.task_name}
+                            </a>
+                          </li>
+                        </ul>
+                      </section>
+                    </div>
+
+                    <%!-- RIGHT: recipe sections --%>
+                    <div class="space-y-6 min-w-0">
+                      <section :if={details.needed_for_crafts != []}>
+                        <.eyebrow class="mb-2">Needed for crafts</.eyebrow>
+                        <ul class="space-y-3">
+                          <.recipe
+                            :for={c <- details.needed_for_crafts}
+                            item={details.item}
+                            row={c}
+                            kind={:craft}
+                            direction={:in}
+                          />
+                        </ul>
+                      </section>
+
+                      <section :if={details.needed_for_barters != []}>
+                        <.eyebrow class="mb-2">Needed for barters</.eyebrow>
+                        <ul class="space-y-3">
+                          <.recipe
+                            :for={b <- details.needed_for_barters}
+                            item={details.item}
+                            row={b}
+                            kind={:barter}
+                            direction={:in}
+                          />
+                        </ul>
+                      </section>
+
+                      <section :if={details.obtained_from_barters != []}>
+                        <.eyebrow class="mb-2">Obtained from barters</.eyebrow>
+                        <ul class="space-y-3">
+                          <.recipe
+                            :for={b <- details.obtained_from_barters}
+                            item={details.item}
+                            row={b}
+                            kind={:barter}
+                            direction={:out}
+                          />
+                        </ul>
+                      </section>
+
+                      <section :if={details.obtained_from_crafts != []}>
+                        <.eyebrow class="mb-2">Obtained from crafts</.eyebrow>
+                        <ul class="space-y-3">
+                          <.recipe
+                            :for={c <- details.obtained_from_crafts}
+                            item={details.item}
+                            row={c}
+                            kind={:craft}
+                            direction={:out}
+                          />
+                        </ul>
+                      </section>
+                    </div>
+                  </div>
+
+                  <p
+                    :if={
+                      details.needed_by_tasks == [] and details.needed_by_hideout == [] and
+                        details.needed_for_crafts == [] and details.needed_for_barters == [] and
+                        details.obtained_from_tasks == [] and details.obtained_from_barters == [] and
+                        details.obtained_from_crafts == [] and
+                        (is_nil(details.item.description) or
+                           String.trim(details.item.description) == "")
+                    }
+                    class="text-sm text-fog-500"
+                  >
+                    No additional details are tracked for this item.
+                  </p>
+              <% end %>
+            </div>
+          <% end %>
+        </div>
+      </div>
+
+      <p
+        :if={@end_of_items? and @items_loaded > 0}
+        class="px-5 py-6 text-center t-label text-[10px] text-fog-600"
+      >
+        {if @query != "", do: "End of results", else: "Showing all #{@items_loaded} items"}
+      </p>
+    </div>
+  </div>
+</Layouts.app>

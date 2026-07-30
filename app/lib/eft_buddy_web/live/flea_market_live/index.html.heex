@@ -1,0 +1,221 @@
+<% load_state = EftBuddyWeb.LoadState.resolve((@total_flea_count || 0) > 0, :flea_market) %>
+<Layouts.app
+  flash={@flash}
+  active={@active}
+  pmc_level={@pmc_level}
+  mode={@mode}
+  faction={@faction}
+  scav_karma={@scav_karma}
+  page_title="Flea Market"
+  search_query={@query}
+  search_placeholder={if load_state == :loaded, do: "Search for items, weapons, armor..."}
+  rail_collapsed={@rail_collapsed}
+>
+  <div class="max-w-[1800px] mx-auto px-4 sm:px-6 py-8 space-y-6">
+    <.controls :if={load_state == :loaded}>
+      <:tabs>
+        <.tabs
+          active={@flea_status}
+          items={[
+            %{
+              label: "All",
+              icon: "hero-squares-2x2",
+              patch: flea_market_path(@query, @active_group_id, :all),
+              filter: "all",
+              count: @flea_status_counts.all,
+              tone: :neutral
+            },
+            %{
+              label: "Buyable",
+              icon: "hero-shopping-cart",
+              patch: flea_market_path(@query, @active_group_id, :buyable),
+              filter: "buyable",
+              count: @flea_status_counts.buyable,
+              tone: :go
+            },
+            %{
+              label: "Locked",
+              icon: "hero-lock-closed",
+              patch: flea_market_path(@query, @active_group_id, :locked),
+              filter: "locked",
+              count: @flea_status_counts.locked,
+              tone: :rust
+            },
+            %{
+              label: "Watchlist",
+              icon: "hero-bookmark",
+              patch: flea_market_path(@query, @active_group_id, :watchlist),
+              filter: "watchlist",
+              count: @flea_status_counts.watchlist,
+              tone: :amber
+            }
+          ]}
+        />
+      </:tabs>
+      <:filters>
+        <.chips
+          active={@active_group_id || "all"}
+          items={
+            [
+              %{
+                label: "All",
+                value: "all",
+                count: @total_flea_count,
+                patch: flea_market_path(@query, nil, @flea_status)
+              }
+            ] ++
+              for group <- @category_groups do
+                %{
+                  label: group.name,
+                  value: group.id,
+                  count: group.count,
+                  patch: flea_market_path(@query, group.id, @flea_status)
+                }
+              end
+          }
+        />
+      </:filters>
+    </.controls>
+
+    <% active_group = Enum.find(@category_groups, &(&1.id == @active_group_id)) %>
+    <% has_filters? = @query != "" or active_group != nil or @flea_status != :all %>
+
+    <.standby :if={load_state != :loaded} state={load_state} retry_to={~p"/flea-market"} />
+
+    <.watchlist_empty
+      :if={@flea_status == :watchlist and @items_loaded == 0 and (@total_flea_count || 0) > 0}
+      noun="item"
+    />
+
+    <%!-- No matches for the current search / category / status filter
+         (the flea catalog itself is non-empty, and we're not on the
+         empty watchlist). --%>
+    <.no_results
+      :if={@flea_status != :watchlist and @items_loaded == 0 and (@total_flea_count || 0) > 0}
+      noun="items"
+    />
+
+    <div
+      :if={(@total_flea_count || 0) > 0 and @items_loaded > 0}
+      id="flea-items"
+      class="grid sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4"
+      phx-update="stream"
+      phx-viewport-bottom={!@end_of_items? && "load_more"}
+      phx-page-loading
+    >
+      <div :for={{dom_id, item} <- @streams.items} id={dom_id}>
+        <% group_id = group_id_for_category(item.category) %>
+        <% pct = price_change_24h_pct(item) %>
+        <% trend = change_trend(pct) %>
+        <% locked? = flea_locked?(item, @pmc_level, @flea_unlock_level) %>
+        <% fav? = item.normalized_name in @favorite_slugs %>
+        <div class="hud-panel relative h-full flex flex-col">
+          <%!-- Watchlist toggle. Lives outside the card content (a <button>
+               can't be nested in an <a>); the JS.toggle_class flips the
+               `is-fav` state instantly for snappy feedback while the push
+               persists the change + refreshes the count server-side. The
+               outline bookmark reads "not watched" and swaps to the solid gold
+               bookmark once favourited (the swap is pure CSS, driven by
+               `is-fav`, so the client toggle keeps working offline). --%>
+          <button
+            type="button"
+            aria-label={"Toggle watchlist for #{item.name}"}
+            aria-pressed={fav?}
+            title={if fav?, do: "Remove from watchlist", else: "Add to watchlist"}
+            phx-click={
+              JS.push("toggle_favorite", value: %{slug: item.normalized_name})
+              |> JS.toggle_class("is-fav")
+            }
+            class={["fav-mark absolute top-2.5 right-2.5 z-10 p-1 hud-focus", fav? && "is-fav"]}
+          >
+            <.icon name="hero-bookmark" class="fav-mark-off w-5 h-5" />
+            <.icon name="hero-bookmark-solid" class="fav-mark-on w-5 h-5" />
+          </button>
+
+          <div class="flex flex-col flex-1 p-4">
+            <div class="flex items-start gap-3 mb-3 pr-7">
+              <.item_tile item={item} size="w-14 h-14" link={false} />
+              <h3 class="text-sm text-fog-100 font-semibold min-w-0 flex-1 wrap-break-word leading-snug">
+                {item.name}
+              </h3>
+            </div>
+
+            <div class="mb-3 flex items-center gap-2 flex-wrap">
+              <span class={[
+                "inline-flex items-center px-2 py-0.5 t-label text-[9px] border rounded-sm",
+                category_chip_classes(group_id)
+              ]}>
+                {if item.category, do: item.category.name, else: "Uncategorized"}
+              </span>
+              <span
+                :if={locked?}
+                class="inline-flex items-center gap-1 px-2 py-0.5 t-label text-[9px] border rounded-sm border-rust/30 text-rust bg-rust/10"
+                title={"Locked - the flea market lists this item at PMC level #{effective_flea_level(item, @flea_unlock_level)}"}
+              >
+                <.icon name="hero-lock-closed" class="w-3 h-3" />
+                Lvl {effective_flea_level(item, @flea_unlock_level)}
+              </span>
+            </div>
+
+            <%!-- ~48h price-history sparkline (tarkov.dev historicalPrices) --%>
+            <.price_sparkline
+              points={item.historical_prices}
+              tone={trend}
+              class="w-full h-7 mb-3"
+            />
+
+            <%!-- Flea low headline beside the 24h price-fluctuation badge.
+                 The row is `items-center` and the badge is a single inline
+                 element, so the % sits level with the middle of the big Flea
+                 Low value rather than hanging off its baseline. The arrow,
+                 signed %, colour and tooltip all convey the 24h move. --%>
+            <div class="mt-auto flex items-center justify-between gap-2">
+              <div class="min-w-0">
+                <div class="t-label text-[8px] text-fog-600">Flea Low</div>
+                <div class={[
+                  "t-num text-2xl leading-none mt-0.5",
+                  if(locked?, do: "text-fog-400", else: "text-amber")
+                ]}>
+                  {format_price(item.last_low_price)}
+                </div>
+              </div>
+              <div
+                title="Price change over the last 24h"
+                class={[
+                  "shrink-0 inline-flex items-center gap-1 t-num text-sm leading-none",
+                  trend == :up && "text-go",
+                  trend == :down && "text-rust",
+                  trend == :flat && "text-fog-300"
+                ]}
+              >
+                <.icon
+                  :if={trend == :up}
+                  name="hero-arrow-trending-up"
+                  class="w-4 h-4 shrink-0"
+                />
+                <.icon
+                  :if={trend == :down}
+                  name="hero-arrow-trending-down"
+                  class="w-4 h-4 shrink-0"
+                />
+                <.icon
+                  :if={trend == :flat}
+                  name="hero-minus"
+                  class="w-4 h-4 shrink-0 text-fog-600"
+                />
+                {format_change_pct(pct)}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <p
+      :if={@end_of_items? and @items_loaded > 0 and not has_filters?}
+      class="mt-8 text-center text-sm text-fog-500"
+    >
+      End of the live preview - search above to look up any item on the market.
+    </p>
+  </div>
+</Layouts.app>

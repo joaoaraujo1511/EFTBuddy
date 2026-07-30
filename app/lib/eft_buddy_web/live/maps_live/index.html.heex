@@ -1,0 +1,133 @@
+<% load_state = EftBuddyWeb.LoadState.resolve(@maps != [], :maps) %>
+<Layouts.app
+  flash={@flash}
+  active={@active}
+  pmc_level={@pmc_level}
+  mode={@mode}
+  faction={@faction}
+  scav_karma={@scav_karma}
+  page_title="Maps"
+  search_query={@query}
+  search_placeholder={if load_state == :loaded, do: "Search maps..."}
+  rail_collapsed={@rail_collapsed}
+>
+  <div class="max-w-[1800px] mx-auto px-4 sm:px-6 py-8 space-y-6">
+    <.controls :if={load_state == :loaded}>
+      <:tabs>
+        <%!-- Entry-requirement filter. This was a placeholder that tracked its
+             selection but filtered nothing, with a hardcoded 0 on "Locked".
+             It now filters on whether the raid needs an access key, and both
+             counts are derived. --%>
+        <.tabs
+          active={@active_status}
+          items={[
+            %{
+              label: "All",
+              icon: "hero-squares-2x2",
+              patch: maps_path(@query, "all"),
+              filter: "all",
+              count: @status_counts.all,
+              tone: :neutral
+            },
+            %{
+              label: "Open",
+              icon: "hero-bolt",
+              patch: maps_path(@query, "open"),
+              filter: "open",
+              count: @status_counts.open,
+              tone: :go
+            },
+            %{
+              label: "Key required",
+              icon: "hero-lock-closed",
+              patch: maps_path(@query, "keyed"),
+              filter: "keyed",
+              count: @status_counts.keyed,
+              tone: :rust
+            }
+          ]}
+        />
+      </:tabs>
+    </.controls>
+
+    <.standby :if={load_state != :loaded} state={load_state} retry_to={~p"/maps"} />
+
+    <.no_results :if={@maps != [] && @visible_maps == []} noun="maps" />
+
+    <div :if={@visible_maps != []} class="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+      <.link
+        :for={map <- @visible_maps}
+        navigate={~p"/maps/#{map.normalized_name}"}
+        class="group hud-panel hud-notch p-5 hover:border-amber/60 transition-colors flex flex-col"
+      >
+        <div class="flex items-start justify-between gap-2">
+          <h2 class="t-head text-xl text-fog-100 group-hover:text-amber transition-colors leading-tight">
+            {map.name}
+          </h2>
+          <.badge :if={quest_count(@quest_counts, map.id) > 0} variant={:amber} class="shrink-0">
+            <.icon name="hero-clipboard-document-check" class="w-3 h-3" />
+            {quest_count(@quest_counts, map.id)}
+          </.badge>
+        </div>
+
+        <div class="mt-2 flex flex-wrap items-center gap-x-5 gap-y-1.5 t-label text-[10px] text-fog-400">
+          <span class="inline-flex items-center gap-1.5">
+            <.icon name="hero-clock" class="t-label-icon w-4 h-4 text-signal" /> {raid_duration_label(
+              map.raid_duration
+            )}
+          </span>
+          <span :if={map.players} class="inline-flex items-center gap-1.5">
+            <.icon name="hero-users" class="t-label-icon w-4 h-4 text-signal" /> {map.players}
+          </span>
+        </div>
+
+        <% preview = preview_image(map) %>
+        <div
+          :if={preview}
+          class="mt-3 h-40 overflow-hidden border border-line bg-ink-950"
+        >
+          <img
+            src={preview}
+            alt={"#{map.name} interactive map preview"}
+            loading="lazy"
+            decoding="async"
+            class="w-full h-full object-contain scale-[1.4]"
+          />
+        </div>
+
+        <%!-- The "Bosses" label spans the top; below it the boss chips fill the
+             left and the Recon affordance sits in the remaining space on the
+             right (no divider between them). The chips + Recon share one
+             centered flex row, so Recon lines up with the middle of the boss
+             display even when the chips wrap to two lines. --%>
+        <div class="mt-4 pt-4 border-t border-line">
+          <div :if={map.bosses != []} class="t-label text-[9px] text-fog-600 mb-2">Bosses</div>
+          <div class="flex items-center justify-between gap-3">
+            <div class="min-w-0 flex-1 flex flex-wrap items-center gap-2">
+              <%!-- Grouped, not raw: `map_bosses` is one row per spawn *entry*,
+                   so iterating it directly gave Icebreaker 40 chips for its 5
+                   bosses and The Lab 16 for its 1. --%>
+              <span
+                :for={boss <- Maps.group_bosses(map.bosses)}
+                class="inline-flex items-center gap-1.5 text-xs text-fog-200 bg-ink-950 border border-line pl-1 pr-2.5 py-0.5"
+              >
+                <img
+                  :if={boss.image_portrait_link}
+                  src={boss.image_portrait_link}
+                  alt=""
+                  loading="lazy"
+                  class="w-5 h-5 object-cover"
+                />
+                {boss.name}
+              </span>
+            </div>
+
+            <div class="shrink-0 inline-flex items-center t-label text-[10px] text-fog-600 group-hover:text-amber transition-colors">
+              Recon <.icon name="hero-arrow-right" class="w-4 h-4 ml-1" />
+            </div>
+          </div>
+        </div>
+      </.link>
+    </div>
+  </div>
+</Layouts.app>

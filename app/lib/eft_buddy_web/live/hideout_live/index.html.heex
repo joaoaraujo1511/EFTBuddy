@@ -1,0 +1,219 @@
+<% load_state = EftBuddyWeb.LoadState.resolve(@modules != [], :hideout) %>
+<Layouts.app
+  flash={@flash}
+  active={@active}
+  pmc_level={@pmc_level}
+  mode={@mode}
+  faction={@faction}
+  scav_karma={@scav_karma}
+  page_title="Hideout"
+  search_query={@query}
+  search_placeholder={if load_state == :loaded, do: "Search modules..."}
+  rail_collapsed={@rail_collapsed}
+>
+  <div class="max-w-[1800px] mx-auto px-4 sm:px-6 py-8 space-y-6">
+    <% searched_modules = search_modules(@modules, @query) %>
+    <.controls :if={load_state == :loaded}>
+      <:tabs>
+        <.tabs
+          active={@filter}
+          items={[
+            %{
+              label: "All",
+              icon: "hero-squares-2x2",
+              patch: hideout_path(@query, :all),
+              filter: "all",
+              count: length(searched_modules),
+              tone: :neutral
+            },
+            %{
+              label: "Available",
+              icon: "hero-bolt",
+              patch: hideout_path(@query, :available),
+              filter: "available",
+              count: length(filter_modules(searched_modules, :available)),
+              tone: :go
+            },
+            %{
+              label: "Locked",
+              icon: "hero-lock-closed",
+              patch: hideout_path(@query, :locked),
+              filter: "locked",
+              count: length(filter_modules(searched_modules, :locked)),
+              tone: :rust
+            },
+            %{
+              label: "Maxed",
+              icon: "hero-star",
+              patch: hideout_path(@query, :maxed),
+              filter: "maxed",
+              count: length(filter_modules(searched_modules, :maxed)),
+              tone: :amber
+            }
+          ]}
+        />
+      </:tabs>
+    </.controls>
+
+    <% filtered_modules = @modules |> filter_modules(@filter) |> search_modules(@query) %>
+    <.standby :if={load_state != :loaded} state={load_state} retry_to={~p"/hideout"} />
+    <.no_results :if={@modules != [] && filtered_modules == []} noun="modules" />
+
+    <div :if={filtered_modules != []} class="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+      <%= for mod <- filtered_modules do %>
+        <% status = module_status(mod) %>
+        <% prereqs_open? = expanded?(@expanded, mod.slug, "prerequisites") %>
+        <% needed_open? = expanded?(@expanded, mod.slug, "needed") %>
+        <div class="group hud-panel hud-notch p-5 flex flex-col hover:border-amber/40 transition-colors">
+          <div class="flex items-start gap-3 mb-4">
+            <div class={[
+              "relative w-14 h-14 flex items-center justify-center shrink-0",
+              icon_chip_classes(status)
+            ]}>
+              <img
+                src={icon_path(mod)}
+                alt={"#{mod.name} icon"}
+                class="w-12 h-12 object-contain img-fallback"
+              />
+              <div style="display:none;" class="absolute inset-0 flex items-center justify-center">
+                <.icon name="hero-cube" class="w-7 h-7 text-fog-300" />
+              </div>
+            </div>
+
+            <div class="flex-1 min-w-0">
+              <div class="flex items-start justify-between gap-2">
+                <h3 class="t-head text-base text-fog-100 group-hover:text-amber transition-colors leading-tight">
+                  {mod.name}
+                </h3>
+                <span class={[
+                  "shrink-0 t-label text-[9px] px-2 py-0.5 border whitespace-nowrap",
+                  status_classes(status)
+                ]}>
+                  {status_label(status)}
+                </span>
+              </div>
+              <p class="t-num text-xs text-fog-500 mt-1">LVL {mod.current} / {mod.max}</p>
+            </div>
+          </div>
+
+          <div class="h-1.5 bg-ink-950 border border-line overflow-hidden">
+            <div class="h-full bg-amber" style={"width: #{progress_percent(mod)}%"}></div>
+          </div>
+
+          <%= if status != :max_level do %>
+            <div class="mt-4 pt-4 border-t border-line space-y-2">
+              <%= if mod.prerequisites == [] do %>
+                <div class="border border-line px-3 py-2.5 text-xs italic text-fog-400">
+                  No prerequisites
+                </div>
+              <% else %>
+                <.module_section
+                  slug={mod.slug}
+                  section="prerequisites"
+                  title="Prerequisites"
+                  open={prereqs_open?}
+                >
+                  <ul class="space-y-1.5">
+                    <.prereq_row :for={req <- mod.prerequisites} req={req} />
+                  </ul>
+                </.module_section>
+              <% end %>
+
+              <%= if mod.needed == [] do %>
+                <div class="border border-line px-3 py-2.5 text-xs italic text-fog-400">
+                  No items required
+                </div>
+              <% else %>
+                <.module_section
+                  slug={mod.slug}
+                  section="needed"
+                  title="Needed Items"
+                  open={needed_open?}
+                  badge={
+                    "#{checked_count(@checked, mod.slug, target_level(mod), mod.needed)}/#{length(mod.needed)}"
+                  }
+                >
+                  <ul class="space-y-1">
+                    <li :for={item <- mod.needed}>
+                      <.hideout_item_row
+                        item={item}
+                        checkable
+                        checked={
+                          requirement_checked?(@checked, mod.slug, target_level(mod), item.id)
+                        }
+                        slug={mod.slug}
+                        level={target_level(mod)}
+                      />
+                    </li>
+                  </ul>
+                </.module_section>
+              <% end %>
+            </div>
+
+            <div class="mt-4">
+              <button
+                type="button"
+                phx-click="upgrade"
+                phx-value-slug={mod.slug}
+                disabled={status != :ready}
+                title={
+                  case status do
+                    :missing_prereqs ->
+                      "Build the required modules first to unlock this"
+
+                    :missing_items ->
+                      "Tick every needed item to build this level"
+
+                    _ ->
+                      false
+                  end
+                }
+                class={[
+                  "t-label w-full text-xs py-2 border transition-colors hud-focus",
+                  if(status == :ready,
+                    do:
+                      "bg-go/10 border-go/40 text-go hover:bg-go/20 hover:border-go cursor-pointer",
+                    else: "bg-ink-950 border-line text-fog-600 cursor-not-allowed"
+                  )
+                ]}
+              >
+                {upgrade_label(mod)}
+              </button>
+            </div>
+          <% end %>
+
+          <%= if status == :max_level and mod.items_used != [] do %>
+            <% used_open? = expanded?(@expanded, mod.slug, "items_used") %>
+            <div class="mt-4 pt-4 border-t border-line">
+              <.module_section
+                slug={mod.slug}
+                section="items_used"
+                title="Items Used"
+                open={used_open?}
+              >
+                <ul class="space-y-1">
+                  <li :for={item <- mod.items_used}>
+                    <.hideout_item_row item={item} />
+                  </li>
+                </ul>
+              </.module_section>
+            </div>
+          <% end %>
+
+          <%= if downgrade_available?(mod) do %>
+            <div class={if status == :max_level, do: "mt-4", else: "mt-2"}>
+              <button
+                type="button"
+                phx-click="downgrade"
+                phx-value-slug={mod.slug}
+                class="t-label w-full text-xs py-2 border bg-rust/10 border-rust/40 text-rust hover:bg-rust/20 hover:border-rust transition-colors hud-focus"
+              >
+                {downgrade_label(mod)}
+              </button>
+            </div>
+          <% end %>
+        </div>
+      <% end %>
+    </div>
+  </div>
+</Layouts.app>

@@ -1,0 +1,79 @@
+<Layouts.app
+  flash={@flash}
+  active={@active}
+  pmc_level={@pmc_level}
+  mode={@mode}
+  faction={@faction}
+  scav_karma={@scav_karma}
+  page_title="Report a Bug"
+  rail_collapsed={@rail_collapsed}
+>
+  <div class="max-w-2xl mx-auto px-4 sm:px-6 py-10">
+    <.link
+      navigate={~p"/"}
+      class="inline-flex items-center gap-1.5 t-label text-[11px] text-fog-500 hover:text-amber transition-colors mb-6"
+    >
+      <.icon name="hero-arrow-left" class="w-4 h-4" /> Back to base
+    </.link>
+
+    <%!-- Confirmation panel after a successful submit. --%>
+    <.panel :if={@submitted} notch>
+      <div class="text-center py-6">
+        <div class="w-14 h-14 mx-auto hud-notch bg-go/15 border border-go/40 flex items-center justify-center mb-4">
+          <.icon name="hero-check-circle" class="w-7 h-7 text-go" />
+        </div>
+        <h2 class="t-head text-2xl text-fog-100">Report received</h2>
+        <p class="text-sm text-fog-400 mt-2 max-w-sm mx-auto">
+          Your bug report has been logged. Thanks for helping keep EFT-Buddy accurate.
+        </p>
+        <div class="mt-6 flex items-center justify-center gap-3">
+          <.action phx-click="report_another" variant={:solid} icon="hero-plus">
+            Report another
+          </.action>
+          <.action navigate={~p"/"} icon="hero-home">Back home</.action>
+        </div>
+      </div>
+    </.panel>
+
+    <%!-- The form. --%>
+    <.form
+      :if={not @submitted}
+      for={@form}
+      id="bug-report-form"
+      phx-change="validate"
+      phx-submit="save"
+    >
+      <.panel notch>
+        <.input
+          field={@form[:title]}
+          type="text"
+          label="Title *"
+          required
+          maxlength="150"
+          placeholder="Short summary of the problem"
+        />
+        <.input
+          field={@form[:description]}
+          type="textarea"
+          label="Description *"
+          required
+          rows="7"
+          maxlength="5000"
+          placeholder="What happened? What did you expect? Steps to reproduce, the page you were on, and anything else that helps."
+        />
+
+        <div class="flex items-center justify-end gap-3 pt-2">
+          <.action navigate={~p"/"}>Cancel</.action>
+          <.action
+            type="submit"
+            variant={:solid}
+            icon="hero-paper-airplane"
+            phx-disable-with="Submitting..."
+          >
+            Submit report
+          </.action>
+        </div>
+      </.panel>
+    </.form>
+  </div>
+</Layouts.app>

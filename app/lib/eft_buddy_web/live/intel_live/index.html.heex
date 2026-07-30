@@ -1,0 +1,183 @@
+<Layouts.app
+  flash={@flash}
+  active={@active}
+  pmc_level={@pmc_level}
+  mode={@mode}
+  faction={@faction}
+  scav_karma={@scav_karma}
+  page_title="Intel"
+  rail_collapsed={@rail_collapsed}
+>
+  <div class="max-w-[1800px] mx-auto px-4 sm:px-6 py-8 space-y-6">
+    <%!-- Summary strip --%>
+    <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+      <div :for={card <- summary_cards()} class="hud-panel p-4 flex items-center gap-3">
+        <div class="w-10 h-10 flex items-center justify-center bg-ink-950 border border-line shrink-0">
+          <.icon name={card.icon} class="w-5 h-5 text-amber" />
+        </div>
+        <div class="min-w-0">
+          <div class="t-label text-[9px] text-fog-500">{card.label}</div>
+          <span class="t-num text-lg text-fog-100">{card.value}</span>
+        </div>
+      </div>
+    </div>
+
+    <%!-- Section sub-nav --%>
+    <.tabs
+      active={@section}
+      items={[
+        %{
+          label: "Achievements",
+          icon: "hero-trophy",
+          event: "set_section",
+          value: "achievements"
+        },
+        %{label: "Kappa", icon: "hero-cube", event: "set_section", value: "kappa"},
+        %{label: "Lightkeeper", icon: "hero-key", event: "set_section", value: "lightkeeper"}
+      ]}
+    />
+
+    <%!-- ── Achievements ──────────────────────────────────── --%>
+    <section :if={@section == :achievements} class="space-y-4">
+      <.eyebrow>Achievements</.eyebrow>
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div
+          :for={a <- achievements()}
+          class={[
+            "hud-panel p-4 flex flex-col gap-2",
+            a.done && "border-signal/40"
+          ]}
+        >
+          <div class="flex items-start justify-between gap-2">
+            <div class="flex items-center gap-2 min-w-0">
+              <.icon
+                name={if a.done, do: "hero-check-badge", else: "hero-trophy"}
+                class={["w-5 h-5 shrink-0", if(a.done, do: "text-signal", else: "text-fog-500")]}
+              />
+              <h3 class="text-sm font-semibold text-fog-100 truncate">{a.name}</h3>
+            </div>
+            <.badge variant={rarity_tone(a.rarity)} class="shrink-0">{a.rarity}</.badge>
+          </div>
+          <p class="text-xs text-fog-400 leading-relaxed">{a.desc}</p>
+          <div class="mt-auto pt-2">
+            <span :if={a.done} class="t-label text-[9px] text-signal">Unlocked</span>
+            <div :if={!a.done && a.progress} class="flex items-center justify-between">
+              <span class="t-label text-[9px] text-fog-500">In progress</span>
+              <span class="t-num text-xs text-fog-300">{a.progress}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <%!-- ── Kappa Collector ───────────────────────────────── --%>
+    <section :if={@section == :kappa} class="space-y-5">
+      <div class="hud-panel hud-notch p-5 space-y-4">
+        <div class="flex items-center justify-between gap-3 flex-wrap">
+          <div>
+            <.eyebrow>Kappa Collector</.eyebrow>
+            <p class="text-sm text-fog-400 mt-2 max-w-xl">
+              The Collector quest hands over the Kappa container once you've turned in every
+              required item and finished its prerequisite quests.
+            </p>
+          </div>
+          <.action navigate={~p"/tasks?status=kappa"} icon="hero-clipboard-document-check">
+            Kappa quests
+          </.action>
+        </div>
+
+        <%!-- Progress bar (sample 23/64) --%>
+        <div>
+          <div class="flex items-center justify-between mb-1.5">
+            <span class="t-label text-[9px] text-fog-500">Items collected</span>
+            <span class="t-num text-sm text-amber">23 / 64</span>
+          </div>
+          <div class="h-2 w-full bg-ink-950 border border-line overflow-hidden">
+            <div class="h-full bg-amber" style="width: 36%"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="hud-panel overflow-hidden">
+        <div class="px-5 py-3 t-label text-[9px] text-fog-500 border-b border-line">
+          Required items
+        </div>
+        <ul>
+          <li
+            :for={item <- kappa_items()}
+            class="flex items-center gap-3 px-5 py-3 border-b border-line last:border-b-0"
+          >
+            <span class={[
+              "w-5 h-5 shrink-0 border flex items-center justify-center",
+              if(item.found,
+                do: "bg-go/15 border-go/50 text-go",
+                else: "bg-ink-950 border-line-strong text-transparent"
+              )
+            ]}>
+              <.icon name="hero-check" class="w-3.5 h-3.5" />
+            </span>
+            <span class={[
+              "text-sm",
+              if(item.found, do: "text-fog-500 line-through", else: "text-fog-100")
+            ]}>
+              {item.name}
+            </span>
+            <.link
+              navigate={"/items?q=" <> URI.encode(item.name)}
+              class="ml-auto t-label text-[9px] text-fog-500 hover:text-amber transition-colors"
+            >
+              Find
+            </.link>
+          </li>
+        </ul>
+      </div>
+    </section>
+
+    <%!-- ── Lightkeeper ───────────────────────────────────── --%>
+    <section :if={@section == :lightkeeper} class="space-y-5">
+      <div class="hud-panel hud-notch p-5 space-y-4">
+        <div class="flex items-center justify-between gap-3 flex-wrap">
+          <div>
+            <.eyebrow>Lightkeeper</.eyebrow>
+            <p class="text-sm text-fog-400 mt-2 max-w-xl">
+              The chain of quests across multiple traders that unlocks the Lightkeeper on Lighthouse
+              and his end-game barters.
+            </p>
+          </div>
+          <.action navigate={~p"/tasks?status=lightkeeper"} icon="hero-key">
+            Lightkeeper quests
+          </.action>
+        </div>
+
+        <div>
+          <div class="flex items-center justify-between mb-1.5">
+            <span class="t-label text-[9px] text-fog-500">Chain progress</span>
+            <span class="t-num text-sm text-warn">9 / 26</span>
+          </div>
+          <div class="h-2 w-full bg-ink-950 border border-line overflow-hidden">
+            <div class="h-full bg-warn" style="width: 35%"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="hud-panel overflow-hidden">
+        <div
+          :for={q <- lightkeeper_chain()}
+          class="flex items-center gap-3 px-5 py-3.5 border-b border-line last:border-b-0"
+        >
+          <.icon name="hero-key" class="w-4 h-4 text-fog-600 shrink-0" />
+          <div class="min-w-0 flex-1">
+            <div class="text-sm text-fog-100 truncate">{q.name}</div>
+            <div class="t-label text-[9px] text-fog-500">{q.trader}</div>
+          </div>
+          <span class={[
+            "t-label text-[9px] px-2 py-1 border shrink-0",
+            lk_status_classes(q.status)
+          ]}>
+            {lk_status_label(q.status)}
+          </span>
+        </div>
+      </div>
+    </section>
+  </div>
+</Layouts.app>

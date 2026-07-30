@@ -1,0 +1,472 @@
+<% load_state = EftBuddyWeb.LoadState.resolve(@all_tasks != [], :tasks) %>
+<Layouts.app
+  flash={@flash}
+  active={@active}
+  pmc_level={@pmc_level}
+  mode={@mode}
+  faction={@faction}
+  scav_karma={@scav_karma}
+  page_title="Quest Tracker"
+  search_query={@query}
+  search_placeholder={if load_state == :loaded, do: "Search tasks..."}
+  rail_collapsed={@rail_collapsed}
+>
+  <div class="max-w-[1800px] mx-auto px-4 sm:px-6 py-8 space-y-6">
+    <.controls :if={load_state == :loaded}>
+      <:tabs>
+        <.tabs
+          active={if @filter == :wip, do: :all, else: @filter}
+          items={[
+            %{
+              label: "All",
+              icon: "hero-squares-2x2",
+              patch: tasks_path(@query, @active_trader, "all"),
+              filter: "all",
+              count: @filter_counts.all,
+              tone: :neutral
+            },
+            %{
+              label: "Available",
+              icon: "hero-bolt",
+              patch: tasks_path(@query, @active_trader, "available"),
+              filter: "available",
+              count: @filter_counts.available,
+              tone: :go
+            },
+            %{
+              label: "Locked",
+              icon: "hero-lock-closed",
+              patch: tasks_path(@query, @active_trader, "locked"),
+              filter: "locked",
+              count: @filter_counts.locked,
+              tone: :rust
+            },
+            %{
+              label: "Completed",
+              icon: "hero-check-circle",
+              patch: tasks_path(@query, @active_trader, "completed"),
+              filter: "completed",
+              count: @filter_counts.completed,
+              tone: :amber
+            },
+            %{
+              label: "Kappa",
+              icon: "hero-trophy",
+              patch: tasks_path(@query, @active_trader, "kappa"),
+              filter: "kappa",
+              count: @filter_counts.kappa,
+              tone: :purple
+            },
+            %{
+              label: "Lightkeeper",
+              icon: "hero-key",
+              patch: tasks_path(@query, @active_trader, "lightkeeper"),
+              filter: "lightkeeper",
+              count: @filter_counts.lightkeeper,
+              tone: :signal
+            },
+            %{
+              label: "Watchlist",
+              icon: "hero-bookmark",
+              patch: tasks_path(@query, @active_trader, "watchlist"),
+              filter: "watchlist",
+              count: @filter_counts.watchlist,
+              tone: :amber
+            }
+          ]}
+        />
+      </:tabs>
+      <:filters>
+        <.chips
+          active={@active_trader}
+          items={
+            for trader <- @traders,
+                do: %{label: trader, value: trader, patch: tasks_path(@query, trader, @filter)}
+          }
+        />
+      </:filters>
+    </.controls>
+
+    <%!-- Standby (data still loading, or a fault + Retry when the tasks sync
+         last failed) vs. no-match are distinct states, rendered at the top
+         level so they match every other browse page. --%>
+    <.standby :if={load_state != :loaded} state={load_state} retry_to={~p"/tasks"} />
+    <.watchlist_empty
+      :if={@all_tasks != [] && @filtered_tasks == [] && @filter == :watchlist}
+      noun="quest"
+    />
+    <.no_results
+      :if={@all_tasks != [] && @filtered_tasks == [] && @filter != :watchlist}
+      noun="tasks"
+    />
+
+    <%!-- Task list --%>
+    <div :if={@all_tasks != [] && @filtered_tasks != []} class="hud-panel overflow-hidden">
+      <%!-- The header mirrors each data row's structure exactly, because a row
+           is NOT one flat 12-column grid: it's a `col-span-1` checkbox plus a
+           `col-span-11` button that nests its own 11-column grid *with*
+           `gap-x-4`. A flat 12-column header drifts further out of step with
+           the row's columns the further right you go, which is why the Status
+           heading never sat over the status pills. Same nesting + same gap
+           here means every heading lands on its column. `pr-12` matches the
+           right padding the rows reserve for the watchlist toggle. --%>
+      <div class="hidden sm:grid grid-cols-12 px-5 pr-12 py-3 t-label text-[9px] text-fog-500 border-b border-line">
+        <div class="col-span-1">Done</div>
+        <div class="col-span-11 grid grid-cols-11 items-center gap-x-4">
+          <.sort_header
+            col="name"
+            label="Task"
+            sort={@sort}
+            asc={:name_asc}
+            desc={:name_desc}
+            class="col-span-5"
+          />
+          <.sort_header
+            col="trader"
+            label="Trader"
+            sort={@sort}
+            asc={:trader_asc}
+            desc={:trader_desc}
+            class="col-span-2"
+          />
+          <.sort_header
+            col="level"
+            label="Level"
+            sort={@sort}
+            asc={:level_asc}
+            desc={:level_desc}
+            class="col-span-2"
+          />
+          <%!-- Status is the one heading that can't just be right-aligned: the
+               row puts a fixed-width pill AND a chevron in this cell. Reusing
+               the row's `justify-end gap-2` with a chevron-sized spacer, and
+               centring the label in a box the same width as the pill, parks
+               "Status" dead centre over the pill. --%>
+          <div class="col-span-2 flex items-center justify-end gap-2">
+            <span class="min-w-24 text-center">Status</span>
+            <span class="w-4 shrink-0" aria-hidden="true"></span>
+          </div>
+        </div>
+      </div>
+
+      <div
+        id="tasks-list"
+        phx-update="stream"
+        phx-viewport-bottom={!@end_of_tasks? && "load_more"}
+        phx-page-loading
+      >
+        <div
+          :for={{dom_id, task} <- @streams.tasks}
+          id={dom_id}
+          class={[
+            "border-b border-line last:border-b-0",
+            task.status == :completed && "opacity-60"
+          ]}
+        >
+          <div class="relative grid grid-cols-12 items-center px-5 py-4 pr-12 hover:bg-ink-900 transition-colors">
+            <div class="col-span-2 sm:col-span-1">
+              <.check_toggle
+                checked={task.status == :completed}
+                phx-click="toggle_complete"
+                phx-value-id={task.id}
+                label={"Mark #{task.name} complete"}
+              />
+            </div>
+
+            <button
+              type="button"
+              phx-click="toggle_expand"
+              phx-value-id={task.id}
+              aria-expanded={if task.expanded?, do: "true", else: "false"}
+              class="col-span-10 sm:col-span-11 grid grid-cols-10 sm:grid-cols-11 items-center gap-x-4 text-left cursor-pointer"
+            >
+              <div class="col-span-7 sm:col-span-5 flex items-center gap-2.5 min-w-0">
+                <%!-- Quest banner thumbnail. Lives on the collapsed row (not
+                     the detail panel) so the list is scannable at a glance.
+                     The banners are much wider than they are tall, so the
+                     fixed 112x48 box crops them with `object-cover` rather
+                     than letting a full-width banner inflate every row. The
+                     box renders even when there's no banner, so the quest
+                     names stay aligned down the column. Hidden on mobile,
+                     where the name column is already tight. --%>
+                <span class="hidden sm:block shrink-0 w-28 h-12 overflow-hidden border border-line bg-ink-950">
+                  <img
+                    :if={task.banner_url}
+                    src={task.banner_url}
+                    alt=""
+                    loading="lazy"
+                    decoding="async"
+                    class="w-full h-full object-cover"
+                  />
+                </span>
+                <span class={[
+                  "font-medium truncate",
+                  if(task.status == :completed,
+                    do: "text-fog-600 line-through",
+                    else: "text-fog-100"
+                  )
+                ]}>
+                  {task.name}
+                </span>
+                <.badge :if={task.kappa?} variant={:purple} class="shrink-0">Kappa</.badge>
+                <.badge :if={task.lightkeeper?} variant={:signal} class="shrink-0">
+                  Lightkeeper
+                </.badge>
+                <span
+                  :if={task.has_wiki?}
+                  title="Walkthrough available"
+                  class="shrink-0 inline-flex"
+                >
+                  <.icon name="hero-photo" class="w-3.5 h-3.5 text-amber/70" />
+                </span>
+              </div>
+              <div class="hidden sm:flex sm:col-span-2 items-center gap-2 text-sm text-fog-500 min-w-0">
+                <img
+                  :if={src = task.trader_image}
+                  src={src}
+                  alt=""
+                  loading="lazy"
+                  class="w-6 h-6 object-cover border border-line shrink-0 bg-ink-950"
+                />
+                <span class="truncate">{task.trader}</span>
+              </div>
+              <div class={[
+                "hidden sm:block sm:col-span-2 t-num text-sm",
+                level_class(task.level, @pmc_level)
+              ]}>
+                {if task.level, do: "Lvl #{task.level}", else: "-"}
+              </div>
+              <div class="col-span-3 sm:col-span-2 text-right flex items-center justify-end gap-2">
+                <%!-- Fixed width from `sm` up so the pills form a straight
+                     column instead of a ragged edge, and so the "Status"
+                     heading has a known box to centre itself over. Natural
+                     width on mobile, where this cell is far too narrow for
+                     it. --%>
+                <span class={[
+                  "t-label text-[9px] px-2 py-1 border sm:min-w-24 text-center",
+                  status_classes(task.status)
+                ]}>
+                  {status_label(task.status)}
+                </span>
+                <.icon
+                  name="hero-chevron-down"
+                  class={[
+                    "w-4 h-4 text-fog-500 transition-transform shrink-0",
+                    task.expanded? && "rotate-180"
+                  ]}
+                />
+              </div>
+            </button>
+
+            <%!-- Watchlist toggle. Sits outside the expand button (no nested
+                 buttons) and floats in the reserved right padding. The
+                 `is-fav` class is flipped client-side for instant feedback
+                 while the push persists the slug + reflows the list so a
+                 watchlisted task jumps to the top. --%>
+            <button
+              type="button"
+              aria-label={"Toggle watchlist for #{task.name}"}
+              aria-pressed={task.watchlisted?}
+              title={if task.watchlisted?, do: "Remove from watchlist", else: "Add to watchlist"}
+              phx-click={
+                JS.push("toggle_watchlist", value: %{slug: task.normalized_name})
+                |> JS.toggle_class("is-fav")
+              }
+              class={[
+                "fav-mark absolute top-1/2 -translate-y-1/2 right-3 z-10 p-1 hud-focus",
+                task.watchlisted? && "is-fav"
+              ]}
+            >
+              <.icon name="hero-bookmark" class="fav-mark-off w-5 h-5" />
+              <.icon name="hero-bookmark-solid" class="fav-mark-on w-5 h-5" />
+            </button>
+          </div>
+
+          <%!-- Detail panel --%>
+          <%= if task.expanded? && task.details do %>
+            <%= if task.details.wip? do %>
+              <div class="px-5 pb-8 pt-4 bg-ink-950 space-y-6">
+                <div class="border border-warn/40 bg-warn/10 p-4">
+                  <div class="flex items-start gap-3">
+                    <.icon
+                      name="hero-exclamation-triangle"
+                      class="w-5 h-5 text-warn shrink-0 mt-0.5"
+                    />
+                    <div>
+                      <div class="t-label text-[11px] text-warn mb-1">Work in progress</div>
+                      <p class="text-sm text-fog-200 leading-relaxed">
+                        This quest was recently added to the wiki and isn't fully supported yet.
+                        Rewards, requirements, and prerequisites will appear once it's synced from
+                        the API. Below is the walkthrough captured from the wiki.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="hud-panel p-5">
+                  <div class="grid grid-cols-1 lg:grid-cols-2 gap-x-8 gap-y-6">
+                    <div class="space-y-6 min-w-0">
+                      <section :if={task.details.objectives_text != []}>
+                        <.eyebrow class="mb-3">Objectives</.eyebrow>
+                        <ul class="space-y-2 list-disc list-inside text-sm text-fog-200 break-words">
+                          <li
+                            :for={obj <- task.details.objectives_text}
+                            class="leading-relaxed"
+                          >
+                            {fir_text(obj.text)}
+                          </li>
+                        </ul>
+                      </section>
+                      <p :if={task.details.objectives_text == []} class="text-sm text-fog-500">
+                        No objectives captured from the wiki for this quest.
+                      </p>
+                    </div>
+                    <aside class="space-y-6 min-w-0">
+                      <img
+                        :if={task.details.banner_url}
+                        src={task.details.banner_url}
+                        alt={task.name <> " banner"}
+                        loading="lazy"
+                        class="max-w-full h-auto border border-line"
+                      />
+                    </aside>
+                  </div>
+                </div>
+
+                <div
+                  :if={task.details.wiki && task.details.wiki.guide != []}
+                  class="hud-panel p-5"
+                >
+                  <.eyebrow class="mb-3">Guide</.eyebrow>
+                  <.guide_blocks
+                    blocks={task.details.wiki.guide}
+                    dom_prefix={"lightbox-#{task.id}-guide"}
+                  />
+                </div>
+
+                <%!-- A WIP quest has no API row, so everything above -
+                     objectives, banner and guide alike - came off the wiki. --%>
+                <.source_credit
+                  :if={task.details.wiki}
+                  id={"credit-wip-#{task.id}"}
+                  href={task.details.wiki.wiki_link}
+                  contributors={task.details.wiki.contributors}
+                  image_uploaders={task.details.wiki.image_uploaders}
+                />
+              </div>
+            <% else %>
+              <div class="px-5 pb-8 pt-4 bg-ink-950 space-y-6">
+                <div class="hud-panel p-5">
+                  <%!-- 70/30, not an even split: the left column carries the
+                       required items two-up plus the objectives (the reason
+                       anyone opened the panel), while the right column holds
+                       short requirement sentences and 64px reward tiles that
+                       left most of an even half empty.
+
+                       Required items and objectives stay in ONE column cell,
+                       rather than separate grid rows. That's what lets a short
+                       item list be followed immediately by the objectives while
+                       a long one - capped by `FitList` at the aside's height -
+                       ends level with it. Splitting them into two rows would
+                       force every quest to the aligned case and open a void
+                       under the ~290 quests that need four items or fewer. --%>
+                  <div class="grid grid-cols-1 lg:grid-cols-10 gap-x-8 gap-y-6">
+                    <div class="space-y-6 min-w-0 lg:col-span-7">
+                      <.required_items_block
+                        id={"required-items-#{task.id}"}
+                        items={task.details.required_items}
+                        fit_to={"#task-aside-#{task.id}"}
+                      />
+
+                      <section :if={task.details.objectives != []}>
+                        <.eyebrow class="mb-3">Objectives</.eyebrow>
+                        <ol class="space-y-4 list-decimal list-inside text-sm text-fog-200 break-words">
+                          <li :for={obj <- task.details.objectives} class="leading-relaxed">
+                            {fir_text(obj.description)}
+                            <div :if={obj.wiki_images != []} class="mt-3 flex flex-wrap gap-3">
+                              <.zoomable_image
+                                :for={{img, img_idx} <- Enum.with_index(obj.wiki_images)}
+                                id={"lightbox-#{task.id}-obj#{obj.index}-#{img_idx}"}
+                                src={img["url"] || ""}
+                                alt={img["caption"] || ""}
+                                caption={img["caption"]}
+                                width={img["width"]}
+                                height={img["height"]}
+                              />
+                            </div>
+                          </li>
+                        </ol>
+                      </section>
+                    </div>
+
+                    <%!-- No banner here: it's rendered as a thumbnail on the
+                         collapsed row above, which frees this column for the
+                         requirements and rewards. --%>
+                    <%!-- `lg:self-start` matters: a grid item stretches to its
+                         row's height by default, and the row is as tall as the
+                         left column. That made this column report the item
+                         list's own height back to the `FitList` hook, which
+                         then never had a reason to cap anything. Shrink-wrapped
+                         to its content it measures what it actually is - and
+                         nothing here paints a background, so the box shrinking
+                         is invisible. --%>
+                    <aside
+                      id={"task-aside-#{task.id}"}
+                      class="space-y-6 min-w-0 lg:col-span-3 lg:self-start"
+                    >
+                      <.requirements_block
+                        id={"requirements-#{task.id}"}
+                        requirements={task.details.requirements}
+                      />
+                      <.reward_block
+                        title="On accept"
+                        rewards={task.details.rewards}
+                        phase={:start}
+                      />
+                      <.reward_block
+                        title="Rewards"
+                        rewards={task.details.rewards}
+                        phase={:finish}
+                        experience={task.details.rewards.experience}
+                      />
+                    </aside>
+                  </div>
+                </div>
+
+                <div
+                  :if={task.details.wiki && task.details.wiki.guide != []}
+                  class="hud-panel p-5"
+                >
+                  <.eyebrow class="mb-3">Guide</.eyebrow>
+                  <.guide_blocks
+                    blocks={task.details.wiki.guide}
+                    dom_prefix={"lightbox-#{task.id}-guide"}
+                  />
+                </div>
+
+                <%!-- Objectives and rewards come from the API, but the guide
+                     prose and the per-objective screenshots above are the
+                     wiki's - so the credit renders whenever a wiki manifest
+                     backed any part of this panel, guide or images alone.
+                     The only place `what` is narrowed: everywhere else the
+                     whole panel is wiki-derived. --%>
+                <.source_credit
+                  :if={task.details.wiki}
+                  id={"credit-#{task.id}"}
+                  href={task.details.wiki.wiki_link}
+                  what="Guide content"
+                  contributors={task.details.wiki.contributors}
+                  image_uploaders={task.details.wiki.image_uploaders}
+                />
+              </div>
+            <% end %>
+          <% end %>
+        </div>
+      </div>
+
+      <p :if={@end_of_tasks?} class="px-5 py-6 text-center t-label text-[10px] text-fog-600">
+        Showing all {length(@filtered_tasks)} tasks
+      </p>
+    </div>
+  </div>
+</Layouts.app>

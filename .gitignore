@@ -1,0 +1,90 @@
+# NOTE ON ANCHORING: patterns below are deliberately NOT all anchored to /app/.
+# Every rule in this file used to start with `/app/`, which is how 1,308
+# `.elixir_ls/` paths and 933 compiled `.beam` files reached the repository
+# history. Build artefacts can appear at any depth, so the rules that match them
+# are left unanchored.
+
+# The directory Mix will write compiled artifacts to.
+_build/
+
+# If you run "mix test --cover", coverage assets end up here.
+cover/
+
+# The directory Mix downloads your dependencies sources to.
+deps/
+
+# Where 3rd-party dependencies like ExDoc output generated docs.
+doc/
+
+# Ignore .fetch files in case you like to edit your project deps locally.
+.fetch
+
+# If the VM crashes, it generates a dump, let's ignore it too.
+erl_crash.dump
+
+# Also ignore archive artifacts (built via "mix archive.build").
+*.ez
+
+# Compiled BEAM bytecode, wherever it lands.
+*.beam
+
+# ElixirLS build output and Dialyzer PLTs. Never source; these are large
+# (a PLT alone is ~6 MB) and were previously committed by accident.
+.elixir_ls/
+*.plt
+*.plt.hash
+
+# Temporary files, for example, from tests.
+tmp/
+
+# Ignore package tarball (built via "mix hex.build").
+eft_buddy-*.tar
+
+# Ignore assets that are produced by build tools.
+/app/priv/static/assets/
+
+# Ignore digested assets cache.
+/app/priv/static/cache_manifest.json
+
+# `mix phx.digest` — which `mix assets.deploy` runs, and which therefore runs on
+# every production build — writes a digested copy AND a .gz variant next to
+# EVERY source file throughout priv/static, not only under assets/.
+# Committing those would duplicate every image, font and svg in the repo (~100
+# files). Remove any that appear with `mix phx.digest.clean --all`.
+/app/priv/static/**/*.gz
+/app/priv/static/**/*-????????????????????????????????.*
+
+# In case you use Node.js/npm, you want to ignore these.
+npm-debug.log
+node_modules/
+
+# Local env vars (DB_PASSWORD, etc.)
+.env
+
+# ── Must never reach the public repository ────────────────────────────────────
+#
+# `private/` holds the engineering audit: `private/audit/ENGINEERING_DUE_DILIGENCE.md`
+# is a prioritised map of every known weakness in this codebase, including a worked
+# exploit chain, plus the prompt that produced it.
+#
+# It lives behind an ignore rule rather than a note-to-self on purpose. The plan for
+# going public is a FRESH repository with one squashed commit, i.e. `git init &&
+# git add .` — so anything merely "remembered" to be excluded ships. An ignored
+# directory is a mechanism; a comment is a hope. Keep audit material in here and
+# the publication step cannot leak it.
+private/
+
+# The rest are generated / editor-local. These are currently TRACKED in this
+# private repository; listing them does not untrack them (git keeps tracking what it
+# already tracks) — it stops new churn, and it is the state the fresh public
+# repository should start from.
+#
+#   graphify-out/  generated knowledge-graph dump: 290 files, ~68% of tracked
+#                  bytes, and it embeds absolute local paths from the machine
+#                  that produced it.
+#   .claude/       third-party generated agent config; two of its rule files
+#                  describe a Node.js project and do not apply here.
+#   .vscode/       editor-local settings.
+graphify-out/
+.claude/
+.vscode/

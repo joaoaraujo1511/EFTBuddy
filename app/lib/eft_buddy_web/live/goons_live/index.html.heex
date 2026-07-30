@@ -1,0 +1,141 @@
+<Layouts.app
+  flash={@flash}
+  active={@active}
+  pmc_level={@pmc_level}
+  mode={@mode}
+  faction={@faction}
+  scav_karma={@scav_karma}
+  page_title="Goon Tracker"
+  rail_collapsed={@rail_collapsed}
+>
+  <div class="max-w-[1800px] mx-auto px-4 sm:px-6 py-8 space-y-6">
+    <%!-- ── Current location hero ─────────────────────────── --%>
+    <section class={[
+      "hud-panel hud-notch p-6 sm:p-8",
+      @current_map && "border-rust/40"
+    ]}>
+      <div class="flex flex-col lg:flex-row lg:items-center gap-6">
+        <div class="flex-1 min-w-0">
+          <div class="t-label text-[10px] text-amber mb-2">Current location</div>
+
+          <%= if @current_map do %>
+            <div class="flex items-center gap-3">
+              <span class="relative flex h-3 w-3 shrink-0">
+                <span class="absolute inline-flex h-full w-full rounded-full bg-rust opacity-60 hud-pulse">
+                </span>
+                <span class="relative inline-flex h-3 w-3 rounded-full bg-rust"></span>
+              </span>
+              <h2 class="t-head text-4xl sm:text-5xl text-fog-100 truncate">{@current_map}</h2>
+            </div>
+            <p class="text-sm text-fog-400 mt-3">
+              The squad was last reported on <span class="text-fog-100">{@current_map}</span>, so hunt accordingly or steer clear.
+            </p>
+          <% else %>
+            <div class="flex items-center gap-3">
+              <.icon name="hero-question-mark-circle" class="w-8 h-8 text-fog-600 shrink-0" />
+              <h2 class="t-head text-4xl sm:text-5xl text-fog-500">Location unknown</h2>
+            </div>
+            <p class="text-sm text-fog-400 mt-3">
+              No active sighting. Pick a map below the moment you spot them.
+            </p>
+          <% end %>
+        </div>
+
+        <%!-- Readouts --%>
+        <div class="grid grid-cols-3 gap-3 lg:w-96 shrink-0">
+          <div class="hud-inset p-3 text-center">
+            <div class="t-label text-[9px] text-fog-500">Reported</div>
+            <div class="t-num text-sm text-fog-100 mt-1">{@reported || "-"}</div>
+          </div>
+          <div class="hud-inset p-3 text-center">
+            <div class="t-label text-[9px] text-fog-500">Confidence</div>
+            <div class="t-num text-sm text-fog-100 mt-1">{@confidence || "-"}</div>
+          </div>
+          <div class="hud-inset p-3 text-center">
+            <div class="t-label text-[9px] text-fog-500">Reports</div>
+            <div class="t-num text-sm text-fog-100 mt-1">{@reports}</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <%!-- ── The squad ─────────────────────────────────────── --%>
+    <section class="space-y-3">
+      <.eyebrow>The Squad</.eyebrow>
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div :for={member <- squad()} class="hud-panel p-4 flex items-center gap-3">
+          <div class="w-11 h-11 hud-notch bg-ink-950 border border-line flex items-center justify-center shrink-0">
+            <.icon name={member.icon} class="w-5 h-5 text-rust" />
+          </div>
+          <div class="min-w-0">
+            <div class="flex items-center gap-2">
+              <h3 class="text-sm font-semibold text-fog-100 truncate">{member.name}</h3>
+              <span class="t-label text-[9px] text-fog-500">{member.role}</span>
+            </div>
+            <p class="text-xs text-fog-400 mt-0.5 leading-relaxed">{member.note}</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <%!-- ── Report current location ───────────────────────── --%>
+    <section class="space-y-3">
+      <div class="flex items-center justify-between gap-3 flex-wrap">
+        <.eyebrow class="flex-1">Report sighting</.eyebrow>
+        <button
+          :if={@current_map}
+          type="button"
+          phx-click="clear_location"
+          class="t-label text-[10px] inline-flex items-center gap-1.5 px-3 py-1.5 border border-line text-fog-400 hover:text-rust hover:border-rust/50 transition-colors hud-focus"
+        >
+          <.icon name="hero-x-mark" class="w-3.5 h-3.5" /> Clear marker
+        </button>
+      </div>
+
+      <p class="text-sm text-fog-400">
+        Tap the map where you ran into them. They can only be in one place, so this moves the
+        marker rather than adding a second.
+      </p>
+
+      <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <button
+          :for={map <- maps()}
+          type="button"
+          phx-click="set_location"
+          phx-value-map={map}
+          aria-pressed={@current_map == map}
+          class={[
+            "group relative flex flex-col items-center justify-center gap-2 py-6 px-3 border transition-colors hud-focus",
+            if(@current_map == map,
+              do: "bg-rust/10 border-rust text-fog-100",
+              else:
+                "bg-ink-850 border-line text-fog-400 hover:text-fog-100 hover:border-line-strong"
+            )
+          ]}
+        >
+          <.icon
+            name="hero-map-pin"
+            class={["w-6 h-6", if(@current_map == map, do: "text-rust", else: "text-fog-600")]}
+          />
+          <span class="t-label text-xs">{map}</span>
+          <span
+            :if={@current_map == map}
+            class="t-label text-[9px] text-rust inline-flex items-center gap-1"
+          >
+            <span class="h-1.5 w-1.5 rounded-full bg-rust hud-pulse"></span> Here now
+          </span>
+          <span
+            :if={@current_map != map}
+            class="t-label text-[9px] text-fog-600 opacity-0 group-hover:opacity-100 transition-opacity"
+          >
+            Report here
+          </span>
+        </button>
+      </div>
+    </section>
+
+    <p class="t-label text-[10px] text-fog-600 text-center">
+      Community sighting feed &amp; spawn-chance data - coming soon.
+    </p>
+  </div>
+</Layouts.app>

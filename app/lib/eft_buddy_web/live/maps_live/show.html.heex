@@ -1,0 +1,252 @@
+<Layouts.app
+  flash={@flash}
+  active={@active}
+  pmc_level={@pmc_level}
+  mode={@mode}
+  faction={@faction}
+  scav_karma={@scav_karma}
+  page_title={@map.name}
+  rail_collapsed={@rail_collapsed}
+>
+  <div class="max-w-[1800px] mx-auto px-4 sm:px-6 py-8 space-y-6">
+    <.link
+      navigate={~p"/maps"}
+      class="inline-flex items-center gap-1.5 t-label text-[11px] text-fog-500 hover:text-amber transition-colors"
+    >
+      <.icon name="hero-arrow-left" class="w-4 h-4" /> All maps
+    </.link>
+
+    <%!-- ── Header ─────────────────────────────────── --%>
+    <.panel notch>
+      <.page_head title={@map.name} />
+
+      <%!-- Raid parameters. Maps with a single variant show one line; Factory
+           has two (day / night) and shows both, since raid length and squad
+           size differ between them. --%>
+      <% variants = raid_variants(@map) %>
+
+      <div
+        :if={variants == []}
+        class="mt-4 flex flex-wrap items-center gap-x-5 gap-y-1.5 t-label text-[10px] text-fog-400"
+      >
+        <span class="inline-flex items-center gap-1.5">
+          <.icon name="hero-clock" class="t-label-icon w-4 h-4 text-signal" /> {raid_duration_label(
+            @map.raid_duration
+          )}
+        </span>
+        <span :if={@map.players} class="inline-flex items-center gap-1.5">
+          <.icon name="hero-users" class="t-label-icon w-4 h-4 text-signal" /> {@map.players}
+        </span>
+        <span
+          :if={
+            is_integer(@map.max_player_level) and @map.max_player_level > 0 and
+              @map.max_player_level < 99
+          }
+          class="inline-flex items-center gap-1.5"
+        >
+          <.icon name="hero-academic-cap" class="t-label-icon w-4 h-4 text-amber" />
+          Up to level {@map.max_player_level}
+        </span>
+      </div>
+
+      <div :if={variants != []} class="mt-4 flex flex-wrap gap-2">
+        <div
+          :for={v <- variants}
+          class="hud-inset px-3 py-2 flex flex-wrap items-center gap-x-4 gap-y-1 t-label text-[10px] text-fog-400"
+        >
+          <span class="inline-flex items-center gap-1.5 text-fog-100">
+            <.icon
+              name={if v.kind == "night", do: "hero-moon", else: "hero-sun"}
+              class="t-label-icon w-4 h-4 text-amber"
+            /> {v.label || v.name}
+          </span>
+          <span class="inline-flex items-center gap-1.5">
+            <.icon name="hero-clock" class="t-label-icon w-4 h-4 text-signal" /> {raid_duration_label(
+              v.raid_duration
+            )}
+          </span>
+          <span :if={v.players} class="inline-flex items-center gap-1.5">
+            <.icon name="hero-users" class="t-label-icon w-4 h-4 text-signal" /> {v.players}
+          </span>
+        </div>
+      </div>
+
+      <p :if={@map.description} class="text-fog-300 leading-relaxed mt-4 max-w-4xl">
+        {@map.description}
+      </p>
+
+      <div :if={@map.enemies != []} class="mt-4 flex flex-wrap gap-2">
+        <.badge :for={enemy <- @map.enemies} variant={:neutral}>{enemy}</.badge>
+      </div>
+    </.panel>
+
+    <%!-- ── Interactive recon viewer (TacMap hook owns the DOM) ── --%>
+    <.panel :if={@map_viewer} notch padded={false}>
+      <div class="flex items-center justify-between gap-2 flex-wrap px-4 py-3 border-b border-line">
+        <h2 class="t-head text-base text-fog-100 flex items-center gap-2">
+          <.icon name="hero-map" class="w-5 h-5 text-amber" /> Interactive Recon
+        </h2>
+        <%!-- One line for both viewer kinds, naming the artist maps.json credits
+             for this specific map and linking the project's contributor list.
+
+             The licence is the one part that varies: an `svg` map is hand-drawn
+             artwork from the SVG Maps Project under CC BY-NC-SA 4.0, while a
+             `tile` map is a raster pyramid whose art carries no stated licence
+             anywhere upstream. Showing "CC BY-NC-SA 4.0" on those would assert a
+             grant neither TarkovBOT.eu nor Tarkov.dev has made. --%>
+        <% svg_maps = Attribution.svg_maps() %>
+        <.source_credit
+          source={svg_maps}
+          href={svg_maps.url}
+          what="Interactive map"
+          author={@map.image_author}
+          author_href={credit_author_href(@map, svg_maps)}
+          license={@map_viewer["projection"] == "svg"}
+        />
+      </div>
+      <div
+        id="tac-map"
+        phx-hook="TacMap"
+        phx-update="ignore"
+        data-tac={Jason.encode!(@map_viewer)}
+        data-map-name={@map.name}
+        class="relative flex w-full h-[72vh] min-h-[440px] max-h-[820px] overflow-hidden select-none"
+      >
+        <div class="absolute inset-0 flex items-center justify-center t-label text-[11px] text-fog-600">
+          Loading map...
+        </div>
+      </div>
+    </.panel>
+
+    <%!-- Non-vendored maps: plain hot-linked image (no pan/zoom). --%>
+    <.panel :if={is_nil(@map_viewer) and @map.svg_path} notch padded={false}>
+      <div class="flex items-center justify-between px-4 py-3 border-b border-line">
+        <h2 class="t-head text-base text-fog-100 flex items-center gap-2">
+          <.icon name="hero-map" class="w-5 h-5 text-amber" /> Map
+        </h2>
+        <span class="t-label text-[9px] text-fog-600">Imagery via tarkov.dev</span>
+      </div>
+      <div class="bg-ink-950">
+        <img
+          src={@map.svg_path}
+          alt={"#{@map.name} map"}
+          loading="lazy"
+          class="w-full max-h-[640px] object-contain"
+        />
+      </div>
+    </.panel>
+
+    <%!-- ── Bosses ───────────────────────────────── --%>
+    <%!-- One card per boss identity, with a row per distinct spawn entry
+         beneath it. The API models spawns as a list of entries with their own
+         chance, trigger and wave timer; showing only the first reported a
+         number that was often true for just one zone (Lighthouse's rogues run
+         20-80%, not a flat 80%). --%>
+    <.panel :if={@map.bosses != []} notch title="Bosses" eyebrow="Threat Assessment">
+      <div class="grid sm:grid-cols-2 gap-4">
+        <div :for={boss <- Maps.group_bosses(@map.bosses)} class="hud-inset p-4">
+          <div class="flex items-center gap-3">
+            <img
+              :if={boss.image_portrait_link}
+              src={boss.image_portrait_link}
+              alt={boss.name}
+              loading="lazy"
+              class="w-12 h-12 object-cover border border-line shrink-0"
+            />
+            <div class="min-w-0">
+              <div class="t-head text-base text-fog-100 truncate">{boss.name}</div>
+              <div class="text-xs text-fog-500">Spawn chance {boss.chance_label}</div>
+            </div>
+          </div>
+
+          <%!-- Spawn entries: chance / condition / wave times / zones. --%>
+          <div class="mt-3 space-y-2">
+            <div
+              :for={row <- boss.rows}
+              class="bg-ink-900 border border-line px-2 py-1.5"
+            >
+              <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
+                <span
+                  :if={row.variant_label}
+                  class="t-label text-[9px] px-1.5 py-0.5 border bg-amber/10 text-amber border-amber/30"
+                >
+                  {row.variant_label}
+                </span>
+                <span class="text-xs text-fog-200">{Maps.percent_label(row.chance)}</span>
+                <span
+                  :if={row.trigger}
+                  class="inline-flex items-center gap-1 t-label text-[9px] px-1.5 py-0.5 border bg-signal/10 text-signal border-signal/30"
+                  title="Spawn condition"
+                >
+                  <.icon name={spawn_trigger_icon(row.trigger)} class="w-3 h-3" /> {row.trigger}
+                </span>
+                <span
+                  :if={row.times != []}
+                  class="inline-flex items-center gap-1 t-label text-[9px] text-fog-500"
+                  title="Scripted spawn times from raid start"
+                >
+                  <.icon name="hero-clock" class="w-3 h-3" />
+                  {Enum.map_join(row.times, ", ", &spawn_time_label/1)}
+                </span>
+              </div>
+
+              <div :if={row.locations != []} class="mt-1.5 flex flex-wrap gap-1.5">
+                <span
+                  :for={loc <- row.locations}
+                  class="inline-flex items-center gap-1 text-xs text-fog-200 bg-ink-950 border border-line px-2 py-0.5"
+                >
+                  {loc["name"]}
+                  <span class="text-fog-600">{Maps.percent_label(loc["chance"])}</span>
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div :if={boss.escorts != []} class="mt-3">
+            <div class="t-label text-[9px] text-fog-600 mb-1">Escorts</div>
+            <div class="flex flex-wrap gap-1.5">
+              <span
+                :for={escort <- boss.escorts}
+                class="inline-flex items-center text-xs text-fog-400 bg-ink-900 border border-line px-2 py-0.5"
+              >
+                {Maps.escort_label(escort)}
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </.panel>
+
+    <%!-- ── Access keys ──────────────────────────── --%>
+    <%!-- Keys that gate entry to the raid itself (The Lab's keycard, The
+         Labyrinth's, Terminal's five). These were preloaded but never rendered
+         on any map. --%>
+    <.panel :if={@map.access_keys != []} notch title="Access keys" eyebrow="Entry Requirements">
+      <div class="flex flex-wrap gap-2">
+        <.link
+          :for={ak <- @map.access_keys}
+          :if={ak.item}
+          navigate={item_link(ak.item.name)}
+          class="inline-flex items-center gap-2 text-sm text-fog-200 bg-ink-900 border border-line px-2.5 py-1.5 hover:border-amber/50 hover:text-amber transition-colors"
+        >
+          <img
+            :if={ak.item.icon_link}
+            src={ak.item.icon_link}
+            alt={ak.item.name}
+            loading="lazy"
+            class="w-8 h-8 object-contain shrink-0"
+          />
+          {ak.item.name}
+        </.link>
+      </div>
+      <p
+        :if={
+          is_integer(@map.access_keys_min_player_level) and @map.access_keys_min_player_level > 0
+        }
+        class="mt-3 t-label text-[10px] text-fog-500"
+      >
+        Minimum player level {@map.access_keys_min_player_level}
+      </p>
+    </.panel>
+  </div>
+</Layouts.app>

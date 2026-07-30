@@ -1,0 +1,215 @@
+<% load_state = EftBuddyWeb.LoadState.resolve(@all_events != [], :events) %>
+<Layouts.app
+  flash={@flash}
+  active={@active}
+  pmc_level={@pmc_level}
+  mode={@mode}
+  faction={@faction}
+  scav_karma={@scav_karma}
+  page_title="Events"
+  search_query={@query}
+  search_placeholder={if load_state == :loaded, do: "Search events or quests..."}
+  rail_collapsed={@rail_collapsed}
+>
+  <div class="max-w-[1800px] mx-auto px-4 sm:px-6 py-8 space-y-6">
+    <.controls :if={load_state == :loaded}>
+      <:tabs>
+        <.tabs
+          active={@view}
+          items={[
+            %{
+              label: "All",
+              icon: "hero-squares-2x2",
+              patch: events_path(@query, :all),
+              filter: "all",
+              count: @counts.all,
+              tone: :neutral
+            },
+            %{
+              label: "Active",
+              icon: "hero-bolt",
+              patch: events_path(@query, :active),
+              filter: "active",
+              count: @counts.active,
+              tone: :go
+            },
+            %{
+              label: "Watchlist",
+              icon: "hero-bookmark",
+              patch: events_path(@query, :watchlist),
+              filter: "watchlist",
+              count: @counts.watchlist,
+              tone: :amber
+            }
+          ]}
+        />
+      </:tabs>
+    </.controls>
+
+    <.standby :if={load_state != :loaded} state={load_state} retry_to={~p"/events"} />
+    <.watchlist_empty
+      :if={@events == [] && @all_events != [] && @view == :watchlist}
+      noun="event"
+    />
+    <.no_results
+      :if={@events == [] && @all_events != [] && @view != :watchlist}
+      noun="events"
+    />
+
+    <div :if={@events != []} class="space-y-5">
+      <%!-- A stable per-event DOM id. This list is a plain comprehension (not a
+           stream), so without an id the client reuses these nodes strictly by
+           POSITION - and this list reorders whenever a watchlist toggles. An id
+           lets the patch move each event's subtree with the event instead of
+           rewriting whatever node happens to sit at that index. --%>
+      <article
+        :for={event <- @events}
+        id={"event-#{event.slug}"}
+        class="hud-panel hud-notch overflow-hidden"
+      >
+        <div :if={event.banner_url} class="relative h-44 border-b border-line overflow-hidden">
+          <img
+            src={event.banner_url}
+            alt={event.name}
+            loading="lazy"
+            class="w-full h-full object-cover"
+          />
+          <div class="absolute inset-0 bg-gradient-to-t from-ink-900 to-transparent"></div>
+        </div>
+
+        <div class="p-6 space-y-5">
+          <div class="relative">
+            <%!-- Watchlist toggle. Anchored to the top-right of the title
+                 block, so it sits level with the event name on the panel's
+                 flat grey instead of over the full-bleed banner (a grey
+                 bookmark on photography read badly). Still the same "floats in
+                 reserved padding" control as the Tasks / Items / Flea cards -
+                 the title row reserves `pr-10` so a long name can never run
+                 under it.
+
+                 Unlike those pages this does NOT pair the push with a
+                 `JS.toggle_class("is-fav")`. LiveView records a JS class
+                 command as a *sticky* operation on the clicked DOM node and
+                 re-applies it after every later patch, permanently overriding
+                 whatever class the server renders for that node. On the other
+                 pages the rows are stream children with stable ids, so the
+                 node moves with its row and the sticky class stays truthful.
+                 Here the reorder used to leave the sticky "is-fav" glued to the
+                 node the toggled event had just vacated - so the event looked
+                 unmarked AND looked like it never moved. The server round-trip
+                 re-renders and re-sorts this list anyway, so the optimistic
+                 toggle bought nothing here and cost correctness. --%>
+            <button
+              type="button"
+              aria-label={"Toggle watchlist for #{event.name}"}
+              aria-pressed={event.watchlisted?}
+              title={if event.watchlisted?, do: "Remove from watchlist", else: "Add to watchlist"}
+              phx-click={JS.push("toggle_watchlist", value: %{slug: event.slug})}
+              class={[
+                "fav-mark absolute top-0 right-0 z-10 p-1 hud-focus",
+                event.watchlisted? && "is-fav"
+              ]}
+            >
+              <.icon name="hero-bookmark" class="fav-mark-off w-5 h-5" />
+              <.icon name="hero-bookmark-solid" class="fav-mark-on w-5 h-5" />
+            </button>
+
+            <div class="flex items-center gap-3 flex-wrap pr-10">
+              <h2 class="t-head text-2xl text-fog-100">{event.name}</h2>
+              <.badge :if={event.status == "active"} variant={:go}>
+                <span class="h-1.5 w-1.5 rounded-full bg-go hud-pulse"></span> Active
+              </.badge>
+              <.badge :if={event.status == "past"} variant={:neutral}>Past</.badge>
+            </div>
+            <%!-- Styled to match the raid-time / player-count readouts in the
+                 map detail header, so every "hard fact about this entity"
+                 line in the app reads the same. --%>
+            <div
+              :if={event.event_date}
+              class="mt-1.5 inline-flex items-center gap-1.5 t-label text-[10px] text-fog-400"
+            >
+              <.icon name="hero-calendar-days" class="t-label-icon w-4 h-4 text-signal" /> {event.event_date}
+            </div>
+            <p :if={event.availability_note} class="text-xs text-amber mt-2">
+              {event.availability_note}
+            </p>
+          </div>
+
+          <p :if={event.description} class="text-sm text-fog-300 leading-relaxed break-words">
+            {event.description}
+          </p>
+
+          <div :if={event.quests != []} class="space-y-2">
+            <.eyebrow>Quests introduced · {length(event.quests)}</.eyebrow>
+            <div class="space-y-1.5">
+              <div :for={quest <- event.quests} class="hud-inset">
+                <button
+                  type="button"
+                  phx-click="toggle_quest"
+                  phx-value-id={quest.id}
+                  aria-expanded={MapSet.member?(@expanded_ids, quest.id)}
+                  class="w-full flex items-center justify-between gap-2 px-3 py-2.5 text-left text-sm text-fog-200 hover:text-amber transition-colors"
+                >
+                  <span class="truncate">{quest.name}</span>
+                  <.icon
+                    name={
+                      if MapSet.member?(@expanded_ids, quest.id),
+                        do: "hero-chevron-down",
+                        else: "hero-chevron-right"
+                    }
+                    class="w-4 h-4 shrink-0 text-fog-600"
+                  />
+                </button>
+                <div
+                  :if={MapSet.member?(@expanded_ids, quest.id)}
+                  class="px-3 pb-3 pt-1 border-t border-line"
+                >
+                  <.quest_detail
+                    detail={Map.get(@details_cache, quest.id)}
+                    dom_prefix={"evt-#{quest.id}"}
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div :if={event.gameplay_changes != []} class="space-y-2">
+            <.eyebrow>Gameplay changes</.eyebrow>
+            <ul class="space-y-1">
+              <li
+                :for={change <- event.gameplay_changes}
+                class="flex gap-2 text-sm text-fog-300 leading-relaxed"
+                style={"padding-left: #{change_indent(change.level)}rem"}
+              >
+                <span class="text-amber select-none shrink-0">&bull;</span>
+                <span class="break-words min-w-0">{change.text}</span>
+              </li>
+            </ul>
+          </div>
+
+          <%!-- Credits the event's OWN prose - the availability note, description
+               and gameplay-change bullets above all come from the wiki, and until
+               now none of them carried a credit line. The quests carry their own
+               (see `quest_detail/1` in events_live.ex), because each is scraped
+               from its own page.
+
+               LAST child of the card on purpose. A credit line reads as covering
+               what precedes it, so anywhere mid-card it silently scopes itself to
+               the description alone and leaves the gameplay changes - the longest
+               stretch of borrowed prose on the page - looking uncredited.
+
+               Links to `Events.source_url()`, NOT `event.wiki_link`: all of this
+               prose is parsed out of the one shared "Events" page, so that is the
+               page a reader has to open to check what we republished. Consequently
+               there is no `:if` guard either - the credit does not depend on the
+               individual event having a page of its own, because the content did
+               not come from one.
+
+               No `id`, so this renders as the plain line without a contributors
+               popup: the roster is captured per quest page, not per event page. --%>
+          <.source_credit href={Events.source_url()} what="Content" />
+        </div>
+      </article>
+    </div>
+  </div>
+</Layouts.app>

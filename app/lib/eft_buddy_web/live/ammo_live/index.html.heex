@@ -1,0 +1,106 @@
+<%!-- Page-level load state (see EftBuddyWeb.LoadState): both datasets feed
+     this page, so it counts as loaded once either has rows. While not loaded
+     the controls + search are hidden and a single shared standby shows, so
+     the not-loaded screen is identical to every other page. --%>
+<% load_state = EftBuddyWeb.LoadState.resolve(@rounds != [] or @plates != [], :ammo) %>
+<Layouts.app
+  flash={@flash}
+  active={@active}
+  pmc_level={@pmc_level}
+  mode={@mode}
+  faction={@faction}
+  scav_karma={@scav_karma}
+  page_title="Ballistics"
+  search_query={@query}
+  search_placeholder={
+    if load_state == :loaded do
+      if @view == :ammo, do: "Search ammo or caliber...", else: "Search plates or material..."
+    end
+  }
+  rail_collapsed={@rail_collapsed}
+>
+  <div class="max-w-450 mx-auto px-4 sm:px-6 py-8 space-y-6">
+    <%!-- Shared controls bar: the primary view switch (ammo | plates) sits
+         where every other page's tab strip does, with the search field in
+         its standard right-hand slot. The search box is always present (it
+         filters whichever view is active), matching the rest of the app. --%>
+    <.controls :if={load_state == :loaded}>
+      <:tabs>
+        <.tabs
+          active={@view}
+          items={[
+            %{
+              label: "Ammunition",
+              icon: "hero-fire",
+              event: "set_view",
+              value: "ammo",
+              count: length(@rounds),
+              tone: :neutral
+            },
+            %{
+              label: "Armor Plates",
+              icon: "hero-shield-check",
+              event: "set_view",
+              value: "plates",
+              count: @plates_count,
+              tone: :neutral
+            }
+          ]}
+        />
+      </:tabs>
+    </.controls>
+
+    <%!-- Shared not-loaded screen (loading spinner, or a fault + Retry when
+         the ammo/armor sync last failed). Identical across every page. --%>
+    <.standby :if={load_state != :loaded} state={load_state} retry_to={~p"/ammo"} />
+
+    <%!-- ═══════════════ AMMO VIEW ═══════════════ --%>
+    <%!-- The `PenScale` hook shows a floating penetration-effectiveness key
+         (0 → 6) when the operator hovers any C1–C6 matrix cell, replacing the
+         always-on legend panel with an on-demand popup. --%>
+    <div
+      :if={load_state == :loaded and @view == :ammo}
+      id="ammo-view"
+      phx-hook="PenScale"
+      class="space-y-6"
+    >
+      <%!-- Once the page is loaded, an empty ammo set only happens if armor
+           synced but ammo hasn't yet; keep a scoped standby for that case. --%>
+      <.standby :if={@rounds == []} />
+
+      <.no_results :if={@rounds != [] and @total == 0} noun="rounds" />
+
+      <div :if={@rounds != [] and @total > 0} class="space-y-6">
+        <.caliber_block
+          :for={{caliber, label, rows} <- @groups}
+          caliber={caliber}
+          label={label}
+          rows={rows}
+          sort={Map.get(@sorts, caliber, :default)}
+          armor_range={@armor_range}
+          ricochet_range={@ricochet_range}
+        />
+      </div>
+    </div>
+
+    <%!-- ═══════════════ PLATES VIEW ═══════════════ --%>
+    <div :if={load_state == :loaded and @view == :plates} class="space-y-6">
+      <%!-- Once the page is loaded, an empty plate set only happens if ammo
+           synced but armor hasn't yet; keep a scoped standby for that case. --%>
+      <.standby :if={@plates == []} />
+
+      <.no_results :if={@plates != [] and @plate_groups == []} noun="plates" />
+
+      <div :if={@plates != [] and @plate_groups != []} class="space-y-6">
+        <.plate_block
+          :for={{class, plates} <- @plate_groups}
+          class={class}
+          plates={plates}
+          sort={Map.get(@plates_sorts, class, :default)}
+          destructibility_range={@destructibility_range}
+          explosive_range={@explosive_range}
+        />
+      </div>
+    </div>
+  </div>
+</Layouts.app>

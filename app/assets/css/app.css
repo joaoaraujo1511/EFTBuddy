@@ -1,0 +1,433 @@
+/* =============================================================================
+   EFT-Buddy - "OPERATOR HUD" design system
+   -----------------------------------------------------------------------------
+   A brand-new, ground-up Tarkov-themed frontend. This file is the single
+   source of truth for the visual language: a gunmetal/olive ink ramp, a
+   hazard-amber primary, an olive-drab secondary, and a set of tactical-HUD
+   utilities (notched panels, scan lines, stencil labels, mono readouts).
+
+   Tailwind v4 - no config file, tokens declared in `@theme`, daisyUI removed.
+   ========================================================================== */
+
+@import "tailwindcss" source(none);
+@source "../css";
+@source "../js";
+@source "../../lib/eft_buddy_web";
+
+/* Heroicons "hero-*" class bridge (icon font set bundled into app.css). */
+@plugin "../vendor/heroicons";
+
+/* -----------------------------------------------------------------------------
+   Design tokens. Declared in @theme so they generate Tailwind utilities
+   (bg-ink-900, text-fog-300, border-line, text-amber, font-display, ...).
+   --------------------------------------------------------------------------- */
+@theme {
+  /* Ink ramp - Material dark greys, matched to tarkovtracker.org's palette:
+     its `sitebackground` #121212 (page), `contentbackground` #1e1e1e (cards)
+     and `bgdarken` #212121. Neutral achromatic greys (no olive or blue cast).
+     Their `secondary` accent is #9a8866 - the exact gold already used here as
+     --color-amber, so the accent already matches. */
+  --color-ink-950: #121212;
+  --color-ink-900: #181818;
+  --color-ink-850: #1e1e1e;
+  --color-ink-800: #242424;
+  --color-ink-750: #2a2a2a;
+  --color-ink-700: #333333;
+  --color-ink-600: #424242;
+  --color-ink-500: #545454;
+
+  /* Hairlines / dividers - neutral grey. */
+  --color-line: #2c2c2c;
+  --color-line-strong: #3b3b3b;
+
+  /* Fog - desaturated tan/khaki text ramp. The 500/600 steps were lifted so
+     muted small-text labels clear WCAG AA (>=4.5:1) on the ink-950 page
+     background; fog-700 stays reserved for decorative/hairline use only. */
+  --color-fog-50: #f3f1e7;
+  --color-fog-100: #e7e4d6;
+  --color-fog-200: #d3d0bf;
+  --color-fog-300: #bcb9a6;
+  --color-fog-400: #9d9b86;
+  --color-fog-500: #8f8c78;
+  --color-fog-600: #82806d;
+  --color-fog-700: #4c4a3d;
+
+  /* EFT gold - primary accent (active states, key actions, focus).
+     The muted tan-gold lifted from the legacy theme (#9a8866). */
+  --color-amber: #9a8866;
+  --color-amber-bright: #c0ac86;
+  --color-amber-dim: #5f5340;
+
+  /* Olive drab - secondary accent. */
+  --color-olive: #7c854f;
+  --color-olive-bright: #9aa467;
+
+  /* Status semantics. */
+  --color-go: #6cae5a;       /* available / ready / price-up */
+  --color-warn: #d8b53f;     /* WIP / caution (distinct yellow) */
+  --color-rust: #c0533c;     /* locked-blocking / missing / price-down */
+  /* The secondary accent, and the app's only blue: PVE mode, raid
+     time / player counts, Lightkeeper, barters, and the neutral count
+     pills on the browse tabs all read in this one colour. */
+  --color-signal: #5aa0b8;
+  --color-purple: #9b7bc9;   /* Kappa questline */
+
+  /* Typography families. */
+  --font-display: "Oswald", "Bebas Neue", "Roboto Condensed", "Arial Narrow", system-ui, sans-serif;
+  --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+
+/* LiveView state variants. */
+@custom-variant phx-click-loading (.phx-click-loading&, .phx-click-loading &);
+@custom-variant phx-submit-loading (.phx-submit-loading&, .phx-submit-loading &);
+@custom-variant phx-change-loading (.phx-change-loading&, .phx-change-loading &);
+
+/* Make LiveView wrapper divs transparent for layout. */
+[data-phx-session], [data-phx-teleported-src] { display: contents }
+
+/* -----------------------------------------------------------------------------
+   Self-hosted fonts (woff2 under priv/static/fonts). No external requests, so
+   the tight CSP (font-src 'self') is satisfied and visitor IPs stay private.
+   --------------------------------------------------------------------------- */
+@font-face { font-family: "Oswald"; font-style: normal; font-weight: 500; font-display: swap; src: url("/fonts/oswald-500.woff2") format("woff2"); }
+@font-face { font-family: "Oswald"; font-style: normal; font-weight: 600; font-display: swap; src: url("/fonts/oswald-600.woff2") format("woff2"); }
+@font-face { font-family: "Oswald"; font-style: normal; font-weight: 700; font-display: swap; src: url("/fonts/oswald-700.woff2") format("woff2"); }
+@font-face { font-family: "Inter"; font-style: normal; font-weight: 400; font-display: swap; src: url("/fonts/inter-400.woff2") format("woff2"); }
+@font-face { font-family: "Inter"; font-style: normal; font-weight: 500; font-display: swap; src: url("/fonts/inter-500.woff2") format("woff2"); }
+@font-face { font-family: "Inter"; font-style: normal; font-weight: 600; font-display: swap; src: url("/fonts/inter-600.woff2") format("woff2"); }
+@font-face { font-family: "Inter"; font-style: normal; font-weight: 700; font-display: swap; src: url("/fonts/inter-700.woff2") format("woff2"); }
+
+/* -----------------------------------------------------------------------------
+   Base.
+   --------------------------------------------------------------------------- */
+html {
+  scrollbar-gutter: stable;
+  color-scheme: dark;
+}
+
+body {
+  font-family: var(--font-sans);
+  color: var(--color-fog-300);
+  background-color: var(--color-ink-950);
+  /* Faint tactical grid + a top vignette of warm light, for depth. The grid
+     lines are a neutral white at very low alpha (no colour cast); the vignette
+     stays warm gold to tie into the accent. */
+  background-image:
+    linear-gradient(180deg, rgba(154, 136, 102, 0.05) 0%, rgba(18, 18, 18, 0) 38%),
+    linear-gradient(rgba(255, 255, 255, 0.028) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.028) 1px, transparent 1px);
+  background-size: 100% 100%, 44px 44px, 44px 44px;
+  background-attachment: fixed;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Custom scrollbar so the dark theme is consistent edge to edge. Neutral
+   Material greys (grey darken-3 / darken-2) to match the palette. */
+* { scrollbar-color: #424242 transparent; }
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb {
+  background: #424242;
+  border: 2px solid transparent;
+  background-clip: content-box;
+  border-radius: 6px;
+}
+*::-webkit-scrollbar-thumb:hover { background: #616161; background-clip: content-box; }
+
+/* Pointer affordance on clickable controls. */
+button:not(:disabled),
+[role="button"]:not([aria-disabled="true"]),
+summary { cursor: pointer; }
+button:disabled,
+[role="button"][aria-disabled="true"] { cursor: not-allowed; }
+
+/* Selection. */
+::selection { background: var(--color-amber-dim); color: var(--color-fog-50); }
+
+/* -----------------------------------------------------------------------------
+   Typography utilities (new system - not the prior .eft-* helpers).
+     .t-head   condensed display headings (HUD titles)
+     .t-label  wide-tracked stencil eyebrow / labels / tabs
+     .t-num    monospace numeric readouts (prices, levels, counts)
+   --------------------------------------------------------------------------- */
+.t-head {
+  font-family: var(--font-display);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.015em;
+  line-height: 0.98;
+}
+.t-label {
+  font-family: var(--font-display);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.24em;
+}
+.t-num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+/* Optical alignment for an icon sitting beside `.t-label` text (the
+   raid-time / player-count / objectives-count style readouts). `.t-label`
+   is uppercase-only, so its glyphs never use the font's descender space -
+   which means the visible centre of the text sits about a pixel BELOW the
+   centre of the line box that flexbox's `items-center` actually aligns
+   against, and the icon ends up looking a touch high. Nudging the icon
+   down by that pixel lines it up with the caps beside it. Done with a
+   transform so it costs nothing in layout. */
+.t-label-icon { transform: translateY(1px); }
+
+/* -----------------------------------------------------------------------------
+   HUD surface utilities.
+   --------------------------------------------------------------------------- */
+
+/* Notched "tactical panel" corner - top-left and bottom-right cut. */
+.hud-notch {
+  clip-path: polygon(
+    10px 0, 100% 0, 100% calc(100% - 10px),
+    calc(100% - 10px) 100%, 0 100%, 0 10px
+  );
+}
+
+/* A panel: dark inset surface with an olive hairline and a faint inner sheen. */
+.hud-panel {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.018), rgba(0, 0, 0, 0)) ,
+    var(--color-ink-850);
+  border: 1px solid var(--color-line);
+}
+
+/* Recessed inset (search bars, inputs, code blocks). */
+.hud-inset {
+  background: var(--color-ink-950);
+  border: 1px solid var(--color-line);
+  box-shadow: inset 0 1px 0 rgba(0, 0, 0, 0.45);
+}
+
+/* Thin amber rule used under section eyebrows. */
+.hud-rule {
+  background: linear-gradient(90deg, var(--color-amber), rgba(154, 136, 102, 0));
+}
+
+/* Vertical amber rule - the inner tracer edge of the left nav rail. */
+.hud-rule-v {
+  background: linear-gradient(180deg, var(--color-amber), rgba(154, 136, 102, 0));
+}
+
+/* Animated diagonal hazard stripes (used on banners / loading states). */
+.hud-stripes {
+  background-image: repeating-linear-gradient(
+    -45deg,
+    rgba(154, 136, 102, 0.12) 0, rgba(154, 136, 102, 0.12) 10px,
+    rgba(0, 0, 0, 0) 10px, rgba(0, 0, 0, 0) 20px
+  );
+}
+
+/* Faint scanline overlay for hero/banner surfaces. */
+.hud-scan {
+  background-image: repeating-linear-gradient(
+    0deg, rgba(0, 0, 0, 0.22) 0, rgba(0, 0, 0, 0.22) 1px, transparent 1px, transparent 3px
+  );
+}
+
+/* Focus ring used across interactive controls. */
+.hud-focus:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 1px var(--color-ink-950), 0 0 0 3px rgba(154, 136, 102, 0.55);
+}
+
+/* The TacMap viewport is a focusable role="application" widget (arrow keys
+   pan, +/- zoom, 0 re-fits). Its ring has to be INSET: the map panel clips
+   overflow and the .hud-notch clip-path would shear an outset one. This is the
+   only map rule in this file — everything else the viewer draws is inline
+   styled from the HUD palette in app.js. */
+.tac-viewport:focus-visible {
+  outline: 2px solid var(--color-amber-bright);
+  outline-offset: -2px;
+}
+
+/* Subtle pulse for "live" status dots. Honors the user's reduced-motion
+   preference - when motion is reduced the dot simply stays solid. */
+@keyframes hud-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .hud-pulse { animation: hud-pulse 2s ease-in-out infinite; }
+}
+
+/* Sweeping highlight for top loading bar / skeletons. */
+@keyframes hud-sweep {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+
+/* -----------------------------------------------------------------------------
+   Misc helpers.
+   --------------------------------------------------------------------------- */
+
+/* Opt-in scrollbar suppression - keeps overflow scrolling available while
+   hiding the visible track (used on the top command-bar nav strip and the
+   horizontal tab strips so they never sprout a stray scrollbar). */
+.no-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
+.no-scrollbar::-webkit-scrollbar { display: none; }
+
+/* Number field without the native spinner arrows (PMC level readout). */
+.no-spin { -moz-appearance: textfield; appearance: textfield; }
+.no-spin::-webkit-outer-spin-button,
+.no-spin::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+
+/* Recolour bright silver / coloured line-art emblems (faction toggles,
+   chapter icons) to flat white so they match the white label text beside
+   them instead of standing out in their native silver finish. */
+.icon-white { filter: brightness(0) invert(1); }
+
+/* Chapter storyline glyphs are recoloured to exactly match their chapter
+   title. We mask the artwork with itself and paint it in `currentColor`, so
+   setting the element's text colour to the title colour (e.g. text-fog-100 on
+   the index, text-fog-50 on the dossier) recolours the glyph to that same
+   colour. `contain` preserves the artwork's aspect ratio (no deformation) and
+   the per-element `--chapter-glyph-src` var carries the image URL. */
+.chapter-glyph {
+  background-color: currentColor;
+  -webkit-mask: var(--chapter-glyph-src) center / contain no-repeat;
+  mask: var(--chapter-glyph-src) center / contain no-repeat;
+}
+
+/* Watchlist bookmark toggle (Tasks, Items, Flea Market, Events).
+   Renders both an outline bookmark (off) and a solid one (on); the
+   `is-fav` class - flipped client-side on click (JS.toggle_class) for
+   instant feedback, and server-rendered on by default for already-watched
+   entries - decides which one shows. Off reads muted-grey, on reads EFT
+   gold. */
+.fav-mark {
+  color: var(--color-fog-600);
+  transition: color 120ms ease, transform 120ms ease;
+}
+.fav-mark:hover { color: var(--color-amber-bright); }
+.fav-mark.is-fav { color: var(--color-amber); }
+.fav-mark:active { transform: scale(0.88); }
+
+/* Outline by default, solid once bookmarked. Hiding the inactive glyph
+   keeps a single icon in the layout so the button never shifts. */
+.fav-mark .fav-mark-on { display: none; }
+.fav-mark.is-fav .fav-mark-off { display: none; }
+.fav-mark.is-fav .fav-mark-on { display: inline-block; }
+
+
+/* -----------------------------------------------------------------------------
+   Scav-karma slider (left rail operator controls). A native range input laid
+   over a painted rail so we get a slim vertical "tracer" thumb and a
+   sign-based fill (green right of centre, rust left of it) that the
+   `KarmaSlider` JS hook positions from the current value. The input's own
+   track is transparent - only the custom thumb shows over the painted rail.
+   --------------------------------------------------------------------------- */
+.karma-slider {
+  position: relative;
+  height: 22px;
+  display: flex;
+  align-items: center;
+}
+
+/* Painted rail behind the (transparent-track) range input. */
+.karma-slider__rail {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  height: 6px;
+  border-radius: 3px;
+  background: var(--color-ink-950);
+  border: 1px solid var(--color-line);
+  box-shadow: inset 0 1px 0 rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+
+/* Fill from the centre out to the thumb. The hook sets left/right/background
+   inline (green for positive karma, rust for negative); zero shows no fill. */
+.karma-slider__fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  right: 50%;
+}
+
+/* Centre (zero) tick mark. */
+.karma-slider__zero {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  left: 50%;
+  width: 1px;
+  background: var(--color-line-strong);
+}
+
+/* The range input itself: transparent track, custom thumb, sits above the
+   painted rail. */
+.karma-slider__input {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  height: 22px;
+  margin: 0;
+  background: transparent;
+  -webkit-appearance: none;
+  appearance: none;
+  cursor: pointer;
+}
+
+.karma-slider__input::-webkit-slider-runnable-track {
+  height: 22px;
+  background: transparent;
+}
+.karma-slider__input::-moz-range-track {
+  height: 22px;
+  background: transparent;
+}
+
+/* Slim vertical "tracer" thumb in bright gold. */
+.karma-slider__input::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 8px;
+  height: 18px;
+  margin-top: 2px; /* centre the 18px thumb on the 22px track */
+  border-radius: 2px;
+  background: var(--color-amber-bright);
+  box-shadow: 0 0 0 1px var(--color-ink-950), 0 0 6px rgba(154, 136, 102, 0.5);
+  cursor: pointer;
+}
+.karma-slider__input::-moz-range-thumb {
+  width: 8px;
+  height: 18px;
+  border: none;
+  border-radius: 2px;
+  background: var(--color-amber-bright);
+  box-shadow: 0 0 0 1px var(--color-ink-950), 0 0 6px rgba(154, 136, 102, 0.5);
+  cursor: pointer;
+}
+
+
+/* -----------------------------------------------------------------------------
+   Item inventory-tile tier backgrounds (see EftBuddy.Items.BackgroundColor).
+   Hand-written so the exact game-composited hex for each tarkov.dev
+   `backgroundColor` token is available as a utility class - letting the
+   shared item tile drop its per-item inline `style` attribute (one fewer
+   source of inline styling behind the CSP). New/unknown tokens fall back to
+   `.item-bg-default` in the helper.
+   --------------------------------------------------------------------------- */
+.item-bg-default { background-color: #424242; }
+.item-bg-black   { background-color: #1b1b1b; }
+.item-bg-blue    { background-color: #242f35; }
+.item-bg-green   { background-color: #22291b; }
+.item-bg-grey    { background-color: #242424; }
+.item-bg-orange  { background-color: #2d231b; }
+.item-bg-red     { background-color: #3c2622; }
+.item-bg-violet  { background-color: #322835; }
+.item-bg-yellow  { background-color: #3b3a27; }

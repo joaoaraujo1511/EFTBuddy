@@ -1,0 +1,138 @@
+<%!-- The HUD attrs are not passed: this is a controller render, so the
+     `EftBuddyWeb.OperatorState` on_mount hook never runs and those assigns do
+     not exist. `Layouts.app` defaults every one of them. --%>
+<Layouts.app flash={@flash} page_title="Privacy">
+  <div class="max-w-3xl mx-auto px-4 sm:px-6 py-10 space-y-8">
+    <header class="space-y-2">
+      <.eyebrow>Privacy</.eyebrow>
+      <h1 class="t-head text-2xl text-fog-100">What EFT Buddy stores, and where</h1>
+      <p class="text-sm text-fog-400 leading-relaxed">
+        There are no accounts, no logins, no analytics, no advertising and no tracking
+        scripts. Almost everything the site remembers about you is stored in your own
+        browser and never leaves it.
+      </p>
+    </header>
+
+    <section class="space-y-3">
+      <h2 class="t-head text-base text-fog-200">Stored on your device</h2>
+
+      <div class="hud-panel hud-notch p-5 space-y-4 text-sm text-fog-300 leading-relaxed">
+        <div>
+          <p class="t-label text-[10px] text-amber">eft_buddy_state_v2 · local storage</p>
+          <p class="mt-1">
+            Your progress: completed quests, watchlists, flea favourites and hideout
+            levels. This is the <strong class="text-fog-100">only</strong>
+            durable copy — it is not stored on the server. It is sent to the server
+            while you have the site open, so pages can be rendered correctly for you,
+            and is discarded there when your session ends.
+          </p>
+        </div>
+
+        <div>
+          <p class="t-label text-[10px] text-amber">eft_prefs · cookie, 1 year</p>
+          <p class="mt-1">
+            Your HUD settings: PMC level, scav karma, faction, game mode and whether
+            the nav rail is collapsed. Readable by the page itself so your settings
+            apply before anything loads.
+          </p>
+        </div>
+
+        <div>
+          <p class="t-label text-[10px] text-amber">_eft_buddy_key · cookie, 90 days</p>
+          <p class="mt-1">
+            A signed cookie holding one random, opaque identifier. It is not linked to
+            a name, an email or an account, and it exists only so the server can match
+            you to your own in-memory session while you browse. It is strictly
+            necessary for the site to function.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <section class="space-y-3">
+      <h2 class="t-head text-base text-fog-200">Stored on the server</h2>
+      <p class="text-sm text-fog-300 leading-relaxed">
+        Your progress and settings are held in memory only while you are using the
+        site, and for a short period afterwards so a reload does not lose your place.
+        They are never written to the database. If the server restarts, they are gone
+        and your browser re-supplies them.
+      </p>
+      <p class="text-sm text-fog-300 leading-relaxed">
+        Like any web server, request logs record IP addresses.
+      </p>
+    </section>
+
+    <section class="space-y-3">
+      <h2 class="t-head text-base text-fog-200">Bug reports</h2>
+      <p class="text-sm text-fog-300 leading-relaxed">
+        <%!-- `href`, not `navigate`: this page is a controller render, so there is
+             no LiveView to navigate from. --%>
+        The <.link href={~p"/report-bug"} class="text-amber hover:underline">Report a Bug</.link>
+        form stores exactly two things: the title and the description you type. There is
+        no name field and no contact field, so there is no reply path — please do not
+        include personal details in the description, because whatever you type is what
+        gets stored.
+      </p>
+    </section>
+
+    <section class="space-y-3">
+      <h2 class="t-head text-base text-fog-200">Content loaded from elsewhere</h2>
+      <p class="text-sm text-fog-300 leading-relaxed">
+        Item icons, quest banners, map artwork and wiki screenshots are loaded directly
+        from
+        <a href="https://tarkov.dev" rel="noopener" class="text-amber hover:underline">
+          tarkov.dev
+        </a>
+        and the
+        <a
+          href="https://escapefromtarkov.fandom.com"
+          rel="noopener"
+          class="text-amber hover:underline"
+        >
+          Escape from Tarkov Wiki
+        </a>
+        (Fandom) rather than copied onto this server. Your browser therefore contacts
+        those sites directly, which discloses your IP address to them. Their own privacy
+        policies apply to that. Fonts are self-hosted here, so they involve no third
+        party.
+      </p>
+    </section>
+
+    <section class="space-y-3">
+      <h2 class="t-head text-base text-fog-200">Taking your data, and erasing it</h2>
+      <p class="text-sm text-fog-300 leading-relaxed">
+        Because everything durable lives in your browser, you control it directly. Use
+        the <strong class="text-fog-100">Backup</strong> menu in the top bar:
+      </p>
+      <ul class="text-sm text-fog-300 leading-relaxed space-y-1.5 list-disc pl-5">
+        <li>
+          <strong class="text-fog-100">Export</strong>
+          downloads everything the site holds about you as a single JSON file.
+        </li>
+        <li>
+          <strong class="text-fog-100">Reset progress</strong>
+          erases the local storage blob and the preferences cookie, and clears the
+          server-side session immediately.
+        </li>
+      </ul>
+      <p class="text-sm text-fog-300 leading-relaxed">
+        Clearing site data in your browser has the same effect. Note that a bug report
+        you have already submitted cannot be located and deleted this way, because
+        nothing in it identifies you — if you need one removed, quote its title in an
+        email.
+      </p>
+    </section>
+
+    <section class="space-y-3">
+      <h2 class="t-head text-base text-fog-200">Contact</h2>
+      <p class="text-sm text-fog-300 leading-relaxed">
+        Questions about this page, corrections, or takedown requests: <a
+          href={"mailto:" <> Layouts.contact_email()}
+          class="text-amber hover:underline"
+        >
+          {Layouts.contact_email()}
+        </a>.
+      </p>
+    </section>
+  </div>
+</Layouts.app>

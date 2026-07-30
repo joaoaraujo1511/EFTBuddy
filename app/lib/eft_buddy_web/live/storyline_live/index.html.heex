@@ -1,0 +1,139 @@
+<%!-- Storyline has two views (chapters / endings); the page counts as loaded
+     once the active view has its data. While not loaded the controls + search
+     hide and the shared standby shows, matching every other page. --%>
+<% active_loaded? =
+  (@view == "chapters" and @chapters != []) or (@view == "endings" and not is_nil(@endings)) %>
+<% load_state = EftBuddyWeb.LoadState.resolve(active_loaded?, :storyline) %>
+<Layouts.app
+  flash={@flash}
+  active={@active}
+  pmc_level={@pmc_level}
+  mode={@mode}
+  faction={@faction}
+  scav_karma={@scav_karma}
+  page_title="Storyline"
+  search_query={@query}
+  search_placeholder={if load_state == :loaded, do: "Search chapters..."}
+  rail_collapsed={@rail_collapsed}
+>
+  <div class="max-w-[1800px] mx-auto px-4 sm:px-6 py-8 space-y-6">
+    <.controls :if={load_state == :loaded}>
+      <:tabs>
+        <.tabs
+          active={@view}
+          items={
+            [
+              %{
+                label: "Chapters",
+                icon: "hero-queue-list",
+                patch: ~p"/storyline",
+                filter: "chapters",
+                count: if(@chapters == [], do: nil, else: length(@chapters)),
+                tone: :neutral
+              },
+              @endings &&
+                %{
+                  label: "Endings",
+                  icon: "hero-rectangle-group",
+                  patch: ~p"/storyline?#{[view: "endings"]}",
+                  filter: "endings",
+                  count: length(@endings.content_sections),
+                  tone: :neutral
+                }
+            ]
+            |> Enum.filter(& &1)
+          }
+        />
+      </:tabs>
+    </.controls>
+
+    <%!-- ENDINGS view --%>
+    <div :if={@view == "endings" && @endings} class="space-y-6">
+      <.content_section
+        :for={sec <- @endings.content_sections}
+        section={sec}
+        item_index={@item_index}
+      />
+    </div>
+
+    <.standby :if={load_state != :loaded} state={load_state} retry_to={~p"/storyline"} />
+
+    <.no_results
+      :if={@view == "chapters" && @chapters != [] && @visible_chapters == []}
+      noun="chapters"
+    />
+
+    <%!-- Chapter list. Cards are flush with the controls bar above them (the
+         old vertical timeline + diamond markers that used to indent them by
+         `pl-12` are gone). --%>
+    <div :if={@view == "chapters" && @visible_chapters != []} class="space-y-5">
+      <article
+        :for={chapter <- @visible_chapters}
+        class="hud-panel hud-notch overflow-hidden hover:border-amber/60 transition-colors"
+      >
+        <div class="flex flex-col sm:flex-row">
+          <.link
+            :if={chapter.banner}
+            navigate={~p"/storyline/#{chapter.normalized_name}"}
+            class="block sm:w-56 shrink-0 relative"
+          >
+            <img
+              src={chapter.banner.url}
+              alt={chapter.chapter_name}
+              loading="lazy"
+              class="w-full sm:w-56 h-32 sm:h-full object-cover border-b sm:border-b-0 sm:border-r border-line"
+            />
+          </.link>
+
+          <div class="flex-1 p-6">
+            <h2 class="flex items-center gap-2.5">
+              <span
+                :if={icon_src = chapter_icon_src(chapter)}
+                aria-hidden="true"
+                class="w-8 h-8 shrink-0 chapter-glyph text-fog-100"
+                style={"--chapter-glyph-src:url('#{icon_src}')"}
+              >
+              </span>
+              <.link
+                navigate={~p"/storyline/#{chapter.normalized_name}"}
+                class="t-head text-2xl text-fog-100 hover:text-amber transition-colors"
+              >
+                {chapter.chapter_name}
+              </.link>
+            </h2>
+
+            <p :if={chapter.summary} class="text-sm text-fog-300 leading-relaxed mt-3">
+              {chapter.summary}
+            </p>
+
+            <div :if={chapter.related_tasks != []} class="mt-5">
+              <div class="t-label text-[9px] text-fog-500 mb-2">Related tasks</div>
+              <div class="flex flex-wrap gap-2">
+                <.link
+                  :for={task <- Enum.take(chapter.related_tasks, 12)}
+                  navigate={~p"/tasks?#{[q: task.name]}"}
+                  class="inline-flex items-center px-2.5 py-1 text-xs bg-ink-900 text-fog-300 border border-line hover:border-amber hover:text-amber transition-colors"
+                >
+                  {task.name}
+                </.link>
+                <span
+                  :if={length(chapter.related_tasks) > 12}
+                  class="inline-flex items-center px-2 py-1 text-xs text-fog-500"
+                >
+                  +{length(chapter.related_tasks) - 12} more
+                </span>
+              </div>
+            </div>
+
+            <.link
+              navigate={~p"/storyline/#{chapter.normalized_name}"}
+              class="mt-5 t-label text-[10px] text-amber hover:underline inline-flex items-center gap-1"
+            >
+              Walkthrough <.icon name="hero-arrow-right" class="w-4 h-4" />
+            </.link>
+          </div>
+        </div>
+      </article>
+    </div>
+  </div>
+</Layouts.app>

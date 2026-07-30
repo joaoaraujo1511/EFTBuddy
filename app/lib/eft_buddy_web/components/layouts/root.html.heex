@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="hud">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="csrf-token" content={get_csrf_token()} />
+    <meta name="theme-color" content="#121212" />
+    <link rel="icon" href={~p"/favicon.ico"} sizes="48x48" />
+    <link rel="icon" href={~p"/images/logo.svg"} type="image/svg+xml" />
+    <link rel="apple-touch-icon" href={~p"/images/logo.svg"} />
+    <%!-- Typography (Oswald display + Inter body) and the JetBrains-Mono-ish
+         numeric stack are SELF-HOSTED / system, so the strict CSP needs no
+         third-party font origin and visitor IPs stay private. --%>
+    <.live_title default="EFT Buddy" suffix=" · EFT Buddy">
+      {assigns[:page_title]}
+    </.live_title>
+    <%!-- Canonical URL with the query string stripped, so the many filtered /
+         searched variants of a page (?q=, ?status=, ?trader=, ?boss=, ?view=)
+         all consolidate onto one canonical URL for crawlers instead of
+         competing as duplicate content. Rendered on the initial (disconnected)
+         request - which is what crawlers see - and guarded on @conn so a
+         missing connection can never break the layout. --%>
+    <link
+      :if={assigns[:conn]}
+      rel="canonical"
+      href={Phoenix.Controller.current_url(@conn, %{})}
+    />
+    <%!-- SEO / social metadata. Pages set @page_description for a tailored
+         summary; everything else falls back to the site-wide default. --%>
+    <meta
+      name="description"
+      content={
+        assigns[:page_description] ||
+          "Track quests, hideout, flea prices, items, maps and lore for Escape from Tarkov. No account needed - your progress stays in your browser."
+      }
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="EFT Buddy" />
+    <meta
+      :if={assigns[:conn]}
+      property="og:url"
+      content={Phoenix.Controller.current_url(@conn, %{})}
+    />
+    <meta property="og:title" content={assigns[:page_title] || "EFT Buddy"} />
+    <meta
+      property="og:description"
+      content={
+        assigns[:page_description] ||
+          "Track quests, hideout, flea prices, items, maps and lore for Escape from Tarkov. No account needed - your progress stays in your browser."
+      }
+    />
+    <meta property="og:image" content={url(~p"/images/logo.svg")} />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content={assigns[:page_title] || "EFT Buddy"} />
+    <meta
+      name="twitter:description"
+      content={
+        assigns[:page_description] ||
+          "Track quests, hideout, flea prices, items, maps and lore for Escape from Tarkov. No account needed - your progress stays in your browser."
+      }
+    />
+    <link phx-track-static rel="stylesheet" href={~p"/assets/css/app.css"} />
+    <script defer phx-track-static type="text/javascript" src={~p"/assets/js/app.js"}>
+    </script>
+  </head>
+
+  <body class="bg-ink-950 text-fog-300 antialiased">
+    {@inner_content}
+  </body>
+</html>
