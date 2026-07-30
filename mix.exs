@@ -85,7 +85,16 @@ defmodule EftBuddy.MixProject do
       test: ["ecto.create --quiet", "ecto.migrate --quiet", "test"],
       "assets.setup": ["tailwind.install --if-missing", "esbuild.install --if-missing"],
       "assets.build": ["compile", "tailwind eft_buddy", "esbuild eft_buddy"],
+      # `compile` FIRST, and it is load-bearing rather than defensive. LiveView's
+      # compiler writes colocated hooks to `_build/<env>/phoenix-colocated/<app>`,
+      # and `assets/js/app.js` imports that path — so esbuild cannot resolve it
+      # until a compile has happened. `assets.build` above already compiles, which
+      # is why local development never hit this; `assets.deploy` is only reached by
+      # a production build, and nothing performed one until the container existed.
+      # It failed there on the first attempt with "Could not resolve
+      # phoenix-colocated/eft_buddy".
       "assets.deploy": [
+        "compile",
         "tailwind eft_buddy --minify",
         "esbuild eft_buddy --minify",
         "phx.digest"

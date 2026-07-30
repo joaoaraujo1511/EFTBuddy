@@ -55,11 +55,16 @@ COPY priv priv
 COPY lib lib
 COPY assets assets
 
+# Compile BEFORE assets. LiveView's compiler emits colocated hooks into
+# `_build/${MIX_ENV}/phoenix-colocated/eft_buddy`, and assets/js/app.js imports
+# that path — esbuild cannot resolve it until a compile has run. The
+# `assets.deploy` alias now compiles first too, so this is explicit ordering
+# rather than the only thing standing between you and a broken build.
+RUN mix compile
+
 # `assets.deploy` runs tailwind + esbuild and then `phx.digest`, which writes the
 # cache_static_manifest that config/prod.exs points at.
 RUN mix assets.deploy
-
-RUN mix compile
 
 COPY config/runtime.exs config/
 

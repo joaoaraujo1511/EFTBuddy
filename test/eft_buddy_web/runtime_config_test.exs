@@ -149,8 +149,10 @@ defmodule EftBuddyWeb.RuntimeConfigTest do
       assert repo_ssl(read_prod(%{"DB_SSL" => "true", "DB_SSL_INSECURE" => "true"})) ==
                [verify: :verify_none]
 
-      # And on its own it does nothing at all.
-      assert repo_ssl(read_prod(%{"DB_SSL_INSECURE" => "true"})) == false
+      # And on its own it does nothing at all. DB_SSL is cleared EXPLICITLY:
+      # `read_prod/1` only writes the variables it is handed, so without this it
+      # would still be set from the assertion above and this would assert nothing.
+      assert repo_ssl(read_prod(%{"DB_SSL" => nil, "DB_SSL_INSECURE" => "true"})) == false
     end
 
     test "refuses to enable TLS when DATABASE_URL has no host to verify against" do
