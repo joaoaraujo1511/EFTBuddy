@@ -134,11 +134,51 @@ jobs:
       # `.credo.exs` tuned to this codebase and `continue-on-error: false`, or not at
       # all.
 
-  # NO ARTEFACT-BUILD JOB. There was one: it built a container image and smoke-tested
-  # it. This project is not deployed as a container, so the job and everything it
-  # referenced were removed rather than left to fail.
+  # Builds the production container image. The project IS deployed as a container
+  # now (Dockerfile at the repository root), and until this existed the entire prod
+  # path — config/prod.exs's compile-time `force_ssl` and `cache_static_manifest`,
+  # `mix assets.deploy`, and `mix release` itself — was exercised by nothing. A
+  # release that cannot be built is the kind of breakage you want to discover on a
+  # pull request, not while ssh'd into a server.
   #
-  # Two things went with it, and only one is actually covered elsewhere:
+  # BUILDS FOR arm64, not for the runner's native x86_64. The deploy target is
+  # Oracle's Always Free tier, which is Ampere, and an image built for the wrong
+  # architecture fails at `exec` time with a format error rather than at build
+  # time. Emulated arm64 is slow, which is why this is a separate job rather than
+  # another step in `test` — it runs in parallel and never delays the test signal.
+  #
+  # `push: false` — this proves the image BUILDS. Publishing it would need a
+  # registry and credentials, and this repository is public: a workflow with
+  # push rights to a registry is a much larger blast radius than a workflow that
+  # only compiles. Add that when there is somewhere to push to.
+  build-image:
+    name: Build production image (arm64)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/arm64
+          push: false
+          # GitHub Actions cache, so an unchanged mix.lock does not recompile
+          # every dependency under emulation on each run.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # The artefact-build job above replaced an older one that was deleted as unused.
+  # Of the two things that went with it, one was already covered elsewhere:
   #
   #   * The blank/missing PHX_HOST guard — COVERED. `test/eft_buddy_web/
   #     runtime_config_test.exs` evaluates config/runtime.exs with `Config.Reader`
@@ -146,8 +186,15 @@ jobs:
   #     refused, for every required variable. That is a stricter check than the
   #     image job's single case, and it runs in the `test` job above.
   #
-  #   * The prod COMPILE path — NOT covered anywhere. `config/prod.exs`
-  #     (`force_ssl`, `cache_static_manifest`), `mix assets.deploy` and `mix
-  #     release` are exercised by nothing in this pipeline. A `MIX_ENV=prod`
-  #     build step belongs here once the release target is decided; it needs a
-  #     `releases:` key in mix.exs, which does not exist yet.
+  #   * The prod COMPILE path — NOW COVERED, by `build-image` above. It was the
+  #     open item in this comment for as long as there was no release target.
+  #     `mix release` needs no `releases:` key in mix.exs, contrary to what this
+  #     note used to claim: the defaults are sufficient, and the release is
+  #     shaped by rel/overlays and the Dockerfile instead.
+  #
+  # Still NOT covered: that the built image actually BOOTS. The job proves it
+  # compiles and links, not that the release starts, reaches the database and
+  # serves a request. Doing that properly needs real secrets and a reachable
+  # Postgres over TLS, which is a bigger change than it looks — and getting it
+  # wrong means putting production credentials into a public repository's CI.
+  # The first boot on the VM is the current test for this, deliberately.

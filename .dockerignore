@@ -1,0 +1,60 @@
+# Everything the build does not need, and several things it must NEVER receive.
+#
+# SECURITY. `.env` and `private/` are the load-bearing entries. A Docker build
+# context is uploaded to the daemon wholesale, and anything copied into a layer
+# is readable by anyone who can pull the image — deleting it in a later layer
+# does not remove it from the earlier one. `.gitignore` protects the repository;
+# this file is the equivalent protection for the image, and the two are separate
+# mechanisms that have to be maintained separately.
+#
+# The Dockerfile copies named paths rather than `COPY . .`, so these are defence
+# in depth rather than the only guard. Keep them anyway: the next person to add
+# a `COPY` line will not re-derive this reasoning.
+
+# Live credentials: Supabase host, user and password.
+.env
+.env.*
+
+# The engineering audit, including a worked exploit chain.
+private/
+
+# Version control and CI.
+.git
+.gitignore
+.github
+
+# Editor and agent tooling.
+.vscode
+.claude
+.elixir_ls
+graphify-out
+
+# Build artefacts from the host. These are architecture- and path-specific;
+# letting a Windows or x86 _build/ leak into an arm64 image is a subtle way to
+# produce a broken release.
+_build
+deps
+cover
+doc
+.fetch
+*.ez
+*.beam
+erl_crash.dump
+
+# Node modules, if assets ever grow a package.json.
+assets/node_modules
+
+# The digested output of a previous local `mix assets.deploy`. The image runs it
+# itself; a stale manifest copied in would silently win.
+priv/static/assets
+priv/static/cache_manifest.json
+
+# Test support and docs — not needed to build a prod release.
+test
+docs
+*.md
+!README.md
+
+# The image builds its own; never inherit one.
+Dockerfile
+.dockerignore

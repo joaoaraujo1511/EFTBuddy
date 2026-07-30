@@ -56,6 +56,65 @@ if config_env() == :prod do
 
   maybe_ipv6 = if System.get_env("ECTO_IPV6") in ~w(true 1), do: [:inet6], else: []
 
+  # TLS to the database, VERIFIED. `ssl: true` is not the same thing and is what
+  # this used to pass: it hands Postgrex a bare boolean, and what that negotiates
+  # depends on the Postgrex version rather than on anything stated here. An
+  # unverified TLS session to a database reachable over the public internet — which
+  # a hosted provider's pooler is — is protection against passive sniffing only. It
+  # stops nothing active, because there is no check that the peer presenting the
+  # certificate is the host we asked for.
+  #
+  # So verification is explicit and on by default:
+  #
+  #   verify: :verify_peer  — actually check the chain, rather than accept any cert.
+  #   cacerts               — the OS trust store. The runtime image MUST ship
+  #                           `ca-certificates` or `cacerts_get/0` raises at boot.
+  #                           That is deliberate: failing to start beats starting
+  #                           with an unverified connection to the database.
+  #   server_name_indication — SNI, taken from DATABASE_URL's host. Managed
+  #                           providers front many databases behind one address and
+  #                           serve the wrong certificate without it.
+  #   customize_hostname_check — Erlang's default hostname matching is stricter than
+  #                           the HTTPS rules most public CAs issue against
+  #                           (wildcards, in particular); the `:https` match fun is
+  #                           the standard remedy and is not a weakening.
+  #
+  # DB_SSL_INSECURE=true drops to `verify_none`. It exists so a certificate problem
+  # can be isolated from a connectivity problem in one restart, NOT as a setting to
+  # leave on. It is a separate variable from DB_SSL precisely so that turning TLS on
+  # can never quietly mean turning verification off.
+  db_ssl =
+    if System.get_env("DB_SSL") in ~w(true 1) do
+      db_host =
+        case URI.parse(database_url) do
+          %URI{host: host} when is_binary(host) and host != "" ->
+            host
+
+          _ ->
+            raise """
+            DB_SSL is enabled but no hostname could be parsed out of DATABASE_URL,
+            so the certificate could not be checked against anything.
+
+            Expected a URL of the form ecto://USER@HOST/DATABASE.
+            """
+        end
+
+      if System.get_env("DB_SSL_INSECURE") in ~w(true 1) do
+        [verify: :verify_none]
+      else
+        [
+          verify: :verify_peer,
+          cacerts: :public_key.cacerts_get(),
+          server_name_indication: String.to_charlist(db_host),
+          customize_hostname_check: [
+            match_fun: :public_key.pkix_verify_hostname_match_fun(:https)
+          ]
+        ]
+      end
+    else
+      false
+    end
+
   config :eft_buddy, EftBuddy.Repo,
     url: database_url,
     # The password is supplied separately (and applied as an explicit
@@ -64,10 +123,10 @@ if config_env() == :prod do
     # anywhere the URL might be echoed. To carry it in DATABASE_URL
     # instead, drop the DB_PASSWORD requirement above and this line.
     password: db_password,
-    # Enable TLS to the database by setting DB_SSL=true. Some managed
-    # providers also need extra `ssl_opts` (CA bundle / SNI) for full
-    # certificate verification — see https://hexdocs.pm/postgrex.
-    ssl: System.get_env("DB_SSL") in ~w(true 1),
+    # `false`, or a verified TLS option list. Built above, where the reasoning
+    # lives. Note this is the `ssl:` key and NOT the deprecated `ssl_opts:` —
+    # see the same note in config/dev.exs.
+    ssl: db_ssl,
     pool_size: String.to_integer(System.get_env("POOL_SIZE") || "10"),
     # For machines with several cores, consider starting multiple pools of `pool_size`
     # pool_count: 4,

@@ -1,0 +1,15 @@
+#!/bin/sh
+# Runs pending migrations inside the release, without Mix.
+#
+# Calls EftBuddy.Release.migrate/0 (lib/eft_buddy/release.ex), which starts the
+# repo, migrates every repo in :ecto_repos, and stops again. Run it as a separate
+# one-shot container BEFORE starting the app:
+#
+#     docker run --rm --env-file /etc/eft-buddy.env eft-buddy /app/bin/migrate
+#
+# Deliberately NOT part of the server start path. Migrating on boot means every
+# restart races itself the moment there is more than one instance, and a failed
+# migration becomes a crash-loop rather than a command that reports an error.
+set -eu
+cd -P -- "$(dirname -- "$0")"
+exec ./eft_buddy eval EftBuddy.Release.migrate
