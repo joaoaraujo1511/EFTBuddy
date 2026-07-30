@@ -1,12 +1,30 @@
 name: CI
 
+# EVERY branch, not just main. This used to be `branches: [main]`, which meant a
+# feature branch with no PR open matched NEITHER event and ran nothing at all.
+# That is not a theoretical gap: the fix for a failing `hex.audit` sat pushed and
+# untested on a branch while the stale failure stood on main, and the first real
+# verification only happened when a PR was finally opened.
+#
+# `pull_request` stays alongside it, and is not redundant: it builds the merge
+# commit (branch + current main) rather than the branch tip, and it is the only
+# event that fires for pull requests from forks.
 on:
   push:
-    branches: [main]
+    branches: ["**"]
   pull_request:
 
 permissions:
   contents: read
+
+# A PR branch now matches both triggers, so it gets two runs — one on the branch
+# tip, one on the merge commit. They test different things, so neither is
+# dropped; this just stops superseded runs from piling up when you push several
+# times in a row. main is excluded: never cancel a run on the default branch,
+# since its result is the record of whether main is green.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 # Toolchain, pinned in one place. OTP is pinned to the FULL patch version, not
 # `27.3`, which setup-beam resolves to whatever 27.3.x it publishes latest — so a
