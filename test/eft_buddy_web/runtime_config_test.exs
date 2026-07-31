@@ -23,8 +23,13 @@ defmodule EftBuddyWeb.RuntimeConfigTest do
     "PHX_HOST" => "eftbuddy.example"
   }
 
+  # Optional variables the prod branch reads. Tracked here purely so `on_exit`
+  # restores them: a test that switches DB_SSL on must not leak it into the next
+  # one, which would silently change what that test is asserting about.
+  @optional ~w(DB_SSL DB_SSL_INSECURE)
+
   setup do
-    original = Map.new(Map.keys(@valid), &{&1, System.get_env(&1)})
+    original = Map.new(Map.keys(@valid) ++ @optional, &{&1, System.get_env(&1)})
 
     on_exit(fn ->
       Enum.each(original, fn
@@ -44,6 +49,8 @@ defmodule EftBuddyWeb.RuntimeConfigTest do
 
     Config.Reader.read!(@runtime_config, env: :prod)
   end
+
+  defp repo_ssl(config), do: get_in(config, [:eft_buddy, EftBuddy.Repo, :ssl])
 
   test "a fully configured environment reads cleanly" do
     # Guards against the whole suite below passing because the file raises
@@ -108,6 +115,51 @@ defmodule EftBuddyWeb.RuntimeConfigTest do
 
         assert get_in(config, [:eft_buddy, EftBuddyWeb.Endpoint, :url, :host]) ==
                  String.trim(good)
+      end
+    end
+  end
+
+  describe "database TLS" do
+    # `ssl: true` — the bare boolean this used to pass — negotiates a session
+    # whose verification behaviour depends on the Postgrex version rather than on
+    # anything stated in the config. Unverified TLS to a database reachable over
+    # the public internet protects against passive sniffing only: nothing checks
+    # that the peer presenting the certificate is the host we asked for. These
+    # assert the verified shape is what actually reaches the Repo.
+    test "off by default" do
+      assert repo_ssl(read_prod(%{})) == false
+    end
+
+    test "DB_SSL=true verifies the peer, against the host from DATABASE_URL" do
+      ssl = repo_ssl(read_prod(%{"DB_SSL" => "true"}))
+
+      assert ssl[:verify] == :verify_peer
+      # SNI must come from DATABASE_URL, not be hardcoded or omitted: managed
+      # providers front many databases behind one address and serve the wrong
+      # certificate without it.
+      assert ssl[:server_name_indication] == ~c"127.0.0.1"
+      assert is_list(ssl[:cacerts]) and ssl[:cacerts] != []
+      assert is_function(ssl[:customize_hostname_check][:match_fun])
+    end
+
+    test "DB_SSL_INSECURE is a separate opt-in, so enabling TLS never disables verification" do
+      # The escape hatch exists to isolate a certificate problem from a
+      # connectivity problem in one restart. It must never be reachable by
+      # setting DB_SSL alone.
+      assert repo_ssl(read_prod(%{"DB_SSL" => "true", "DB_SSL_INSECURE" => "true"})) ==
+               [verify: :verify_none]
+
+      # And on its own it does nothing at all. DB_SSL is cleared EXPLICITLY:
+      # `read_prod/1` only writes the variables it is handed, so without this it
+      # would still be set from the assertion above and this would assert nothing.
+      assert repo_ssl(read_prod(%{"DB_SSL" => nil, "DB_SSL_INSECURE" => "true"})) == false
+    end
+
+    test "refuses to enable TLS when DATABASE_URL has no host to verify against" do
+      # Silently falling back to an unverified session here would be the worst
+      # outcome: TLS requested, nothing checked, no signal.
+      assert_raise RuntimeError, ~r/no hostname could be parsed/, fn ->
+        read_prod(%{"DB_SSL" => "true", "DATABASE_URL" => "ecto:///eft_buddy_shape_test"})
       end
     end
   end

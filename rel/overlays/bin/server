@@ -1,0 +1,10 @@
+#!/bin/sh
+# Starts the release with the Phoenix endpoint actually serving.
+#
+# `bin/eft_buddy start` alone boots the supervision tree and listens on nothing:
+# config/runtime.exs only sets `server: true` when PHX_SERVER is present. This
+# script is the supported way to say "and serve HTTP", and is what the container
+# CMD runs.
+set -eu
+cd -P -- "$(dirname -- "$0")"
+PHX_SERVER=true exec ./eft_buddy start
