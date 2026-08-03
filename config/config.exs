@@ -54,6 +54,30 @@ config :eft_buddy, EftBuddyWeb.Endpoint,
   # environment for rotation without a rebuild.
   live_view: [signing_salt: "YFkgry97"]
 
+# The operator dashboard's endpoint (see `EftBuddyWeb.AdminEndpoint`). This block
+# only makes the module compilable — `server: false` means nothing here starts
+# it. `EftBuddy.Application` starts it ONLY when `:admin_dashboard` is set, which
+# `config/runtime.exs` does only when ADMIN_DASHBOARD_PORT is present. Unset in
+# every environment by default, so the port is never bound and the socket never
+# exists.
+config :eft_buddy, EftBuddyWeb.AdminEndpoint,
+  server: false,
+  adapter: Bandit.PhoenixAdapter,
+  url: [host: "localhost"],
+  render_errors: [formats: [html: EftBuddyWeb.ErrorHTML], layout: false],
+  pubsub_server: EftBuddy.PubSub,
+  live_view: [signing_salt: "aH7dK2mQ"],
+  # Reached only through an SSH tunnel, so the browser's Origin is always the
+  # loopback address the tunnel listens on — never the app's public host. An
+  # explicit list rather than `false`: this endpoint can kill processes, so a
+  # websocket from a page on another origin should still be refused.
+  check_origin: [
+    "//localhost",
+    "//127.0.0.1",
+    "http://localhost:4001",
+    "http://127.0.0.1:4001"
+  ]
+
 # Configure esbuild (the version is required)
 config :esbuild,
   version: "0.25.4",
