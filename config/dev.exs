@@ -9,7 +9,9 @@ import Config
 #
 # The pinned CA is not hardening, it is what makes verification possible at all:
 # Supabase runs its own PKI, and its root is in no OS trust store, so
-# `:public_key.cacerts_get/0` cannot build a path to it. See priv/certs/README.md.
+# `:public_key.cacerts_get/0` cannot build a path to it. The pinned file is
+# committed at priv/certs/ and documented in .env.example, which also carries the
+# fingerprint to check it against.
 db_hostname = System.get_env("DB_HOSTNAME")
 
 # A LOCAL Postgres is the exception, and it has to be, or this file makes local

@@ -126,9 +126,10 @@ COPY --from=builder --chown=root:root /app/_build/${MIX_ENV}/rel/eft_buddy ./
 # baking a version number into DB_CACERTFILE means the next `version:` bump in
 # mix.exs silently breaks database TLS. `/app/certs/` does not move.
 #
-# Public certificates, no private key material — see priv/certs/README.md. They
-# are copied rather than mounted so that deploying is a `git pull` and a rebuild,
-# with no out-of-band file for someone to forget.
+# Public certificates, no private key material: a CA certificate is the half that
+# is meant to be distributed, so committing one leaks nothing. They are copied
+# rather than mounted so that deploying is a `git pull` and a rebuild, with no
+# out-of-band file for someone to forget.
 COPY --from=builder --chown=root:root /app/priv/certs /app/certs
 
 USER eftbuddy

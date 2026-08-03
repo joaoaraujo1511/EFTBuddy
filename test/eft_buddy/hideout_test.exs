@@ -79,4 +79,122 @@ defmodule EftBuddy.HideoutTest do
       assert Hideout.get_level_requirements("lavatory", "1") == nil
     end
   end
+
+  describe "get_level_requirements_for/1" do
+    # Builds `count` stations, each with a level 1 that needs one item. Every
+    # name is suffixed with a unique integer so the helper can be called more
+    # than once in a single test without tripping the unique indexes on
+    # `hideout_stations.normalized_name` and `items.normalized_name`.
+    defp stations_with_requirements(count) do
+      uniq = System.unique_integer([:positive])
+      item = Fixtures.item(%{name: "Roubles #{uniq}", normalized_name: "roubles-#{uniq}"})
+
+      for n <- 1..count do
+        slug = "station-#{uniq}-#{n}"
+        station = Fixtures.station(%{name: "Station #{uniq}-#{n}", normalized_name: slug})
+        level = Fixtures.station_level(%{station_id: station.id, level: 1})
+        Fixtures.item_requirement(%{level_id: level.id, item_id: item.id, quantity: n * 100})
+        slug
+      end
+    end
+
+    # Counts repo queries issued BY THIS PROCESS. Ecto emits the telemetry event
+    # from the calling process, so the pid filter keeps this usable in an async
+    # test without counting a neighbouring test's queries.
+    defp count_queries(fun) do
+      test_pid = self()
+      counter = :counters.new(1, [])
+      handler_id = {__MODULE__, System.unique_integer()}
+
+      :telemetry.attach(
+        handler_id,
+        [:eft_buddy, :repo, :query],
+        fn _event, _measure, _meta, _cfg ->
+          if self() == test_pid, do: :counters.add(counter, 1, 1)
+        end,
+        nil
+      )
+
+      try do
+        result = fun.()
+        {result, :counters.get(counter, 1)}
+      after
+        :telemetry.detach(handler_id)
+      end
+    end
+
+    test "matches get_level_requirements/2 exactly, keyed by {slug, level}" do
+      slugs = stations_with_requirements(3)
+      pairs = Enum.map(slugs, &{&1, 1})
+
+      batched = Hideout.get_level_requirements_for(pairs)
+
+      assert map_size(batched) == 3
+
+      # The batched read must be indistinguishable from the per-station one —
+      # this is a performance change, not a behaviour change.
+      for slug <- slugs do
+        assert batched[{slug, 1}] == Hideout.get_level_requirements(slug, 1)
+      end
+    end
+
+    test "query count does NOT scale with the number of stations" do
+      # The whole point. Per-station fetching cost one query for the level plus
+      # one per preloaded association, so 26 stations meant 155 queries and, on a
+      # database ~76ms away, 7.1 seconds. Batched, the preloads run once for the
+      # entire set, so asking for eight stations costs the same as asking for one.
+      one = stations_with_requirements(1)
+
+      {_, queries_for_one} =
+        count_queries(fn -> Hideout.get_level_requirements_for([{hd(one), 1}]) end)
+
+      many = stations_with_requirements(8)
+      pairs = Enum.map(many, &{&1, 1})
+
+      {result, queries_for_many} =
+        count_queries(fn -> Hideout.get_level_requirements_for(pairs) end)
+
+      assert map_size(result) == 8
+
+      assert queries_for_many == queries_for_one,
+             """
+             Expected a constant query count regardless of station count.
+             1 station: #{queries_for_one} queries; 8 stations: #{queries_for_many}.
+             A count that grows with the input means the N+1 is back.
+             """
+    end
+
+    test "returns an empty map for no pairs, and issues no query at all" do
+      {result, queries} = count_queries(fn -> Hideout.get_level_requirements_for([]) end)
+
+      assert result == %{}
+      assert queries == 0
+    end
+
+    test "silently omits pairs that do not exist" do
+      [slug] = stations_with_requirements(1)
+
+      result = Hideout.get_level_requirements_for([{slug, 1}, {slug, 99}, {"nope", 1}])
+
+      assert Map.keys(result) == [{slug, 1}]
+    end
+
+    test "handles several distinct levels in one call" do
+      station = Fixtures.station(%{name: "Generator", normalized_name: "generator"})
+      other = Fixtures.station(%{name: "Lavatory", normalized_name: "lavatory"})
+      Fixtures.station_level(%{station_id: station.id, level: 1})
+      Fixtures.station_level(%{station_id: station.id, level: 2})
+      Fixtures.station_level(%{station_id: other.id, level: 3})
+
+      result =
+        Hideout.get_level_requirements_for([
+          {"generator", 2},
+          {"lavatory", 3}
+        ])
+
+      # Exactly the requested pairs — the level-grouped WHERE must not widen into
+      # the cartesian product of every slug against every level.
+      assert Enum.sort(Map.keys(result)) == [{"generator", 2}, {"lavatory", 3}]
+    end
+  end
 end

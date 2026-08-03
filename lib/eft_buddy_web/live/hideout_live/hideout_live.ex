@@ -718,26 +718,46 @@ defmodule EftBuddyWeb.HideoutLive.Index do
   defp build_initial_modules do
     summaries = Hideout.list_modules()
 
-    summaries
-    |> Enum.map(fn summary ->
-      min_level = min_level_for(summary.slug)
+    base =
+      Enum.map(summaries, fn summary ->
+        min_level = min_level_for(summary.slug)
 
-      %{
-        slug: summary.slug,
-        name: summary.name,
-        current: min_level,
-        max: summary.max,
-        min_level: min_level,
-        # Derived from the tick set by recompute_statuses/2.
-        status: :missing_prereqs,
-        prerequisites: [],
-        needed: [],
-        # Populated only when the module is at max level. List of
-        # `%{name, qty}` covering every item the user spent to build
-        # this module up - sums quantities across all levels 1..max.
-        items_used: []
-      }
-      |> populate_requirements()
+        %{
+          slug: summary.slug,
+          name: summary.name,
+          current: min_level,
+          max: summary.max,
+          min_level: min_level,
+          # Derived from the tick set by recompute_statuses/2.
+          status: :missing_prereqs,
+          prerequisites: [],
+          needed: [],
+          # Populated only when the module is at max level. List of
+          # `%{name, qty}` covering every item the user spent to build
+          # this module up - sums quantities across all levels 1..max.
+          items_used: []
+        }
+      end)
+
+    # ONE batched read for every station's next level, rather than a
+    # `get_level_requirements/2` per station inside the map below.
+    #
+    # That per-station version is an N+1, and it is the reason this page stopped
+    # loading in production: 26 stations x (one query for the level + one per
+    # preloaded association) came to 155 queries and 7.1 SECONDS against a hosted
+    # database ~76ms away. Locally, against Postgres on the same machine, the
+    # identical code costs ~50ms and looks perfectly fine — which is precisely
+    # why it was never noticed. Do not reintroduce a per-module fetch here.
+    prefetched =
+      base
+      |> Enum.reject(fn mod -> mod.current >= mod.max end)
+      |> Enum.map(fn mod -> {mod.slug, mod.current + 1} end)
+      |> Hideout.get_level_requirements_for()
+
+    base
+    |> Enum.map(fn mod ->
+      mod
+      |> populate_requirements(prefetched)
       |> populate_items_used()
     end)
     |> recompute_statuses(MapSet.new())
@@ -748,14 +768,27 @@ defmodule EftBuddyWeb.HideoutLive.Index do
   # would build next) and project them into the `:prerequisites` /
   # `:needed` shape the template expects. At max level both lists are
   # empty since the template hides those sections anyway.
-  defp populate_requirements(%{current: current, max: max} = mod) when current >= max do
+  #
+  # Single-module form, used by the level-change handlers. One module means one
+  # fetch, so there is nothing to batch here — the initial mount takes the
+  # two-argument clause and passes a map prefetched for every station at once.
+  defp populate_requirements(mod), do: populate_requirements(mod, nil)
+
+  defp populate_requirements(%{current: current, max: max} = mod, _prefetched)
+       when current >= max do
     %{mod | prerequisites: [], needed: []}
   end
 
-  defp populate_requirements(mod) do
+  defp populate_requirements(mod, prefetched) do
     target_level = mod.current + 1
 
-    case Hideout.get_level_requirements(mod.slug, target_level) do
+    requirements =
+      case prefetched do
+        nil -> Hideout.get_level_requirements(mod.slug, target_level)
+        map -> Map.get(map, {mod.slug, target_level})
+      end
+
+    case requirements do
       nil ->
         %{mod | prerequisites: [], needed: []}
 
