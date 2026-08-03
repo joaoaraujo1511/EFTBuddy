@@ -12,6 +12,17 @@ import Config
 # `:public_key.cacerts_get/0` cannot build a path to it. See priv/certs/README.md.
 db_hostname = System.get_env("DB_HOSTNAME")
 
+# A LOCAL Postgres is the exception, and it has to be, or this file makes local
+# development impossible. A stock local server does not serve TLS at all: Postgrex
+# would send the SSLRequest, get `N` back, and fail the connection outright — it
+# does not silently downgrade. There is also nothing for verification to protect
+# here, since the connection never leaves the machine.
+#
+# `DB_SSL=true` forces TLS back on for the unusual local server that does serve
+# it. Set it and this branch steps aside.
+local_db? =
+  is_binary(db_hostname) and String.trim(db_hostname) in ~w(localhost 127.0.0.1 ::1)
+
 # NOTHING IN THIS EXPRESSION MAY RAISE. Mix evaluates this file for every task in
 # the dev environment, including ones that never open a connection — `format`,
 # `deps.get`, `hex.audit`. That is the same trap the `port:` line below documents.
@@ -21,6 +32,9 @@ dev_db_ssl =
     # name, so what turns verification off is one concept and not two.
     System.get_env("DB_SSL_INSECURE") in ~w(true 1) ->
       [verify: :verify_none]
+
+    local_db? and System.get_env("DB_SSL") not in ~w(true 1) ->
+      false
 
     is_binary(db_hostname) and String.trim(db_hostname) != "" ->
       [
