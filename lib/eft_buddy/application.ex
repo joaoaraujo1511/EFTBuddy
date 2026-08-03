@@ -25,6 +25,11 @@ defmodule EftBuddy.Application do
     children = [
       EftBuddyWeb.Telemetry,
       EftBuddy.Repo,
+      # Read cache for sync-populated data. BEFORE the syncers below, because it
+      # attaches the telemetry handler that drops entries when a sync finishes —
+      # a syncer completing before that handler exists would leave stale entries
+      # with nothing but their TTL to clear them. See `EftBuddy.Cache`.
+      EftBuddy.Cache,
       # Items.Sync runs two cadences: a frequent lightweight price refresh and
       # an infrequent full pipeline (items + barters + crafts).
       if(start_sync?, do: EftBuddy.Items.Sync),

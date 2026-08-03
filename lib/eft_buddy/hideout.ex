@@ -11,7 +11,12 @@ defmodule EftBuddy.Hideout do
 
   import Ecto.Query
 
+  alias EftBuddy.Cache
   alias EftBuddy.Repo
+
+  # Every read here is owned by this syncer: nothing else writes the hideout
+  # tables, so its completion is exactly when a cached answer stops being true.
+  @source "HideoutSync"
 
   alias EftBuddy.Hideout.{
     ItemRequirement,
@@ -31,6 +36,10 @@ defmodule EftBuddy.Hideout do
   level's items for every card on initial mount.
   """
   def list_modules do
+    Cache.fetch({__MODULE__, :list_modules}, [@source], &list_modules_uncached/0)
+  end
+
+  defp list_modules_uncached do
     from(s in Station,
       left_join: l in assoc(s, :levels),
       group_by: s.id,
@@ -106,6 +115,16 @@ defmodule EftBuddy.Hideout do
   def get_level_requirements_for([]), do: %{}
 
   def get_level_requirements_for(pairs) when is_list(pairs) do
+    # Sorted so two callers asking for the same set in a different order share an
+    # entry instead of each populating their own.
+    Cache.fetch(
+      {__MODULE__, :level_requirements_for, Enum.sort(pairs)},
+      [@source],
+      fn -> get_level_requirements_for_uncached(pairs) end
+    )
+  end
+
+  defp get_level_requirements_for_uncached(pairs) do
     # Grouped by level so the WHERE clause stays exact rather than fetching the
     # cartesian product of every requested slug against every requested level.
     # In practice this is one OR-group per distinct level, and the hideout grid
@@ -156,6 +175,16 @@ defmodule EftBuddy.Hideout do
   """
   def get_total_item_cost(slug, up_to_level)
       when is_binary(slug) and is_integer(up_to_level) and up_to_level >= 1 do
+    Cache.fetch(
+      {__MODULE__, :total_item_cost, slug, up_to_level},
+      [@source],
+      fn -> get_total_item_cost_uncached(slug, up_to_level) end
+    )
+  end
+
+  def get_total_item_cost(_, _), do: []
+
+  defp get_total_item_cost_uncached(slug, up_to_level) do
     query =
       from(r in ItemRequirement,
         join: l in assoc(r, :level),
@@ -176,8 +205,6 @@ defmodule EftBuddy.Hideout do
 
     Repo.all(query)
   end
-
-  def get_total_item_cost(_, _), do: []
 
   # Roubles first, then by item name. Matches how the in-game UI
   # tends to list build costs (currency cost on top).
