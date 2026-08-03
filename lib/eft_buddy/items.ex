@@ -13,6 +13,7 @@ defmodule EftBuddy.Items do
   alias EftBuddy.Items.{BarterRequiredItem, BarterRewardItem}
   alias EftBuddy.Items.{CraftRequiredItem, CraftRewardItem}
   alias EftBuddy.Items.{Item, ItemPrice}
+  alias EftBuddy.Cache
   alias EftBuddy.Repo
   alias EftBuddy.Tasks.{ItemReward, Objective, OfferUnlock}
 
@@ -180,6 +181,12 @@ defmodule EftBuddy.Items do
   no `game_mode`), so they return the same count in both modes.
   """
   def scope_counts(game_mode \\ EftBuddy.GameMode.default()) do
+    Cache.fetch({__MODULE__, :scope_counts, game_mode}, ["ItemsSync"], fn ->
+      scope_counts_uncached(game_mode)
+    end)
+  end
+
+  defp scope_counts_uncached(game_mode) do
     mode = EftBuddy.GameMode.to_db(game_mode)
 
     Map.new([:all, :hideout, :quest, :barter, :craft], fn scope ->
@@ -600,6 +607,18 @@ defmodule EftBuddy.Items do
   old hardcoded "X+" labels that drifted from reality).
   """
   def flea_market_counts_by_category(game_mode \\ EftBuddy.GameMode.default()) do
+    # Three owners: the category counts come from ItemsSync, but flea
+    # eligibility depends on price columns (PricesSync) and on the unlock level
+    # (FleaSettingsSync). Any of the three moving makes a cached count untrue, so
+    # all three invalidate it.
+    Cache.fetch(
+      {__MODULE__, :flea_counts_by_category, game_mode},
+      ["ItemsSync", "PricesSync", "FleaSettingsSync"],
+      fn -> flea_market_counts_by_category_uncached(game_mode) end
+    )
+  end
+
+  defp flea_market_counts_by_category_uncached(game_mode) do
     mode = EftBuddy.GameMode.to_db(game_mode)
 
     from(i in Item,

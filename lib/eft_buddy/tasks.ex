@@ -10,6 +10,7 @@ defmodule EftBuddy.Tasks do
   import Ecto.Query
 
   alias EftBuddy.Items.Item
+  alias EftBuddy.Cache
   alias EftBuddy.Repo
 
   alias EftBuddy.Hideout.Trader
@@ -292,6 +293,12 @@ defmodule EftBuddy.Tasks do
   don't model in the v1 tracker.
   """
   def prereq_map(game_mode \\ nil) do
+    Cache.fetch({__MODULE__, :prereq_map, game_mode}, ["TasksSync"], fn ->
+      prereq_map_uncached(game_mode)
+    end)
+  end
+
+  defp prereq_map_uncached(game_mode) do
     from(r in TaskRequirement,
       where: fragment("? = ANY(?)", "complete", r.status),
       select: {r.task_id, r.prerequisite_task_id}
@@ -323,6 +330,12 @@ defmodule EftBuddy.Tasks do
   Returns a list of `%EftBuddy.Hideout.Trader{}` ordered by name.
   """
   def traders_with_tasks(game_mode \\ nil) do
+    Cache.fetch({__MODULE__, :traders_with_tasks, game_mode}, ["TasksSync"], fn ->
+      traders_with_tasks_uncached(game_mode)
+    end)
+  end
+
+  defp traders_with_tasks_uncached(game_mode) do
     from(tr in Trader,
       join: t in Task,
       on: t.trader_id == tr.id,

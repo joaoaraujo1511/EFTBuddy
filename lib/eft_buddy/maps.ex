@@ -18,6 +18,7 @@ defmodule EftBuddy.Maps do
   alias EftBuddy.Maps.Boss
   alias EftBuddy.Maps.Bosses
   alias EftBuddy.Maps.Map, as: GameMap
+  alias EftBuddy.Cache
   alias EftBuddy.Repo
   alias EftBuddy.Tasks.{Objective, ObjectiveMap, Task}
 
@@ -152,6 +153,14 @@ defmodule EftBuddy.Maps do
     * `:order_by` — defaults to `[asc: :name]`.
   """
   def list_maps(opts \\ []) do
+    # Written by MapsSync and nothing else; `opts` only carries an ordering, so
+    # the key space is a handful of entries rather than one per visitor.
+    Cache.fetch({__MODULE__, :list_maps, opts}, ["MapsSync"], fn ->
+      list_maps_uncached(opts)
+    end)
+  end
+
+  defp list_maps_uncached(opts) do
     order = Keyword.get(opts, :order_by, asc: :name)
     blacklisted = Map.keys(@blacklisted_slugs)
 

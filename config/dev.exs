@@ -206,3 +206,11 @@ config :phoenix_live_view,
   debug_attributes: true,
   # Enable helpful, but potentially expensive runtime checks
   enable_expensive_runtime_checks: true
+
+# Read cache OFF in development. In production it is what keeps every page from
+# paying ~76ms per query to a database in another region; locally the database is
+# on this machine, so it buys nothing and actively gets in the way — a syncer run
+# or a manual `Repo.insert` would not show up until the entry expired.
+#
+# Set `CACHE_ENABLED=1` to exercise it locally.
+config :eft_buddy, cache_enabled: System.get_env("CACHE_ENABLED") in ~w(1 true)

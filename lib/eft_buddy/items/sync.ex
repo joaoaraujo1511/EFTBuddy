@@ -67,7 +67,21 @@ defmodule EftBuddy.Items.Sync do
   #     actually changed (change detection). No structural writes, no
   #     price-row/barter/craft churn, no cleanup.
   @default_full_interval 6 * 60 * 60 * 1_000
-  @default_price_interval 15 * 60 * 1_000
+
+  # 10 minutes, against an upstream that refreshes roughly every 15.
+  #
+  # Polling faster than the source updates does NOT make the data fresher than
+  # the source — nothing can. What it removes is the phase-misalignment penalty:
+  # with both sides on 15-minute cycles, a refresh landing just after our tick
+  # waits nearly a full interval to be picked up, so worst-case age is our
+  # interval on top of theirs. At 10 minutes that added lag is bounded by 10
+  # rather than 15, and the average roughly halves.
+  #
+  # The cost is 50% more calls to an endpoint we do not own, for a refresh that
+  # writes only the volatile price columns and only for rows whose prices
+  # actually changed. If that ever needs backing off, set `:price_interval` in
+  # config rather than editing this — `normalize_ms/2` below already reads it.
+  @default_price_interval 10 * 60 * 1_000
 
   # Cluster-wide lock used by every public `run/*` entry point so a
   # Bootstrap-driven cold-start run can't race with a periodic

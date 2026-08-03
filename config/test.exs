@@ -68,6 +68,16 @@ config :eft_buddy, EftBuddyWeb.Endpoint,
 # Bootstrap) in tests — they'd hit the live API and race the SQL sandbox.
 config :eft_buddy, start_sync: false
 
+# The read cache is OFF in test. The suite's whole shape is "insert a fixture,
+# read it back", and a cache keyed on sync completion has no sync to invalidate
+# it here — so a value cached by one test would be served to the next and the
+# failure would look like a data bug rather than a caching one.
+#
+# `EftBuddy.Cache` has its own tests, which enable it explicitly for the duration
+# of each case. See config/dev.exs, where it is also off so a `mix phx.server`
+# reflects code changes immediately.
+config :eft_buddy, cache_enabled: false
+
 # Print only warnings and errors during test
 config :logger, level: :warning
 
