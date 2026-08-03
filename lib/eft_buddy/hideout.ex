@@ -87,6 +87,62 @@ defmodule EftBuddy.Hideout do
   def get_level_requirements(_, _), do: nil
 
   @doc """
+  Batched `get_level_requirements/2`: takes `[{slug, level}]` and returns a map
+  keyed by that same `{slug, level}` tuple, with identical values.
+
+  This exists because calling `get_level_requirements/2` once per station is an
+  N+1, and on a remote database that is the difference between a page that loads
+  and one that does not. The hideout grid mounts 26 stations; each call cost one
+  query for the level plus one per preloaded association, so the connected mount
+  issued **155 queries and took 7.1 seconds** against a hosted database at ~76ms
+  round-trip. Batched, the association preloads run once for the whole set
+  instead of once per station, so the query count stops scaling with the number
+  of stations.
+
+  The cost of a round trip is what makes this matter, not the cost of the query:
+  every one of those 155 queries was individually trivial. Against a database on
+  localhost the same N+1 is invisible, which is exactly why it survived.
+  """
+  def get_level_requirements_for([]), do: %{}
+
+  def get_level_requirements_for(pairs) when is_list(pairs) do
+    # Grouped by level so the WHERE clause stays exact rather than fetching the
+    # cartesian product of every requested slug against every requested level.
+    # In practice this is one OR-group per distinct level, and the hideout grid
+    # asks for a handful.
+    conditions =
+      pairs
+      |> Enum.group_by(fn {_slug, level} -> level end, fn {slug, _level} -> slug end)
+      |> Enum.reduce(dynamic(false), fn {level, slugs}, acc ->
+        dynamic([l, s], ^acc or (s.normalized_name in ^slugs and l.level == ^level))
+      end)
+
+    from(l in StationLevel,
+      join: s in assoc(l, :station),
+      where: ^conditions,
+      preload: [
+        # `station: s` reuses the join above rather than issuing another query
+        # just to learn the slug we key the result map by.
+        station: s,
+        item_requirements: ^item_requirements_query(),
+        station_level_requirements: [:required_station],
+        skill_requirements: [:skill],
+        trader_requirements: [:trader]
+      ]
+    )
+    |> Repo.all()
+    |> Map.new(fn level_row ->
+      {{level_row.station.normalized_name, level_row.level},
+       %{
+         item_requirements: level_row.item_requirements,
+         station_level_requirements: level_row.station_level_requirements,
+         skill_requirements: level_row.skill_requirements,
+         trader_requirements: level_row.trader_requirements
+       }}
+    end)
+  end
+
+  @doc """
   Returns the cumulative item cost of building a station from level 1
   up to (and including) `up_to_level`. Quantities are summed per item
   across every level in the range, so a station that needs 50,000
