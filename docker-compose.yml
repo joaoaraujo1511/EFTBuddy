@@ -12,9 +12,13 @@
 #
 #   git clone <repo> /opt/eftbuddy && cd /opt/eftbuddy
 #   cp .env.example .env          # then fill it in — every variable is documented there
-#   docker compose build          # build on the target host; see the note on arch below
+#   GIT_SHA=$(git rev-parse --short HEAD) docker compose build   # on the target host
 #   docker compose run --rm migrate   # migrations BEFORE the first boot
 #   docker compose up -d app
+#
+# The GIT_SHA prefix stamps the image with the revision it was built from and is
+# what makes `curl .../health | jq -r .version` able to answer "did my deploy
+# actually land?". It is optional — without it the image reports "unknown".
 #
 # ARCHITECTURE. The Dockerfile builds unmodified on amd64 and arm64, so no
 # BUILDER_IMAGE override belongs here. An earlier version of this file carried
@@ -29,6 +33,21 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        # Baked into the image and reported by `/health`, so verifying a deploy
+        # collapses to one request instead of comparing a commit date, an image
+        # date and a container start time by eye:
+        #
+        #     curl -s http://127.0.0.1:4000/health | jq -r .version
+        #
+        # Compose cannot run git itself and `.git` is excluded from the build
+        # context, so the deploy supplies it:
+        #
+        #     GIT_SHA=$(git rev-parse --short HEAD) docker compose build app
+        #
+        # Left unset the image reports "unknown" and the build still succeeds —
+        # build metadata must never be able to fail a deploy.
+        GIT_SHA: "${GIT_SHA:-}"
     image: eft-buddy:local
     restart: unless-stopped
     env_file: .env
@@ -82,6 +101,11 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      # Same argument as `app`: both services name the same image tag, so a
+      # build triggered through this one must not silently replace a
+      # SHA-stamped image with an unstamped one.
+      args:
+        GIT_SHA: "${GIT_SHA:-}"
     image: eft-buddy:local
     env_file: .env
     command: ["/app/bin/migrate"]

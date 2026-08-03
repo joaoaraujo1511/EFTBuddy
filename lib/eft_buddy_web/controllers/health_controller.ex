@@ -35,12 +35,18 @@ defmodule EftBuddyWeb.HealthController do
   reports the resolved endpoint URL, which is the value that causes it — so one
   `curl` shows a deployer whether `PHX_HOST` is what they think it is.
 
+  It also reports `version`, the commit the running image was built from (see
+  `EftBuddy.BuildInfo`). That answers the other question every deploy raises —
+  "is this instance actually running the code I just pushed?" — which previously
+  took four commands and a comparison of timestamps by eye.
+
   Both probes sit outside the `:browser` pipeline: no session, no CSRF, no layout.
   Both are exempt from the HTTPS redirect in `config/prod.exs` so a plain-HTTP probe
   reaches the router instead of collecting a 301.
   """
   use EftBuddyWeb, :controller
 
+  alias EftBuddy.BuildInfo
   alias EftBuddy.Sync.Freshness
   alias EftBuddy.Sync.Reporter
 
@@ -61,6 +67,10 @@ defmodule EftBuddyWeb.HealthController do
       # The resolved public URL, so a misconfigured PHX_HOST is visible in one curl
       # rather than only as "Connection lost" in every visitor's browser.
       url: EftBuddyWeb.Endpoint.url(),
+      # The commit this image was built from. Deliberately on LIVENESS rather
+      # than readiness: "what is running here?" must stay answerable even while
+      # the instance is degraded, which is exactly when it gets asked.
+      version: BuildInfo.sha(),
       uptime_seconds: Freshness.uptime_seconds()
     }
 

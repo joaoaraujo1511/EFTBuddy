@@ -134,6 +134,20 @@ COPY --from=builder --chown=root:root /app/priv/certs /app/certs
 
 USER eftbuddy
 
+# Build provenance, reported by /health so verifying a deploy is one curl rather
+# than comparing four timestamps by eye — see `EftBuddy.BuildInfo`.
+#
+# It has to be passed IN: `.dockerignore` excludes `.git`, so the builder cannot
+# resolve the revision itself. docker-compose.yml declares the argument and
+# documents the invocation. Omitted, the image reports "unknown" and the build
+# still succeeds — build metadata must never be able to fail a deploy.
+#
+# Declared here, at the end, on purpose: it changes on every commit, so an
+# earlier position would invalidate the whole runtime layer cache each time.
+# Not a secret — this repository is public and the commit is already published.
+ARG GIT_SHA=""
+ENV GIT_SHA=${GIT_SHA}
+
 # Bandit binds this; config/runtime.exs reads PORT and defaults to 4000.
 EXPOSE 4000
 
