@@ -62,9 +62,22 @@ defmodule EftBuddy.Tasks do
   query cost only when a row is actually opened, not at mount.
   """
   def get_task_details(task_id) when is_binary(task_id) do
-    from(t in Task, where: t.id == ^task_id)
-    |> preload(^@detail_preloads)
-    |> Repo.one()
+    # Keyed by task id — 1,016 possible keys, and only the ones actually opened
+    # are ever written. This is the read that fires when a visitor expands a row,
+    # so it is the difference between a panel that appears instantly and one that
+    # takes a visible beat.
+    #
+    # The second-level preloads reach into items, traders, maps and skills, so
+    # the owners are wider than TasksSync alone.
+    Cache.fetch(
+      {__MODULE__, :task_details, task_id},
+      ["TasksSync", "ItemsSync", "HideoutSync", "MapsSync"],
+      fn ->
+        from(t in Task, where: t.id == ^task_id)
+        |> preload(^@detail_preloads)
+        |> Repo.one()
+      end
+    )
   end
 
   def get_task_details(_), do: nil

@@ -85,6 +85,27 @@ defmodule EftBuddy.Cache do
   # from 10 minutes (flea prices) to 6 hours (the full item pipeline).
   @default_ttl_ms 20 * 60 * 1_000
 
+  # Entry ceiling.
+  #
+  # Not needed while everything cached was a whole-list read keyed on a game
+  # mode — a dozen entries, full stop. It became necessary the moment entries
+  # were keyed by ITEM ID: 5,198 items and 1,016 tasks, each detail panel a few
+  # tens of KB, is a table that grows with traffic and never shrinks on its own.
+  #
+  # Eviction is oldest-WRITTEN first, which is not true LRU. It is the right
+  # approximation here because the entries worth keeping are the whole-list ones,
+  # and those are rewritten by the warmer on every sync — so they continuously
+  # renew their position while a detail panel opened once and never revisited
+  # ages out. Say so plainly rather than calling this an LRU.
+  @default_max_entries 2_000
+
+  # Expiry is otherwise LAZY — an entry past its TTL is only noticed when someone
+  # reads that exact key. For the whole-list entries that is fine, since they get
+  # read constantly. For id-keyed entries it is not: a detail panel opened once
+  # would hold its memory forever, expired and unreachable, because nothing ever
+  # looks that key up again.
+  @sweep_interval_ms 60 * 1_000
+
   def start_link(opts \\ []), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
 
   @doc """
@@ -290,10 +311,45 @@ defmodule EftBuddy.Cache do
     if table_exists?() do
       now = now_ms()
       :ets.insert(@table, {key, value, now, now + ttl_ms, sources})
+      enforce_cap()
     end
 
     :ok
   end
+
+  defp enforce_cap do
+    max = max_entries()
+
+    if :ets.info(@table, :size) > max do
+      # Select only `{inserted_at, key}` rather than whole objects: the values
+      # are the expensive part of this table and must not be copied out merely
+      # to decide which ones to drop.
+      @table
+      |> :ets.select([{{:"$1", :_, :"$2", :_, :_}, [], [{{:"$2", :"$1"}}]}])
+      |> Enum.sort()
+      |> Enum.take(max_evictions(max))
+      |> Enum.each(fn {_inserted_at, key} -> :ets.delete(@table, key) end)
+    end
+  end
+
+  # Evict in a batch rather than one-per-insert, so a table sitting exactly at
+  # the ceiling does not pay a full scan on every single write.
+  defp max_evictions(max), do: max(div(max, 10), 1)
+
+  defp sweep_expired do
+    if table_exists?() do
+      # A match spec, so expired entries are deleted without any of their values
+      # crossing into this process.
+      :ets.select_delete(@table, [
+        {{:_, :_, :_, :"$1", :_}, [{:<, :"$1", now_ms()}], [true]}
+      ])
+    else
+      0
+    end
+  end
+
+  defp max_entries,
+    do: Application.get_env(:eft_buddy, :cache_max_entries, @default_max_entries)
 
   # Writes go straight to ETS from the calling process rather than through the
   # GenServer, so a slow reader can never queue behind another one. The GenServer
@@ -342,8 +398,27 @@ defmodule EftBuddy.Cache do
       nil
     )
 
+    schedule_sweep()
+
     {:ok, %{}}
   end
+
+  @impl true
+  def handle_info(:sweep, state) do
+    swept = sweep_expired()
+
+    if swept > 0 do
+      Logger.debug("[Cache] swept #{swept} expired entries")
+    end
+
+    schedule_sweep()
+
+    {:noreply, state}
+  end
+
+  def handle_info(_msg, state), do: {:noreply, state}
+
+  defp schedule_sweep, do: Process.send_after(self(), :sweep, @sweep_interval_ms)
 
   @doc false
   # Labels arrive as "TasksSync" or "TasksSync:regular" — the suffix is a per-run

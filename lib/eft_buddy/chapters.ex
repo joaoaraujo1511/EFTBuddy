@@ -157,10 +157,15 @@ defmodule EftBuddy.Chapters do
   """
   @spec get_chapter(String.t()) :: chapter() | nil
   def get_chapter(slug) when is_binary(slug) and slug != "" do
-    case Repo.get_by(ChapterPage, normalized_name: slug) do
-      nil -> nil
-      %ChapterPage{content: content} -> Projection.project(content)
-    end
+    # Bounded by the number of storyline chapters, and each result is a
+    # `Projection.project/1` pass over the page's wiki markup — so this caches
+    # meaningful CPU alongside the round trip.
+    Cache.fetch({__MODULE__, :chapter, slug}, ["ChaptersSync"], fn ->
+      case Repo.get_by(ChapterPage, normalized_name: slug) do
+        nil -> nil
+        %ChapterPage{content: content} -> Projection.project(content)
+      end
+    end)
   end
 
   def get_chapter(_), do: nil

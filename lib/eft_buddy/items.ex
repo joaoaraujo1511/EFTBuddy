@@ -589,6 +589,14 @@ defmodule EftBuddy.Items do
   category, so the sum matches the total item count.
   """
   def item_counts_by_category do
+    Cache.fetch(
+      {__MODULE__, :item_counts_by_category},
+      ["ItemsSync"],
+      &item_counts_by_category_uncached/0
+    )
+  end
+
+  defp item_counts_by_category_uncached do
     from(i in Item,
       join: c in assoc(i, :category),
       group_by: c.name,
@@ -815,7 +823,13 @@ defmodule EftBuddy.Items do
   and compute per-card lock state without duplicating the constant.
   """
   def flea_unlock_level do
-    EftBuddy.GameSettings.get_int(@flea_unlock_level_key, @default_flea_unlock_level)
+    # A single-row settings lookup, and the least interesting query in the app —
+    # which is exactly why it is worth caching. Every flea listing read, every
+    # status-count read and every per-card lock badge calls it, so it is one of
+    # the most FREQUENT round trips here despite being one of the cheapest.
+    Cache.fetch({__MODULE__, :flea_unlock_level}, ["FleaSettingsSync"], fn ->
+      EftBuddy.GameSettings.get_int(@flea_unlock_level_key, @default_flea_unlock_level)
+    end)
   end
 
   @doc false
@@ -982,6 +996,24 @@ defmodule EftBuddy.Items do
   def get_item_details(item_id, game_mode \\ EftBuddy.GameMode.default())
 
   def get_item_details(item_id, game_mode) when is_binary(item_id) do
+    # Keyed by item id, so the key space is the catalogue (5,198) rather than
+    # unbounded — but it is still far larger than the whole-list entries, which
+    # is why `EftBuddy.Cache` now carries an entry ceiling and an expiry sweep.
+    #
+    # Everything this returns is sync-written: the item and its prices, the
+    # tasks that need it, the hideout levels that consume it, and its barters
+    # and crafts. Five owners, because the panel is a join across five feeds and
+    # a stale line in any of them is a wrong answer on the page.
+    Cache.fetch(
+      {__MODULE__, :item_details, item_id, EftBuddy.GameMode.to_db(game_mode)},
+      ["ItemsSync", "PricesSync", "TasksSync", "HideoutSync", "BartersSync", "CraftsSync"],
+      fn -> get_item_details_uncached(item_id, game_mode) end
+    )
+  end
+
+  def get_item_details(_, _), do: nil
+
+  defp get_item_details_uncached(item_id, game_mode) do
     mode = EftBuddy.GameMode.to_db(game_mode)
 
     # Preload :category here because the LiveView's row template
@@ -1009,8 +1041,6 @@ defmodule EftBuddy.Items do
         }
     end
   end
-
-  def get_item_details(_, _), do: nil
 
   # Fetch one item with the active mode's prices overlaid onto its
   # struct fields (same overlay the listing queries use), plus the
