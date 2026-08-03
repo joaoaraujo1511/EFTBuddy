@@ -121,6 +121,19 @@ defmodule EftBuddy.Cache.Warmer do
       spec("chapters.list", ["ChaptersSync"], {EftBuddy.Chapters, :list_chapters, []}),
       spec("wiki.all_quests", ["WikiSync"], {EftBuddy.Wiki, :all_quests, []}),
 
+      # The in-memory item catalogue. The catalogue half is rebuilt by every
+      # feed that contributes a scope membership set — items themselves, plus
+      # the tasks, hideout requirements, barters and crafts the scope tabs are
+      # computed from. The price half is on PricesSync alone, which is the
+      # entire point of the split: a ten-minute price tick must not trigger a
+      # three-second catalogue rebuild.
+      spec(
+        "dataset.catalog",
+        ["ItemsSync", "TasksSync", "HideoutSync", "BartersSync", "CraftsSync"],
+        {EftBuddy.Items.Dataset, :refresh_catalog, []}
+      ),
+      spec("dataset.prices", ["PricesSync"], {EftBuddy.Items.Dataset, :refresh_prices, []}),
+
       # The storyline pages' task cross-link index — `preloads: []`, no mode.
       spec(
         "tasks.index",

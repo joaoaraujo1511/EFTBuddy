@@ -33,8 +33,22 @@ defmodule EftBuddyWeb.CacheDashboardPageTest do
     render_component(&CacheDashboardPage.render/1,
       stats: Cache.stats(),
       entries: Cache.entries(),
-      specs: EftBuddy.Cache.Warmer.default_specs()
+      specs: EftBuddy.Cache.Warmer.default_specs(),
+      dataset: EftBuddy.Items.Dataset.stats()
     )
+  end
+
+  # The dataset panel's "nothing built" state, which is what the page shows
+  # whenever the layer is switched off — i.e. by default.
+  defp blank_dataset do
+    %{
+      enabled: false,
+      building: false,
+      items: 0,
+      price_rows: 0,
+      catalog_age_ms: nil,
+      memory_bytes: 0
+    }
   end
 
   test "renders with an empty cache" do
@@ -78,7 +92,8 @@ defmodule EftBuddyWeb.CacheDashboardPageTest do
           enabled: true
         },
         entries: [],
-        specs: []
+        specs: [],
+        dataset: blank_dataset()
       )
 
     assert html =~ "—"
@@ -96,7 +111,8 @@ defmodule EftBuddyWeb.CacheDashboardPageTest do
           enabled: false
         },
         entries: [],
-        specs: []
+        specs: [],
+        dataset: blank_dataset()
       )
 
     assert html =~ "DISABLED"

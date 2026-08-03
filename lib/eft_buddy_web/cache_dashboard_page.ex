@@ -56,7 +56,12 @@ defmodule EftBuddyWeb.CacheDashboardPage do
   end
 
   defp load(socket) do
-    assign(socket, stats: Cache.stats(), entries: Cache.entries(), specs: Warmer.specs())
+    assign(socket,
+      stats: Cache.stats(),
+      entries: Cache.entries(),
+      specs: Warmer.specs(),
+      dataset: EftBuddy.Items.Dataset.stats()
+    )
   end
 
   @impl true
@@ -80,6 +85,28 @@ defmodule EftBuddyWeb.CacheDashboardPage do
       <:col>
         <.card title="Table memory" inner_title={"#{@stats.hits} hits / #{@stats.misses} misses"}>
           {bytes(@stats.memory_bytes)}
+        </.card>
+      </:col>
+    </.row>
+
+    <.row>
+      <:col>
+        <.card
+          title="Item dataset"
+          inner_title={dataset_state(@dataset)}
+          inner_hint="The in-memory item catalogue behind Items and Flea Market. When it is not ready, those reads fall back to SQL — slower, never wrong."
+        >
+          {@dataset.items}
+        </.card>
+      </:col>
+      <:col>
+        <.card title="Price rows" inner_title="across both game modes">
+          {@dataset.price_rows}
+        </.card>
+      </:col>
+      <:col>
+        <.card title="Dataset memory" inner_title={"catalogue age #{dataset_age(@dataset)}"}>
+          {bytes(@dataset.memory_bytes)}
         </.card>
       </:col>
     </.row>
@@ -155,6 +182,14 @@ defmodule EftBuddyWeb.CacheDashboardPage do
 
   defp state_label(%{enabled: false}), do: "DISABLED"
   defp state_label(_), do: "live"
+
+  defp dataset_state(%{enabled: false}), do: "OFF — serving from SQL"
+  defp dataset_state(%{building: true}), do: "rebuilding — SQL meanwhile"
+  defp dataset_state(%{items: 0}), do: "not built — serving from SQL"
+  defp dataset_state(_), do: "live"
+
+  defp dataset_age(%{catalog_age_ms: nil}), do: "never built"
+  defp dataset_age(%{catalog_age_ms: ms}), do: duration(ms)
 
   # nil, not 0%, when nothing has been read yet. "No data" and "every read
   # missed" are opposite diagnoses and must not render identically.

@@ -506,6 +506,133 @@ defmodule EftBuddy.Items do
   # silently returning zero rows.
   defp apply_scope(query, _, _game_mode), do: query
 
+  # ── Projections for EftBuddy.Items.Dataset ─────────────
+  #
+  # These exist so the in-memory dataset can be built from the SAME predicates
+  # and the SAME ordering the SQL path uses, rather than from a reimplementation
+  # of them. That is the whole safety argument for the dataset layer, so it is
+  # worth being explicit about why each one is a projection rather than a
+  # reimplementation:
+  #
+  #   * `apply_scope/3` for `:quest` is a three-arm UNION over JSONB payload
+  #     fields, with a task-name blacklist. Rewriting that in Elixir is the most
+  #     likely place in this codebase to introduce a silent divergence, and a
+  #     divergence here means the Quest Items tab quietly shows the wrong items.
+  #     So Postgres computes the id set and the dataset merely holds it.
+  #
+  #   * Ordering is collation-dependent and CANNOT be reproduced by `Enum.sort/1`.
+  #     Measured against production, the two disagree on the very first row:
+  #     Postgres files `"Negotiation" room key` under N (its collation ignores
+  #     leading punctuation) while byte order sorts it above `.300 Blackout AP`.
+  #     So Postgres produces the order, once, and the dataset stores the
+  #     resulting id list. Filtering an ordered list is stable, so every derived
+  #     page keeps that order exactly.
+
+  @doc false
+  @spec ordered_ids(atom()) :: [binary()]
+  def ordered_ids(sort) do
+    Item
+    |> join(:left, [i], c in assoc(i, :category), as: :category)
+    |> apply_items_sort(sort)
+    |> select([i], i.id)
+    |> Repo.all()
+  end
+
+  @doc false
+  @spec scope_ids(atom(), any()) :: [binary()]
+  def scope_ids(scope, game_mode) do
+    Item
+    |> apply_scope(scope, EftBuddy.GameMode.to_db(game_mode))
+    |> select([i], i.id)
+    |> Repo.all()
+  end
+
+  @doc false
+  # Flea-eligible items for a mode, already in the listing's price order. The
+  # ordering is numeric rather than collated, so Elixir *could* reproduce it —
+  # but it is taken from Postgres anyway, because "all ordering comes from one
+  # place" is a property worth more than one saved query every ten minutes.
+  @spec flea_ordered_ids(any()) :: [binary()]
+  def flea_ordered_ids(game_mode) do
+    mode = EftBuddy.GameMode.to_db(game_mode)
+
+    Item
+    |> join(:inner, [i], p in ItemPrice,
+      on: p.item_id == i.id and p.game_mode == ^mode,
+      as: :price
+    )
+    |> where([price: p], not is_nil(p.last_low_price))
+    |> order_by([price: p], desc: p.last_low_price, desc: p.item_id)
+    |> select([i], i.id)
+    |> Repo.all()
+  end
+
+  @doc false
+  # The whole catalogue, category preloaded, WITHOUT any mode price overlay.
+  # Prices are a separate layer precisely so this — the expensive half — is not
+  # rebuilt every ten minutes when only prices moved.
+  @spec catalog_rows() :: [Item.t()]
+  def catalog_rows do
+    Item |> preload(:category) |> Repo.all()
+  end
+
+  @doc false
+  # Every price row for a mode, as the plain map the overlay needs.
+  @spec price_rows(any()) :: [map()]
+  def price_rows(game_mode) do
+    mode = EftBuddy.GameMode.to_db(game_mode)
+
+    from(p in ItemPrice,
+      where: p.game_mode == ^mode,
+      select: %{
+        item_id: p.item_id,
+        base_price: p.base_price,
+        last_low_price: p.last_low_price,
+        avg_24h_price: p.avg_24h_price,
+        low_24h_price: p.low_24h_price,
+        high_24h_price: p.high_24h_price,
+        historical_prices: p.historical_prices
+      }
+    )
+    |> Repo.all()
+  end
+
+  @doc false
+  # The in-memory equivalent of `select_merge_mode_prices/1`, and it must stay
+  # that way. A LEFT join with no matching price row yields NULLs for every
+  # overlaid column, so a missing price must NULL those fields rather than leave
+  # the items table's own values showing — while `base_price` coalesces back to
+  # the item's, matching `coalesce(p.base_price, i.base_price)`.
+  @spec overlay_price(Item.t(), map() | nil) :: Item.t()
+  def overlay_price(item, nil) do
+    %{
+      item
+      | last_low_price: nil,
+        avg_24h_price: nil,
+        low_24h_price: nil,
+        high_24h_price: nil,
+        historical_prices: nil
+    }
+  end
+
+  def overlay_price(item, price) do
+    %{
+      item
+      | base_price: price.base_price || item.base_price,
+        last_low_price: price.last_low_price,
+        avg_24h_price: price.avg_24h_price,
+        low_24h_price: price.low_24h_price,
+        high_24h_price: price.high_24h_price,
+        historical_prices: price.historical_prices
+    }
+  end
+
+  @doc false
+  # Shared by the dataset's search and by nothing else. Public so the equality
+  # tests can assert the tokeniser is the same one the SQL path uses.
+  @spec search_tokens(String.t() | nil) :: [String.t()]
+  def search_tokens(q), do: normalize_query(q)
+
   # Every distinct item_id referenced by any (non-blacklisted)
   # objective for `game_mode`, as a `%{uuid: item_id}` union. Shared
   # by the `:quest` scope filter and the per-page category-flag batch

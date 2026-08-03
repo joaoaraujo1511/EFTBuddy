@@ -264,6 +264,18 @@ if config_env() == :prod do
          :cache_enabled,
          System.get_env("CACHE_ENABLED", "1") not in ~w(0 false no)
 
+  # The in-memory item catalogue, OFF unless ITEM_DATASET is set.
+  #
+  # Opt-IN rather than opt-out, unlike the read cache above, because this one
+  # does not merely skip a query — it reimplements filtering, ordering and
+  # pagination, so its failure mode is returning the wrong ROWS rather than
+  # returning them slowly. Every read through it also falls back to SQL when the
+  # layer is not ready, so switching it off is a config change and a restart
+  # rather than a rebuild. See `EftBuddy.Items.Dataset`.
+  config :eft_buddy,
+         :item_dataset_enabled,
+         System.get_env("ITEM_DATASET", "0") in ~w(1 true yes)
+
   # The operator dashboard, OFF unless ADMIN_DASHBOARD_PORT is set. Absent, the
   # `:admin_dashboard` key is never written, `EftBuddy.Application` never adds the
   # endpoint to the supervision tree, and nothing binds the port. Fail-closed by
