@@ -14,6 +14,12 @@ defmodule EftBuddy.Items do
   alias EftBuddy.Items.{CraftRequiredItem, CraftRewardItem}
   alias EftBuddy.Items.{Item, ItemPrice}
   alias EftBuddy.Cache
+  # The in-memory catalogue these three listing reads prefer when it is built and
+  # fresh. `ready?/1` is the whole safety story: it is false before the first
+  # build, during a rebuild and past a staleness bound, and every one of those
+  # falls through to the SQL below. The dataset can therefore be absent, stale or
+  # switched off without any of this returning a wrong answer — only a slower one.
+  alias EftBuddy.Items.Dataset
   alias EftBuddy.Repo
   alias EftBuddy.Tasks.{ItemReward, Objective, OfferUnlock}
 
@@ -118,6 +124,14 @@ defmodule EftBuddy.Items do
              grind" subsets.
   """
   def list_all_items(opts \\ []) do
+    if Dataset.ready?(Keyword.get(opts, :game_mode)) do
+      Dataset.list_all_items(opts)
+    else
+      list_all_items_sql(opts)
+    end
+  end
+
+  defp list_all_items_sql(opts) do
     limit = Keyword.get(opts, :limit, 40)
     offset = Keyword.get(opts, :offset, 0)
     query = opts |> Keyword.get(:query, "") |> normalize_query()
@@ -826,6 +840,14 @@ defmodule EftBuddy.Items do
   """
   # - Lists items that are listable on the flea market, ordered by their current flea price.
   def list_flea_market_items(opts \\ []) do
+    if Dataset.ready?(Keyword.get(opts, :game_mode)) do
+      Dataset.list_flea_market_items(opts)
+    else
+      list_flea_market_items_sql(opts)
+    end
+  end
+
+  defp list_flea_market_items_sql(opts) do
     limit = Keyword.get(opts, :limit, 40)
     offset = Keyword.get(opts, :offset, 0)
     flea_status = Keyword.get(opts, :flea_status, :all)
@@ -871,6 +893,14 @@ defmodule EftBuddy.Items do
   reveals.
   """
   def flea_market_status_counts(opts \\ []) do
+    if Dataset.ready?(Keyword.get(opts, :game_mode)) do
+      Dataset.flea_market_status_counts(opts)
+    else
+      flea_market_status_counts_sql(opts)
+    end
+  end
+
+  defp flea_market_status_counts_sql(opts) do
     pmc_level = Keyword.get(opts, :pmc_level, 1)
     favorite_slugs = Keyword.get(opts, :favorite_slugs, [])
     floor = flea_unlock_level()

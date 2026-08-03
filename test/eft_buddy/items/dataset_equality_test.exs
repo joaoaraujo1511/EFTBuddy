@@ -38,8 +38,11 @@ defmodule EftBuddy.Items.DatasetEqualityTest do
 
     on_exit(fn ->
       Dataset.clear()
-      Application.put_env(:eft_buddy, :cache_enabled, original_cache)
-      Application.put_env(:eft_buddy, :item_dataset_enabled, original_dataset)
+      # `|| false` rather than the raw original: writing back a nil would leave
+      # an explicitly-nil key, which `Application.get_env/3`'s default cannot
+      # rescue, and every later test would inherit it.
+      Application.put_env(:eft_buddy, :cache_enabled, original_cache || false)
+      Application.put_env(:eft_buddy, :item_dataset_enabled, original_dataset || false)
     end)
 
     :ok

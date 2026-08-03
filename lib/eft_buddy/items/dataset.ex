@@ -127,7 +127,12 @@ defmodule EftBuddy.Items.Dataset do
       fresh?({:prices_built_at, db_mode(game_mode)}, @prices_max_age_ms)
   end
 
-  def enabled?, do: Application.get_env(:eft_buddy, :item_dataset_enabled, false)
+  # Coerced to a real boolean rather than returned raw. `Application.get_env/3`'s
+  # default only applies when the key is ABSENT, so a key explicitly set to nil
+  # returns nil — and `ready?/1` chains this through `and`, which raises on a
+  # non-boolean rather than treating it as false. A config mistake should
+  # degrade this layer to "off", never take a page down.
+  def enabled?, do: !!Application.get_env(:eft_buddy, :item_dataset_enabled, false)
 
   # ── Building ───────────────────────────────────────────
 
