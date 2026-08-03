@@ -5,9 +5,21 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="csrf-token" content={get_csrf_token()} />
     <meta name="theme-color" content="#121212" />
-    <link rel="icon" href={~p"/favicon.ico"} sizes="48x48" />
-    <link rel="icon" href={~p"/images/logo.svg"} type="image/svg+xml" />
-    <link rel="apple-touch-icon" href={~p"/images/logo.svg"} />
+    <%!-- App icons. Ordered widest-support first, because browsers pick from
+         this list rather than falling back in DOM order: the .ico is the
+         universal floor, the SVG is what modern browsers actually use (it
+         scales to any density), and the 32px PNG covers those that understand
+         neither. `sizes` must match the real dimensions — it used to claim
+         48x48 for a file that is 16x16, which makes a browser upscale a small
+         icon instead of choosing a better candidate.
+
+         The apple-touch-icon is a PNG, NOT the SVG it used to point at: iOS
+         does not render SVG for home-screen icons and silently falls back to a
+         screenshot of the page. --%>
+    <link rel="icon" href={~p"/favicon.ico"} sizes="16x16" />
+    <link rel="icon" href={~p"/images/eft-buddy-favicon.svg"} type="image/svg+xml" />
+    <link rel="icon" type="image/png" sizes="32x32" href={~p"/images/favicon-32.png"} />
+    <link rel="apple-touch-icon" sizes="180x180" href={~p"/images/apple-touch-icon.png"} />
     <%!-- Typography (Oswald display + Inter body) and the JetBrains-Mono-ish
          numeric stack are SELF-HOSTED / system, so the strict CSP needs no
          third-party font origin and visitor IPs stay private. --%>
