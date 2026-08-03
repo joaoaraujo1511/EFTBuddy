@@ -37,6 +37,7 @@ defmodule EftBuddy.Chapters do
 
   import Ecto.Query
 
+  alias EftBuddy.Cache
   alias EftBuddy.Repo
   alias EftBuddy.Chapters.{ChapterPage, Projection}
 
@@ -75,6 +76,13 @@ defmodule EftBuddy.Chapters do
   """
   @spec list_chapters() :: [chapter()]
   def list_chapters do
+    # The 761ms here is one query returning ~2.4MB, plus a `Projection.project/1`
+    # per chapter — so caching saves the CPU of re-projecting the same wiki
+    # markup as well as the round trip.
+    Cache.fetch({__MODULE__, :list_chapters}, ["ChaptersSync"], &list_chapters_uncached/0)
+  end
+
+  defp list_chapters_uncached do
     Repo.all(from(c in ChapterPage, where: c.normalized_name != @endings_slug))
     |> Enum.map(fn %ChapterPage{content: content} -> Projection.project(content) end)
     |> Enum.sort_by(&order_key/1)

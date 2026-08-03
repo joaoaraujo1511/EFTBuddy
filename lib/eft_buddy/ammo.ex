@@ -25,6 +25,7 @@ defmodule EftBuddy.Ammo do
   import Ecto.Query
 
   alias EftBuddy.Ammo.{Caliber, Round}
+  alias EftBuddy.Cache
   alias EftBuddy.Items.{BarterRewardItem, BuyFor, CraftRewardItem}
   alias EftBuddy.Repo
   alias EftBuddy.Sortable
@@ -67,25 +68,69 @@ defmodule EftBuddy.Ammo do
   @doc false
   def sort_atoms, do: @sort_atoms
 
+  # Ballistics change on a game patch; the item rows they hang off change with
+  # the catalog. Both are daily-ish feeds.
+  @ballistics_sources ["AmmoSync", "ItemsSync"]
+
+  # Availability is derived from `buy_for` rows, which `PricesSync` rewrites
+  # every ten minutes, plus the barter and craft reward tables. ItemsSync is in
+  # here too because deleting an item cascades its `buy_for` rows away.
+  @availability_sources ["ItemsSync", "PricesSync", "BartersSync", "CraftsSync"]
+
   @doc """
   Every ammo round, each with its `:item` preloaded and its `:sources`
   virtual field populated (a list of the availability tokens above).
 
-  Runs a handful of queries (the rounds + one distinct-item-id set per
-  source) and stitches them together in memory. Bounded to the ~200
-  rounds in the game, so the LiveView holds the result and derives its
-  filtered views from it without re-querying on every keystroke.
+  Bounded to the ~200 rounds in the game, so the LiveView holds the result
+  and derives its filtered views from it without re-querying on every
+  keystroke.
+
+  ## Why this is two caches and not one
+
+  This is the app's single most expensive read — six queries and ~1,470ms
+  against a database 75ms away — and it is built from two things with wildly
+  different lifetimes.
+
+  The ballistics half changes on a game patch. The availability half is derived
+  from `buy_for`, which the flea price refresh rewrites **every ten minutes**.
+  Caching the stitched result under the union of both would therefore throw away
+  the expensive half six times an hour to pick up a change in the cheap one — a
+  cache that spends most of its life cold, on the one read that can least afford
+  it.
+
+  Split, the ten-minute tick invalidates four small `SELECT DISTINCT` sets and
+  the round set survives until the game actually patches. The stitch itself is
+  pure and costs microseconds over 200 rounds, so it is deliberately NOT cached:
+  a third entry would need the union of both source lists and reintroduce
+  exactly the coupling this split removes.
   """
   def list_rounds do
-    rounds = Round |> preload(:item) |> Repo.all()
-
-    trader = buy_item_ids(:trader)
-    flea = buy_item_ids(:flea)
-    barter = reward_item_ids(BarterRewardItem)
-    craft = reward_item_ids(CraftRewardItem)
+    rounds = ballistics()
+    %{trader: trader, flea: flea, barter: barter, craft: craft} = availability()
 
     Enum.map(rounds, fn round ->
       %{round | sources: sources_for(round.item_id, trader, flea, barter, craft)}
+    end)
+  end
+
+  @doc false
+  # The stable half: the rounds and their linked item rows.
+  def ballistics do
+    Cache.fetch({__MODULE__, :ballistics}, @ballistics_sources, fn ->
+      Round |> preload(:item) |> Repo.all()
+    end)
+  end
+
+  @doc false
+  # The volatile half: four sets of item ids, rebuilt on every price refresh.
+  def availability do
+    Cache.fetch({__MODULE__, :availability}, @availability_sources, fn ->
+      %{
+        trader: buy_item_ids(:trader),
+        flea: buy_item_ids(:flea),
+        barter: reward_item_ids(BarterRewardItem),
+        craft: reward_item_ids(CraftRewardItem)
+      }
     end)
   end
 
