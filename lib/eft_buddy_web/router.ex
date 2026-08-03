@@ -180,7 +180,12 @@ defmodule EftBuddyWeb.Router do
     scope "/dev" do
       pipe_through :browser
 
-      live_dashboard "/dashboard", metrics: EftBuddyWeb.Telemetry
+      # The cache page is carried here too, not just on the admin endpoint, so
+      # the surface an operator uses in production is one someone has already
+      # looked at in development. `CACHE_ENABLED=1` makes it show real entries.
+      live_dashboard "/dashboard",
+        metrics: EftBuddyWeb.Telemetry,
+        additional_pages: [cache: EftBuddyWeb.CacheDashboardPage]
     end
 
     # Preview the themed error pages locally (dev only). `debug_errors: true`

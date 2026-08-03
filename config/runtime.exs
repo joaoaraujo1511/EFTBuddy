@@ -252,6 +252,18 @@ if config_env() == :prod do
     config :eft_buddy, :max_operator_sessions, String.to_integer(max_sessions)
   end
 
+  # The read cache, ON unless explicitly disabled. This is a KILL SWITCH, not a
+  # feature flag: the cache is the difference between a page rendering in 3 ms
+  # and 1,500 ms, so it should never need turning off — but if it ever serves
+  # something wrong, `CACHE_ENABLED=0` in .env plus a restart is seconds, while
+  # reverting the code is an Elixir release build and minutes of an evening.
+  #
+  # `EftBuddy.Cache.enabled?/0` already defaults to true, so this only ever
+  # subtracts. Warming reads the same flag and does nothing while it is off.
+  config :eft_buddy,
+         :cache_enabled,
+         System.get_env("CACHE_ENABLED", "1") not in ~w(0 false no)
+
   # The operator dashboard, OFF unless ADMIN_DASHBOARD_PORT is set. Absent, the
   # `:admin_dashboard` key is never written, `EftBuddy.Application` never adds the
   # endpoint to the supervision tree, and nothing binds the port. Fail-closed by

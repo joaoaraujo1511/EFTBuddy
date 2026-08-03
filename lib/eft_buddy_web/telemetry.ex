@@ -171,6 +171,35 @@ defmodule EftBuddyWeb.Telemetry do
         description: "Progress slices refused for exceeding the per-mode size ceiling"
       ),
 
+      # POLLED. The read cache's own health. The failure worth catching is not a
+      # crash but a collapse: a cache whose hit rate has gone to zero is paying
+      # a lookup on every read, carrying every staleness risk, and saving
+      # nothing — and it looks completely normal from the outside. An entry
+      # count pinned at zero after a sync means invalidation fires and warming
+      # does not. See `EftBuddy.Cache.emit_telemetry/0`.
+      last_value("eft_buddy.cache.state.entries",
+        description: "Live cache entries"
+      ),
+      last_value("eft_buddy.cache.state.hit_rate_percent",
+        description: "Share of reads served from memory since boot"
+      ),
+      last_value("eft_buddy.cache.state.memory_bytes",
+        unit: {:byte, :kilobyte},
+        description: "Memory the cache table occupies"
+      ),
+
+      # How much a finishing sync actually dropped. Zero entries dropped by a
+      # sync that owns entries is the signature of a source name that no longer
+      # matches anything — a rename away from silently serving stale data.
+      last_value("eft_buddy.cache.invalidated.entries",
+        tags: [:source],
+        description: "Entries dropped when a syncer finished"
+      ),
+      summary("eft_buddy.cache.warm.duration_ms",
+        tags: [:label, :outcome],
+        description: "Time spent rebuilding a cache entry ahead of any request"
+      ),
+
       # A refused prune is `Sync.Helpers.cleanup_safe?/3` catching a truncated
       # upstream response — the single most destructive failure mode in the app
       # announcing itself. It must never be a thing you only find in logs.
@@ -188,7 +217,8 @@ defmodule EftBuddyWeb.Telemetry do
   def periodic_measurements do
     [
       {EftBuddy.Sync.Reporter, :emit_freshness, []},
-      {EftBuddy.OperatorSessions, :emit_telemetry, []}
+      {EftBuddy.OperatorSessions, :emit_telemetry, []},
+      {EftBuddy.Cache, :emit_telemetry, []}
     ]
   end
 end

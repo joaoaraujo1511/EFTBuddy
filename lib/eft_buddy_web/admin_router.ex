@@ -47,7 +47,12 @@ defmodule EftBuddyWeb.AdminRouter do
     # restarts; this is a live view of a running node, not a time-series store.
     live_dashboard "/dashboard",
       metrics: EftBuddyWeb.Telemetry,
-      ecto_repos: [EftBuddy.Repo]
+      ecto_repos: [EftBuddy.Repo],
+      # The read cache is the one subsystem here that can be wrong without
+      # failing: it returns an answer either way, and a stale or badly-keyed one
+      # is indistinguishable from a correct one at every other observation
+      # point. See `EftBuddyWeb.CacheDashboardPage`.
+      additional_pages: [cache: EftBuddyWeb.CacheDashboardPage]
 
     # Anything else on this endpoint redirects to the dashboard, so a bare
     # `http://localhost:4001` lands somewhere useful over the tunnel.
