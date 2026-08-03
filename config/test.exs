@@ -20,10 +20,38 @@ import Config
 # A separate prefix means an ambient DB_* can never reach the test repo; point
 # these at a local Postgres if its credentials aren't the stock ones. CI sets none
 # of them and runs entirely on the fallbacks (.github/workflows/ci.yml).
+# AND THE PREFIX IS NOT ENOUGH ON ITS OWN. It stops an ambient `DB_*` reaching
+# this repo, but it cannot stop `TEST_DB_HOSTNAME` from being filled in with a
+# hosted database by hand — which is exactly what happened, and is the reason
+# this guard exists rather than another paragraph of comment.
+#
+# What the suite does to whatever this points at, in order: `ecto.create`,
+# `ecto.migrate`, then `System.schedulers_online() * 2` sandbox connections that
+# truncate tables between tests. Against a production database that is not a
+# flaky test run, it is data loss.
+#
+# So: a non-local host is refused outright. CI sets none of these and runs
+# entirely on the fallbacks below, so this costs it nothing.
+test_db_hostname = System.get_env("TEST_DB_HOSTNAME") || "localhost"
+
+if System.get_env("TEST_DB_ALLOW_REMOTE") not in ~w(true 1) and
+     test_db_hostname not in ~w(localhost 127.0.0.1 ::1 postgres db) do
+  raise """
+  TEST_DB_HOSTNAME points at #{test_db_hostname}, which is not a local database.
+
+  The test suite CREATES a database, MIGRATES it, and TRUNCATES its tables
+  between tests. Nothing in it is written to be safe against a database it does
+  not own, so pointing it at a hosted instance risks destroying real data.
+
+  Point TEST_DB_HOSTNAME at a local Postgres. If this host genuinely is a
+  disposable database you own, set TEST_DB_ALLOW_REMOTE=true to proceed.
+  """
+end
+
 config :eft_buddy, EftBuddy.Repo,
   username: System.get_env("TEST_DB_USERNAME") || "postgres",
   password: System.get_env("TEST_DB_PASSWORD") || "postgres",
-  hostname: System.get_env("TEST_DB_HOSTNAME") || "localhost",
+  hostname: test_db_hostname,
   port: String.to_integer(System.get_env("TEST_DB_PORT") || "5432"),
   database: "eft_buddy_test#{System.get_env("MIX_TEST_PARTITION")}",
   pool: Ecto.Adapters.SQL.Sandbox,

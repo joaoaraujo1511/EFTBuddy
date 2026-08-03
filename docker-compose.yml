@@ -1,0 +1,70 @@
+# EFT Buddy — the app container, for the VM that hosts it.
+#
+# NOT for the proxy host. The proxy has ~961MB of RAM and ~4.2GB of free disk:
+# not enough to compile an Elixir release, and filling its disk takes down the
+# 39+ domains it fronts. Build and run this on the application VM.
+#
+# There is no `db` service here on purpose. The database is hosted (Supabase), so
+# a local Postgres would be a second, empty, divergent copy — the kind that gets
+# migrated by accident and then wondered about.
+#
+# Usage:
+#
+#   git clone <repo> /opt/eftbuddy && cd /opt/eftbuddy
+#   cp .env.example .env          # then fill it in — every variable is documented there
+#   docker compose build          # build on the target host; see the note on arch below
+#   docker compose run --rm migrate   # migrations BEFORE the first boot
+#   docker compose up -d app
+#
+# ARCHITECTURE. The Dockerfile builds unmodified on amd64 and arm64, so no
+# BUILDER_IMAGE override belongs here. An earlier version of this file carried
+# one because the Dockerfile's Debian pin had no amd64 manifest; the pin itself
+# was fixed instead, which is why that workaround is gone. If a build ever dies
+# with "no match for platform in manifest" again, fix the pin in the Dockerfile
+# rather than re-adding an override here — an override drifts silently from the
+# image CI actually tests.
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: eft-buddy:local
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      # Only the proxy needs to reach this. If this VM has a public interface,
+      # set BIND_ADDR to its LAN address so the app is not published to the
+      # internet outside nginx — which would bypass TLS and HSTS.
+      - "${BIND_ADDR:-0.0.0.0}:${APP_PORT:-4000}:4000"
+    healthcheck:
+      # Pure TCP check, via bash's /dev/tcp. Deliberately NOT curl: the runtime
+      # image does not ship it (the Dockerfile installs only libstdc++6, openssl,
+      # libncurses6, locales and ca-certificates), and a healthcheck invoking a
+      # missing binary marks the container unhealthy forever.
+      #
+      # This proves Bandit is accepting connections, not that the app is healthy
+      # end to end. The real signal is the /health endpoint nginx exposes: that
+      # one goes through the router and touches the database. Here we only want
+      # to know the process is up.
+      test: ["CMD-SHELL", "bash -c ': < /dev/tcp/127.0.0.1/4000'"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # One-shot. Deliberately outside the app's startup: migrating on boot makes
+  # every restart race itself as soon as there is more than one instance, and
+  # turns a failed migration into a crash-loop instead of a legible error.
+  #
+  # `profiles` keeps it out of `docker compose up`; run it explicitly with
+  # `docker compose run --rm migrate`.
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: eft-buddy:local
+    env_file: .env
+    command: ["/app/bin/migrate"]
+    restart: "no"
+    profiles: ["tools"]

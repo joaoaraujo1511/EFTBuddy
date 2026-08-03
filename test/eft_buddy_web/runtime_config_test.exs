@@ -26,7 +26,7 @@ defmodule EftBuddyWeb.RuntimeConfigTest do
   # Optional variables the prod branch reads. Tracked here purely so `on_exit`
   # restores them: a test that switches DB_SSL on must not leak it into the next
   # one, which would silently change what that test is asserting about.
-  @optional ~w(DB_SSL DB_SSL_INSECURE)
+  @optional ~w(DB_SSL DB_SSL_INSECURE DB_CACERTFILE)
 
   setup do
     original = Map.new(Map.keys(@valid) ++ @optional, &{&1, System.get_env(&1)})
@@ -51,6 +51,40 @@ defmodule EftBuddyWeb.RuntimeConfigTest do
   end
 
   defp repo_ssl(config), do: get_in(config, [:eft_buddy, EftBuddy.Repo, :ssl])
+
+  # A real certificate, not a stub: `Supabase Root 2021 CA`, the public root the
+  # production pooler actually chains to. Nothing here verifies a connection with
+  # it — it only has to be something `:public_key.pem_decode/1` accepts as a
+  # certificate — but using the genuine article keeps the fixture honest about
+  # what the surrounding code is for. Public certificate, no secret.
+  defp supabase_root_pem do
+    """
+    -----BEGIN CERTIFICATE-----
+    MIIDxDCCAqygAwIBAgIUbLxMod62P2ktCiAkxnKJwtE9VPYwDQYJKoZIhvcNAQEL
+    BQAwazELMAkGA1UEBhMCVVMxEDAOBgNVBAgMB0RlbHdhcmUxEzARBgNVBAcMCk5l
+    dyBDYXN0bGUxFTATBgNVBAoMDFN1cGFiYXNlIEluYzEeMBwGA1UEAwwVU3VwYWJh
+    c2UgUm9vdCAyMDIxIENBMB4XDTIxMDQyODEwNTY1M1oXDTMxMDQyNjEwNTY1M1ow
+    azELMAkGA1UEBhMCVVMxEDAOBgNVBAgMB0RlbHdhcmUxEzARBgNVBAcMCk5ldyBD
+    YXN0bGUxFTATBgNVBAoMDFN1cGFiYXNlIEluYzEeMBwGA1UEAwwVU3VwYWJhc2Ug
+    Um9vdCAyMDIxIENBMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAqQXW
+    QyHOB+qR2GJobCq/CBmQ40G0oDmCC3mzVnn8sv4XNeWtE5XcEL0uVih7Jo4Dkx1Q
+    DmGHBH1zDfgs2qXiLb6xpw/CKQPypZW1JssOTMIfQppNQ87K75Ya0p25Y3ePS2t2
+    GtvHxNjUV6kjOZjEn2yWEcBdpOVCUYBVFBNMB4YBHkNRDa/+S4uywAoaTWnCJLUi
+    cvTlHmMw6xSQQn1UfRQHk50DMCEJ7Cy1RxrZJrkXXRP3LqQL2ijJ6F4yMfh+Gyb4
+    O4XajoVj/+R4GwywKYrrS8PrSNtwxr5StlQO8zIQUSMiq26wM8mgELFlS/32Uclt
+    NaQ1xBRizkzpZct9DwIDAQABo2AwXjALBgNVHQ8EBAMCAQYwHQYDVR0OBBYEFKjX
+    uXY32CztkhImng4yJNUtaUYsMB8GA1UdIwQYMBaAFKjXuXY32CztkhImng4yJNUt
+    aUYsMA8GA1UdEwEB/wQFMAMBAf8wDQYJKoZIhvcNAQELBQADggEBAB8spzNn+4VU
+    tVxbdMaX+39Z50sc7uATmus16jmmHjhIHz+l/9GlJ5KqAMOx26mPZgfzG7oneL2b
+    VW+WgYUkTT3XEPFWnTp2RJwQao8/tYPXWEJDc0WVQHrpmnWOFKU/d3MqBgBm5y+6
+    jB81TU/RG2rVerPDWP+1MMcNNy0491CTL5XQZ7JfDJJ9CCmXSdtTl4uUQnSuv/Qx
+    Cea13BX2ZgJc7Au30vihLhub52De4P/4gonKsNHYdbWjg7OWKwNv/zitGDVDB9Y2
+    CMTyZKG3XEu5Ghl1LEnI3QmEKsqaCLv12BnVjbkSeZsMnevJPs1Ye6TjjJwdik5P
+    o/bKiIz+Fq8=
+    -----END CERTIFICATE-----
+    """
+    |> String.replace(~r/^ +/m, "")
+  end
 
   test "a fully configured environment reads cleanly" do
     # Guards against the whole suite below passing because the file raises
@@ -134,6 +168,8 @@ defmodule EftBuddyWeb.RuntimeConfigTest do
       ssl = repo_ssl(read_prod(%{"DB_SSL" => "true"}))
 
       assert ssl[:verify] == :verify_peer
+      # No pinned CA configured, so the OS trust store is the anchor.
+      refute Keyword.has_key?(ssl, :cacertfile)
       # SNI must come from DATABASE_URL, not be hardcoded or omitted: managed
       # providers front many databases behind one address and serve the wrong
       # certificate without it.
@@ -153,6 +189,45 @@ defmodule EftBuddyWeb.RuntimeConfigTest do
       # `read_prod/1` only writes the variables it is handed, so without this it
       # would still be set from the assertion above and this would assert nothing.
       assert repo_ssl(read_prod(%{"DB_SSL" => nil, "DB_SSL_INSECURE" => "true"})) == false
+    end
+
+    test "DB_CACERTFILE pins that CA INSTEAD of the OS trust store" do
+      # Supabase's pooler is signed by `Supabase Root 2021 CA`, a private root in
+      # no OS trust store, so `cacerts_get/0` cannot build a path to it and
+      # verify_peer fails. Pinning is what makes verification possible there.
+      path = Path.join(System.tmp_dir!(), "eft_buddy_test_ca.crt")
+      File.write!(path, supabase_root_pem())
+      on_exit(fn -> File.rm(path) end)
+
+      ssl = repo_ssl(read_prod(%{"DB_SSL" => "true", "DB_CACERTFILE" => path}))
+
+      assert ssl[:cacertfile] == String.to_charlist(path)
+      assert ssl[:verify] == :verify_peer
+
+      # The point of the pin: the public CAs must NOT also be trusted alongside
+      # it, or any of them could equally vouch for this host.
+      refute Keyword.has_key?(ssl, :cacerts)
+    end
+
+    test "refuses to boot when DB_CACERTFILE names a file that is not there" do
+      # A missing mount must name itself here rather than surface as an opaque
+      # handshake failure inside Postgrex.
+      assert_raise RuntimeError, ~r/could not be read/, fn ->
+        read_prod(%{"DB_SSL" => "true", "DB_CACERTFILE" => "/nonexistent/supabase-ca.crt"})
+      end
+    end
+
+    test "refuses to boot when DB_CACERTFILE is not actually a certificate" do
+      # Not hypothetical: a CA fetched from a stale URL comes back as a 404 HTML
+      # page, which saves under a `.crt` name perfectly happily. Accepting it
+      # would fail much later and much less legibly.
+      path = Path.join(System.tmp_dir!(), "eft_buddy_test_not_a_ca.crt")
+      File.write!(path, "<!DOCTYPE html>\n<title>404 Not Found</title>\n")
+      on_exit(fn -> File.rm(path) end)
+
+      assert_raise RuntimeError, ~r/no PEM\s+certificate/, fn ->
+        read_prod(%{"DB_SSL" => "true", "DB_CACERTFILE" => path})
+      end
     end
 
     test "refuses to enable TLS when DATABASE_URL has no host to verify against" do

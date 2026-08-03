@@ -141,10 +141,17 @@ jobs:
   # release that cannot be built is the kind of breakage you want to discover on a
   # pull request, not while ssh'd into a server.
   #
-  # BUILDS FOR arm64, not for the runner's native x86_64. The deploy target is
-  # Oracle's Always Free tier, which is Ampere, and an image built for the wrong
-  # architecture fails at `exec` time with a format error rather than at build
-  # time. Emulated arm64 is slow, which is why this is a separate job rather than
+  # BUILDS FOR BOTH DEPLOY ARCHITECTURES. An image built for the wrong one fails
+  # at `exec` time with a format error rather than at build time, so each target
+  # has to be proved separately:
+  #
+  #   * linux/arm64 — Oracle's Always Free tier, which is Ampere. Emulated, slow.
+  #   * linux/amd64 — the self-hosted x86_64 VM the app actually runs on today.
+  #     Native on this runner, so it costs almost nothing to add, and it is the
+  #     case that broke: the Dockerfile's old Debian pin had no amd64 manifest at
+  #     all, which no arm64-only build could have caught.
+  #
+  # Emulated arm64 is slow, which is why this is a separate job rather than
   # another step in `test` — it runs in parallel and never delays the test signal.
   #
   # `push: false` — this proves the image BUILDS. Publishing it would need a
@@ -152,7 +159,7 @@ jobs:
   # push rights to a registry is a much larger blast radius than a workflow that
   # only compiles. Add that when there is somewhere to push to.
   build-image:
-    name: Build production image (arm64)
+    name: Build production image (amd64 + arm64)
     runs-on: ubuntu-latest
 
     steps:
@@ -170,7 +177,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          platforms: linux/arm64
+          platforms: linux/amd64,linux/arm64
           push: false
           # GitHub Actions cache, so an unchanged mix.lock does not recompile
           # every dependency under emulation on each run.
