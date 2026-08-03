@@ -107,7 +107,15 @@ defmodule EftBuddy.Application do
       # Start a worker by calling: EftBuddy.Worker.start_link(arg)
       # {EftBuddy.Worker, arg},
       # Start to serve requests, typically the last entry
-      EftBuddyWeb.Endpoint
+      EftBuddyWeb.Endpoint,
+      # The operator dashboard, on its own loopback-published port. Absent
+      # `:admin_dashboard` this is `nil` and gets rejected below, so the endpoint
+      # is not merely unrouted — it is never started and binds nothing.
+      # `config/runtime.exs` sets the key only when ADMIN_DASHBOARD_PORT is
+      # present. See `EftBuddyWeb.AdminEndpoint` for the threat model.
+      if(Application.get_env(:eft_buddy, :admin_dashboard, false),
+        do: EftBuddyWeb.AdminEndpoint
+      )
     ]
 
     # In test, `start_sync?` is false, so the gated children above are

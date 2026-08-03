@@ -252,6 +252,29 @@ if config_env() == :prod do
     config :eft_buddy, :max_operator_sessions, String.to_integer(max_sessions)
   end
 
+  # The operator dashboard, OFF unless ADMIN_DASHBOARD_PORT is set. Absent, the
+  # `:admin_dashboard` key is never written, `EftBuddy.Application` never adds the
+  # endpoint to the supervision tree, and nothing binds the port. Fail-closed by
+  # omission rather than by a flag someone can set to the wrong string.
+  #
+  # It binds 0.0.0.0 INSIDE the container because Docker cannot map a
+  # loopback-bound container port. The restriction lives in docker-compose.yml,
+  # which publishes it as `127.0.0.1:<port>:<port>` — so the HOST side is
+  # loopback-only and nothing off the machine can route to it. Reach it with:
+  #
+  #     ssh -N -L 4001:127.0.0.1:4001 user@host
+  #
+  # See `EftBuddyWeb.AdminEndpoint` for why this is a separate endpoint and why
+  # the SSH key is the access control.
+  if admin_port = System.get_env("ADMIN_DASHBOARD_PORT") do
+    config :eft_buddy, :admin_dashboard, true
+
+    config :eft_buddy, EftBuddyWeb.AdminEndpoint,
+      server: true,
+      http: [ip: {0, 0, 0, 0}, port: String.to_integer(admin_port)],
+      secret_key_base: secret_key_base
+  end
+
   config :eft_buddy, EftBuddyWeb.Endpoint,
     url: [host: host, port: 443, scheme: "https"],
     http: [

@@ -37,6 +37,25 @@ services:
       # set BIND_ADDR to its LAN address so the app is not published to the
       # internet outside nginx — which would bypass TLS and HSTS.
       - "${BIND_ADDR:-0.0.0.0}:${APP_PORT:-4000}:4000"
+      # The operator dashboard (LiveDashboard), pinned to LOOPBACK on the host.
+      #
+      # The `127.0.0.1:` prefix is the entire access control and is not
+      # cosmetic: without it Docker binds 0.0.0.0 and publishes a page that can
+      # read ETS, list processes and KILL them to the whole network. With it,
+      # nothing off this machine can route to the port at all.
+      #
+      # Reach it from a workstation by forwarding the port over SSH — the tunnel
+      # terminates ON this host, which is what satisfies the loopback binding,
+      # and opening it requires the operator's SSH key:
+      #
+      #     ssh -N -L 4001:127.0.0.1:4001 user@this-vm
+      #     # then browse http://localhost:4001/dashboard
+      #
+      # The container still listens on 0.0.0.0 internally (Docker cannot map a
+      # loopback-bound container port); the namespace is only reachable through
+      # this published mapping. Inert unless ADMIN_DASHBOARD_PORT is set in .env
+      # — without it the endpoint never starts and this maps to a closed port.
+      - "127.0.0.1:${ADMIN_DASHBOARD_PORT:-4001}:${ADMIN_DASHBOARD_PORT:-4001}"
     healthcheck:
       # Pure TCP check, via bash's /dev/tcp. Deliberately NOT curl: the runtime
       # image does not ship it (the Dockerfile installs only libstdc++6, openssl,
