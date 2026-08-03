@@ -15,9 +15,23 @@
 # The Erlang line is the one exception worth knowing about: CI pins the full
 # patch 27.3.4.3, and the hexpm image line publishes 27.3.4. If you bump one,
 # bump the other and re-read that file's comment on why the pin is exact.
+#
+# DEBIAN_VERSION is a DATE, and it is not a free choice: it selects the builder
+# tag, and hexpm does not publish every date for every architecture. The previous
+# pin, bookworm-20250610, is published for arm64 ONLY — so an amd64 host could not
+# build this image at all and died with "no match for platform in manifest".
+# bookworm-20260610 publishes amd64 AND arm64 for both the hexpm builder and the
+# debian runner, so both deploy targets build from an unmodified file. Verify
+# before bumping this again:
+#
+#   docker manifest inspect hexpm/elixir:1.18.4-erlang-27.3.4-debian-<date>-slim \
+#     | grep architecture
+#
+# Only the Debian base date changes here. Elixir and OTP are untouched, and the
+# builder's base does not appear in the final image.
 ARG ELIXIR_VERSION=1.18.4
 ARG OTP_VERSION=27.3.4
-ARG DEBIAN_VERSION=bookworm-20250610
+ARG DEBIAN_VERSION=bookworm-20260610
 
 ARG BUILDER_IMAGE="hexpm/elixir:${ELIXIR_VERSION}-erlang-${OTP_VERSION}-debian-${DEBIAN_VERSION}-slim"
 ARG RUNNER_IMAGE="debian:${DEBIAN_VERSION}-slim"
@@ -81,7 +95,9 @@ FROM ${RUNNER_IMAGE} AS runner
 
 # `ca-certificates` is load-bearing, not hygiene: config/runtime.exs calls
 # :public_key.cacerts_get/0 to verify the database's TLS certificate and RAISES
-# at boot without a trust store. `libstdc++6`/`libncurses6` are ERTS runtime
+# at boot without a trust store. It stays required even when DB_CACERTFILE pins a
+# private CA for the database — outbound HTTPS (the wiki dump fetch) still
+# resolves against the OS store. `libstdc++6`/`libncurses6` are ERTS runtime
 # needs; `openssl` backs :crypto and :ssl; `locales` supports the UTF-8 setup
 # below, which Elixir needs for correct string handling.
 RUN apt-get update -y \
@@ -104,6 +120,16 @@ RUN groupadd --system --gid 1001 eftbuddy \
 ENV MIX_ENV="prod"
 
 COPY --from=builder --chown=root:root /app/_build/${MIX_ENV}/rel/eft_buddy ./
+
+# Database trust anchors, at a STABLE path. These do ship inside the release too
+# (priv/ is part of it), but only under `/app/lib/eft_buddy-<version>/priv/`, and
+# baking a version number into DB_CACERTFILE means the next `version:` bump in
+# mix.exs silently breaks database TLS. `/app/certs/` does not move.
+#
+# Public certificates, no private key material — see priv/certs/README.md. They
+# are copied rather than mounted so that deploying is a `git pull` and a rebuild,
+# with no out-of-band file for someone to forget.
+COPY --from=builder --chown=root:root /app/priv/certs /app/certs
 
 USER eftbuddy
 

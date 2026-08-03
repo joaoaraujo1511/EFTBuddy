@@ -83,6 +83,19 @@ if config_env() == :prod do
   # can be isolated from a connectivity problem in one restart, NOT as a setting to
   # leave on. It is a separate variable from DB_SSL precisely so that turning TLS on
   # can never quietly mean turning verification off.
+  #
+  # DB_CACERTFILE replaces the OS trust store with one pinned CA, and it is what
+  # makes `verify_peer` reachable at all against a provider running its own PKI.
+  # Supabase does: its pooler serves a chain rooted at `Supabase Root 2021 CA`,
+  # which is Supabase's own root and is in no OS trust store, so `cacerts_get/0`
+  # cannot build a path to it and verification fails however correct the rest of
+  # this list is. That failure is precisely what DB_SSL_INSECURE was papering
+  # over, and swapping one variable for the other is the actual fix rather than a
+  # softer workaround. Get the file from the Supabase dashboard, under
+  # Database -> Settings -> SSL Configuration.
+  #
+  # Pinning is TIGHTER than the default, not a concession: it trusts exactly one
+  # issuer for this connection instead of every public CA on the machine.
   db_ssl =
     if System.get_env("DB_SSL") in ~w(true 1) do
       db_host =
@@ -102,14 +115,60 @@ if config_env() == :prod do
       if System.get_env("DB_SSL_INSECURE") in ~w(true 1) do
         [verify: :verify_none]
       else
+        # Either one pinned root, or the OS store. Never both: adding the public
+        # CAs back alongside a pinned root would mean any of them could also vouch
+        # for this host, which is the property pinning exists to remove.
+        trust_anchor =
+          case System.get_env("DB_CACERTFILE") do
+            path when is_binary(path) and path != "" ->
+              path = String.trim(path)
+
+              # Both checks run at boot on purpose. A wrong path or a file that is
+              # not a certificate should name itself here, in a message that says
+              # which file, rather than surface later as an opaque handshake
+              # failure inside Postgrex. The second check is not hypothetical: a
+              # CA fetched from a stale URL comes back as a 404 HTML page, which
+              # saves under a `.crt` name perfectly happily.
+              pem =
+                case File.read(path) do
+                  {:ok, pem} ->
+                    pem
+
+                  {:error, reason} ->
+                    raise """
+                    DB_CACERTFILE is set to #{path}, which could not be read: \
+                    #{:file.format_error(reason)}.
+
+                    This is the CA that verifies the database's certificate. Check the
+                    path exists and is readable by the user the app runs as — in a
+                    container, that it is actually mounted in.
+                    """
+                end
+
+              if Enum.any?(:public_key.pem_decode(pem), &match?({:Certificate, _, _}, &1)) do
+                [cacertfile: String.to_charlist(path)]
+              else
+                raise """
+                DB_CACERTFILE is set to #{path}, but that file contains no PEM
+                certificate.
+
+                Expected a `-----BEGIN CERTIFICATE-----` block. A download that
+                silently returned an error page is the usual cause; re-download the
+                CA from the provider's dashboard.
+                """
+              end
+
+            _ ->
+              [cacerts: :public_key.cacerts_get()]
+          end
+
         [
           verify: :verify_peer,
-          cacerts: :public_key.cacerts_get(),
           server_name_indication: String.to_charlist(db_host),
           customize_hostname_check: [
             match_fun: :public_key.pkix_verify_hostname_match_fun(:https)
           ]
-        ]
+        ] ++ trust_anchor
       end
     else
       false

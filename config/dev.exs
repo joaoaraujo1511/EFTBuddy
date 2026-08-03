@@ -1,5 +1,47 @@
 import Config
 
+# TLS to the dev database, VERIFIED — same reasoning as config/runtime.exs, and
+# for the same database. This used to be a flat `[verify: :verify_none]`, which
+# negotiates TLS and then checks nothing: no confirmation that the peer holding
+# the certificate is the host that was asked for. Dev credentials are real
+# credentials and this connection leaves the machine, so "it's only dev" does not
+# make an unauthenticated peer acceptable.
+#
+# The pinned CA is not hardening, it is what makes verification possible at all:
+# Supabase runs its own PKI, and its root is in no OS trust store, so
+# `:public_key.cacerts_get/0` cannot build a path to it. See priv/certs/README.md.
+db_hostname = System.get_env("DB_HOSTNAME")
+
+# NOTHING IN THIS EXPRESSION MAY RAISE. Mix evaluates this file for every task in
+# the dev environment, including ones that never open a connection — `format`,
+# `deps.get`, `hex.audit`. That is the same trap the `port:` line below documents.
+dev_db_ssl =
+  cond do
+    # Same debug-only escape hatch as prod, and deliberately the same variable
+    # name, so what turns verification off is one concept and not two.
+    System.get_env("DB_SSL_INSECURE") in ~w(true 1) ->
+      [verify: :verify_none]
+
+    is_binary(db_hostname) and String.trim(db_hostname) != "" ->
+      [
+        verify: :verify_peer,
+        cacertfile:
+          System.get_env("DB_CACERTFILE") ||
+            Path.expand("../priv/certs/supabase-prod-ca-2021.crt", __DIR__),
+        server_name_indication: String.to_charlist(String.trim(db_hostname)),
+        customize_hostname_check: [
+          match_fun: :public_key.pkix_verify_hostname_match_fun(:https)
+        ]
+      ]
+
+    true ->
+      # No DB_HOSTNAME, so there is no host to connect to and none to verify
+      # against. The connection fails later with an error that names the
+      # database, exactly as the `port:` note below describes; this branch only
+      # has to avoid raising here.
+      false
+  end
+
 # Configure your database
 config :eft_buddy, EftBuddy.Repo,
   username: System.get_env("DB_USERNAME"),
@@ -22,8 +64,9 @@ config :eft_buddy, EftBuddy.Repo,
   show_sensitive_data_on_connection_error: true,
   pool_size: 10,
   # Supabase requires TLS. Options live inside `ssl:` — the separate `ssl_opts`
-  # key is deprecated in Postgrex and is ignored with a warning.
-  ssl: [verify: :verify_none]
+  # key is deprecated in Postgrex and is ignored with a warning. Built above,
+  # where the reasoning lives.
+  ssl: dev_db_ssl
 
 # For development, we disable any cache and enable
 # debugging and code reloading.
