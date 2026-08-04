@@ -77,7 +77,17 @@ config :eft_buddy, EftBuddy.Repo,
   # a fallback. `config/test.exs` defaults its equivalent the same way.
   port: String.to_integer(System.get_env("DB_PORT") || "5432"),
   stacktrace: true,
-  show_sensitive_data_on_connection_error: true,
+  # LOCAL ONLY. This flag makes Ecto include the full connection options — the
+  # PASSWORD among them — in the crash report when the Repo fails to start. That
+  # is a fair trade for a local server whose credentials are `postgres/postgres`,
+  # and a bad one the moment DB_HOSTNAME points somewhere real: a single typo in
+  # the password then prints the correct one to the terminal and into whatever
+  # scrollback, screen share or log file is watching.
+  #
+  # This project has already had that happen once. Pointing dev at the hosted
+  # database to reproduce a latency problem is a legitimate thing to do, and it
+  # should not be the thing that leaks the credential.
+  show_sensitive_data_on_connection_error: local_db?,
   pool_size: 10,
   # Supabase requires TLS. Options live inside `ssl:` — the separate `ssl_opts`
   # key is deprecated in Postgrex and is ignored with a warning. Built above,
@@ -214,6 +224,22 @@ config :phoenix_live_view,
 #
 # Set `CACHE_ENABLED=1` to exercise it locally.
 config :eft_buddy, cache_enabled: System.get_env("CACHE_ENABLED") in ~w(1 true)
+
+# The background sync, on by default in dev (a fresh local database populates
+# itself), but switchable OFF.
+#
+# The case that needs it: pointing dev at the HOSTED database to reproduce
+# something that only happens at 75ms of latency. Reads against it are harmless,
+# but the syncers write — so a dev instance left on its defaults would start
+# writing to production from a laptop, and `:global` locks do not span
+# un-clustered nodes, so it would not even notice the real instance doing the
+# same thing.
+#
+# `START_SYNC=0` makes the connection read-only in practice. Cache invalidation
+# and warming both hang off the `[:eft_buddy, :sync, :stop]` telemetry event
+# rather than off the syncers themselves, so they can still be exercised by
+# emitting that event by hand — see EftBuddy.Sync.Reporter.
+config :eft_buddy, start_sync: System.get_env("START_SYNC", "1") not in ~w(0 false no)
 
 # The in-memory item catalogue, off for the same reason. `ITEM_DATASET=1`
 # exercises it against the local database — worth doing before a deploy, since
