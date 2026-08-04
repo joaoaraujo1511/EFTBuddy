@@ -80,7 +80,23 @@ defmodule EftBuddy.Items.Dataset do
 
   alias EftBuddy.Items
 
+  # Full `%Item{}` structs, touched ONLY for the rows a request actually returns.
   @rows :eft_buddy_dataset_rows
+
+  # The same items projected down to just the fields the filters read: folded
+  # name and short name, category name, slug, and the two levels the flea lock
+  # is derived from.
+  #
+  # This split is the difference between the layer working and merely appearing
+  # to. Filtering has to visit every candidate, and visiting a row in ETS means
+  # COPYING it into the caller — so filtering over the full structs copied the
+  # whole ~38MB catalogue on every keystroke. Measured against production that
+  # cost ~35ms per read regardless of how many rows came back, and a search
+  # matching nothing was the most expensive request of all.
+  #
+  # Filtering the projection instead copies a few small binaries per item, and
+  # the full structs are fetched for the ~40 rows that survive.
+  @filter :eft_buddy_dataset_filter
   @prices :eft_buddy_dataset_prices
   @meta :eft_buddy_dataset_meta
 
@@ -107,7 +123,7 @@ defmodule EftBuddy.Items.Dataset do
 
   @impl true
   def init(_opts) do
-    for table <- [@rows, @prices, @meta] do
+    for table <- [@rows, @filter, @prices, @meta] do
       :ets.new(table, [:set, :named_table, :public, read_concurrency: true])
     end
 
@@ -148,14 +164,26 @@ defmodule EftBuddy.Items.Dataset do
         rows = Items.catalog_rows()
 
         :ets.delete_all_objects(@rows)
+        :ets.delete_all_objects(@filter)
 
-        # Prefolded search fields are stored ALONGSIDE the struct rather than
-        # computed per request: a keystroke would otherwise re-downcase 5,198
-        # names and short names, twice, on every debounce tick.
+        :ets.insert(@rows, Enum.map(rows, fn item -> {item.id, item} end))
+
+        # The projection the filters read. Names are folded here rather than per
+        # request, so a keystroke does not re-downcase 5,198 names and short
+        # names on every debounce tick.
+        #
+        # `flea` is shaped as the map `EftBuddy.Items.effective_flea_level/2`
+        # already pattern-matches on, so the lock threshold stays ONE definition
+        # shared with the SQL path rather than a second one that can drift.
         :ets.insert(
-          @rows,
+          @filter,
           Enum.map(rows, fn item ->
-            {item.id, item, fold(item.name), fold(item.short_name)}
+            {item.id, fold(item.name), fold(item.short_name), category_name(item),
+             item.normalized_name,
+             %{
+               min_level_for_flea: item.min_level_for_flea,
+               category: %{min_level_for_flea_market: category_flea_level(item)}
+             }}
           end)
         )
 
@@ -209,7 +237,7 @@ defmodule EftBuddy.Items.Dataset do
 
   @doc "Drop everything. For tests and for a remote console."
   def clear do
-    for table <- [@rows, @prices, @meta] do
+    for table <- [@rows, @filter, @prices, @meta] do
       if :ets.whereis(table) != :undefined, do: :ets.delete_all_objects(table)
     end
 
@@ -224,7 +252,7 @@ defmodule EftBuddy.Items.Dataset do
       items: table_size(@rows),
       price_rows: table_size(@prices),
       catalog_age_ms: age_ms(:catalog_built_at),
-      memory_bytes: Enum.sum(for t <- [@rows, @prices, @meta], do: table_memory(t))
+      memory_bytes: Enum.sum(for t <- [@rows, @filter, @prices, @meta], do: table_memory(t))
     }
   end
 
@@ -290,10 +318,9 @@ defmodule EftBuddy.Items.Dataset do
     base = flea_base(opts, mode)
     total = length(base)
 
-    buyable = Enum.count(base, fn {_id, item, _n, _s} -> buyable?(item, pmc_level, floor) end)
+    buyable = Enum.count(base, fn row -> buyable?(flea(row), pmc_level, floor) end)
 
-    watchlist =
-      Enum.count(base, fn {_id, item, _n, _s} -> item.normalized_name in favorite_slugs end)
+    watchlist = Enum.count(base, fn row -> slug(row) in favorite_slugs end)
 
     %{all: total, buyable: buyable, locked: total - buyable, watchlist: watchlist}
   end
@@ -310,13 +337,17 @@ defmodule EftBuddy.Items.Dataset do
 
   # ── Filters ────────────────────────────────────────────
 
-  # Resolve an ordered id list to ordered rows, dropping ids with no row. The
-  # drop matters: the order index and the catalogue are written in the same
+  # Resolve an ordered id list to ordered PROJECTIONS, dropping ids with no row.
+  # The drop matters: the order index and the catalogue are written in the same
   # build, but a price index written ten minutes later can name an item the
   # catalogue no longer has.
+  #
+  # Deliberately the projection table and not `@rows` — see the note on `@filter`
+  # for why touching the full structs here made every read cost the whole
+  # catalogue.
   defp rows(ids) do
     Enum.flat_map(ids, fn id ->
-      case :ets.lookup(@rows, id) do
+      case :ets.lookup(@filter, id) do
         [row] -> [row]
         [] -> []
       end
@@ -328,7 +359,7 @@ defmodule EftBuddy.Items.Dataset do
   # `:watchlist` is not a catalogue subset — it cuts across every scope — so it
   # is a favourites filter, mirroring `apply_item_scope/4`.
   defp filter_scope(rows, :watchlist, _mode, favorites) do
-    Enum.filter(rows, fn {_id, item, _n, _s} -> item.normalized_name in favorites end)
+    Enum.filter(rows, fn row -> slug(row) in favorites end)
   end
 
   defp filter_scope(rows, scope, mode, _favorites) do
@@ -336,7 +367,7 @@ defmodule EftBuddy.Items.Dataset do
       # Unknown scopes show everything rather than silently returning nothing,
       # matching the SQL path's catch-all clause.
       [] -> rows
-      [{_key, ids}] -> Enum.filter(rows, fn {id, _item, _n, _s} -> MapSet.member?(ids, id) end)
+      [{_key, ids}] -> Enum.filter(rows, fn row -> MapSet.member?(ids, id(row)) end)
     end
   end
 
@@ -354,7 +385,7 @@ defmodule EftBuddy.Items.Dataset do
         # The two fields are matched separately rather than against a
         # concatenation, so a token cannot match by spanning the boundary
         # between a name and a short name.
-        Enum.filter(rows, fn {_id, _item, name, short} ->
+        Enum.filter(rows, fn {_id, name, short, _cat, _slug, _flea} ->
           Enum.all?(folded, fn t ->
             String.contains?(name, t) or String.contains?(short, t)
           end)
@@ -365,26 +396,23 @@ defmodule EftBuddy.Items.Dataset do
   defp filter_categories(rows, names) when names in [nil, []], do: rows
 
   defp filter_categories(rows, names) do
-    Enum.filter(rows, fn {_id, item, _n, _s} ->
-      case item.category do
-        %{name: name} -> name in names
-        _ -> false
-      end
-    end)
+    # An item with no category never matches a category filter, matching the
+    # SQL's inner comparison against a LEFT-joined column.
+    Enum.filter(rows, fn row -> category(row) != nil and category(row) in names end)
   end
 
   defp filter_flea_view(rows, :watchlist, _pmc_level, favorites) do
-    Enum.filter(rows, fn {_id, item, _n, _s} -> item.normalized_name in favorites end)
+    Enum.filter(rows, fn row -> slug(row) in favorites end)
   end
 
   defp filter_flea_view(rows, :buyable, pmc_level, _favorites) do
     floor = Items.flea_unlock_level()
-    Enum.filter(rows, fn {_id, item, _n, _s} -> buyable?(item, pmc_level, floor) end)
+    Enum.filter(rows, fn row -> buyable?(flea(row), pmc_level, floor) end)
   end
 
   defp filter_flea_view(rows, :locked, pmc_level, _favorites) do
     floor = Items.flea_unlock_level()
-    Enum.reject(rows, fn {_id, item, _n, _s} -> buyable?(item, pmc_level, floor) end)
+    Enum.reject(rows, fn row -> buyable?(flea(row), pmc_level, floor) end)
   end
 
   defp filter_flea_view(rows, _status, _pmc_level, _favorites), do: rows
@@ -392,8 +420,11 @@ defmodule EftBuddy.Items.Dataset do
   # `effective_flea_level/2` already mirrors the SQL's
   # `GREATEST(floor, COALESCE(item, category, floor))`, so the lock split is one
   # shared definition rather than two that can drift.
-  defp buyable?(item, pmc_level, floor) do
-    Items.effective_flea_level(item, floor) <= pmc_level
+  # Takes the projection's `flea` map, which is shaped exactly as
+  # `effective_flea_level/2` pattern-matches — so the threshold stays one shared
+  # definition with the SQL path rather than a second one that can drift.
+  defp buyable?(flea, pmc_level, floor) do
+    Items.effective_flea_level(flea, floor) <= pmc_level
   end
 
   # ── Ordering ───────────────────────────────────────────
@@ -406,9 +437,7 @@ defmodule EftBuddy.Items.Dataset do
   defp favorites_first(rows, _scope, []), do: rows
 
   defp favorites_first(rows, _scope, favorites) do
-    {favoured, rest} =
-      Enum.split_with(rows, fn {_id, item, _n, _s} -> item.normalized_name in favorites end)
-
+    {favoured, rest} = Enum.split_with(rows, fn row -> slug(row) in favorites end)
     favoured ++ rest
   end
 
@@ -416,27 +445,46 @@ defmodule EftBuddy.Items.Dataset do
   defp flea_favorites_first(rows, _status, []), do: rows
 
   defp flea_favorites_first(rows, _status, favorites) do
-    {favoured, rest} =
-      Enum.split_with(rows, fn {_id, item, _n, _s} -> item.normalized_name in favorites end)
-
+    {favoured, rest} = Enum.split_with(rows, fn row -> slug(row) in favorites end)
     favoured ++ rest
   end
 
   defp paginate(rows, offset, limit), do: rows |> Enum.drop(offset) |> Enum.take(limit)
 
-  # Only the page's rows get a price overlay — roughly 40 per request rather
-  # than 5,198.
-  defp materialize({id, item, _name, _short}, mode) do
-    price =
-      case :ets.lookup(@prices, {id, mode}) do
-        [{_key, p}] -> p
-        [] -> nil
-      end
+  # The ONLY place a full `%Item{}` is copied out of ETS, and it runs on the ~40
+  # rows a page returns rather than on the 5,198 the filters walked.
+  defp materialize(row, mode) do
+    id = id(row)
 
-    Items.overlay_price(item, price)
+    case :ets.lookup(@rows, id) do
+      [{^id, item}] ->
+        price =
+          case :ets.lookup(@prices, {id, mode}) do
+            [{_key, p}] -> p
+            [] -> nil
+          end
+
+        Items.overlay_price(item, price)
+
+      [] ->
+        nil
+    end
   end
 
   # ── Helpers ────────────────────────────────────────────
+
+  # Accessors for the projection tuple, so its shape is named in one place
+  # rather than destructured in a dozen closures.
+  defp id({id, _name, _short, _cat, _slug, _flea}), do: id
+  defp category({_id, _name, _short, cat, _slug, _flea}), do: cat
+  defp slug({_id, _name, _short, _cat, slug, _flea}), do: slug
+  defp flea({_id, _name, _short, _cat, _slug, flea}), do: flea
+
+  defp category_name(%{category: %{name: name}}), do: name
+  defp category_name(_), do: nil
+
+  defp category_flea_level(%{category: %{min_level_for_flea_market: level}}), do: level
+  defp category_flea_level(_), do: nil
 
   defp fold(nil), do: ""
   defp fold(text) when is_binary(text), do: String.downcase(text)
