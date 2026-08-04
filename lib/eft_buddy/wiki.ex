@@ -30,6 +30,7 @@ defmodule EftBuddy.Wiki do
 
   import Ecto.Query
 
+  alias EftBuddy.Cache
   alias EftBuddy.Repo
   alias EftBuddy.Wiki.{Projection, QuestPage}
 
@@ -66,6 +67,12 @@ defmodule EftBuddy.Wiki do
           }
         ]
   def all_quests do
+    # Read once per Tasks-page mount and used twice there (the has_wiki? badges
+    # and the WIP rows), so it is on the critical path of the app's busiest page.
+    Cache.fetch({__MODULE__, :all_quests}, ["WikiSync"], &all_quests_uncached/0)
+  end
+
+  defp all_quests_uncached do
     Repo.all(
       from(q in QuestPage,
         select: %{

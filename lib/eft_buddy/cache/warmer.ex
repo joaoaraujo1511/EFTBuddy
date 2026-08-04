@@ -105,8 +105,39 @@ defmodule EftBuddy.Cache.Warmer do
     [
       spec("hideout.modules", ["HideoutSync"], {EftBuddy.Hideout, :list_modules, []}),
       spec("maps.list", ["MapsSync"], {EftBuddy.Maps, :list_maps, [[]]}),
-      spec("tasks.traders_with_tasks", ["TasksSync"], {EftBuddy.Tasks, :traders_with_tasks, []})
+      spec("tasks.traders_with_tasks", ["TasksSync"], {EftBuddy.Tasks, :traders_with_tasks, []}),
+
+      # The app's most expensive read. `list_rounds/0` builds both halves of the
+      # split (see `EftBuddy.Ammo`), so warming it covers the ten-minute price
+      # tick that drops the availability half without also making a visitor pay
+      # to rebuild the ballistics half.
+      spec(
+        "ammo.rounds",
+        ["AmmoSync", "ItemsSync", "PricesSync", "BartersSync", "CraftsSync"],
+        {EftBuddy.Ammo, :list_rounds, []}
+      ),
+      spec("armor.plates", ["ArmorSync", "ItemsSync"], {EftBuddy.Armor, :list_plates, []}),
+      spec("events.list", ["EventsSync"], {EftBuddy.Events, :list_events, []}),
+      spec("chapters.list", ["ChaptersSync"], {EftBuddy.Chapters, :list_chapters, []}),
+      spec("wiki.all_quests", ["WikiSync"], {EftBuddy.Wiki, :all_quests, []}),
+
+      # The storyline pages' task cross-link index — `preloads: []`, no mode.
+      spec(
+        "tasks.index",
+        ["TasksSync", "HideoutSync"],
+        {EftBuddy.Tasks, :list_tasks, [[preloads: []]]}
+      )
     ] ++
+      for mode <- @ui_modes do
+        # EXACTLY the Tasks page's call shape. `list_tasks/1` only caches a
+        # whitelisted set of option shapes, so a warm that passed anything else
+        # would issue the query, discard the result, and cache nothing.
+        spec(
+          "tasks.list:#{mode}",
+          ["TasksSync", "HideoutSync"],
+          {EftBuddy.Tasks, :list_tasks, [[preloads: [:trader], game_mode: mode]]}
+        )
+      end ++
       for mode <- @ui_modes do
         spec("tasks.prereq_map:#{mode}", ["TasksSync"], {EftBuddy.Tasks, :prereq_map, [mode]})
       end ++
