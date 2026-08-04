@@ -46,6 +46,15 @@ defmodule EftBuddyWeb.HealthControllerTest do
       assert url =~ "http"
     end
 
+    test "reports the commit the image was built from" do
+      # The other question every deploy raises — "is this instance actually running
+      # what I just pushed?" — which used to take four commands and a comparison of
+      # three timestamps by eye. There is no image in the test env, so the honest
+      # answer here is "dev"; a release built without the build arg says "unknown".
+      assert %{"version" => version} = build_conn() |> get(~p"/health") |> body()
+      assert version == "dev"
+    end
+
     test "reports uptime" do
       assert %{"uptime_seconds" => uptime} = build_conn() |> get(~p"/health") |> body()
       assert is_integer(uptime) and uptime >= 0
