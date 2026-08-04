@@ -14,6 +14,12 @@ defmodule EftBuddy.Items do
   alias EftBuddy.Items.{CraftRequiredItem, CraftRewardItem}
   alias EftBuddy.Items.{Item, ItemPrice}
   alias EftBuddy.Cache
+  # The in-memory catalogue these three listing reads prefer when it is built and
+  # fresh. `ready?/1` is the whole safety story: it is false before the first
+  # build, during a rebuild and past a staleness bound, and every one of those
+  # falls through to the SQL below. The dataset can therefore be absent, stale or
+  # switched off without any of this returning a wrong answer — only a slower one.
+  alias EftBuddy.Items.Dataset
   alias EftBuddy.Repo
   alias EftBuddy.Tasks.{ItemReward, Objective, OfferUnlock}
 
@@ -118,6 +124,14 @@ defmodule EftBuddy.Items do
              grind" subsets.
   """
   def list_all_items(opts \\ []) do
+    if Dataset.ready?(Keyword.get(opts, :game_mode)) do
+      Dataset.list_all_items(opts)
+    else
+      list_all_items_sql(opts)
+    end
+  end
+
+  defp list_all_items_sql(opts) do
     limit = Keyword.get(opts, :limit, 40)
     offset = Keyword.get(opts, :offset, 0)
     query = opts |> Keyword.get(:query, "") |> normalize_query()
@@ -506,6 +520,133 @@ defmodule EftBuddy.Items do
   # silently returning zero rows.
   defp apply_scope(query, _, _game_mode), do: query
 
+  # ── Projections for EftBuddy.Items.Dataset ─────────────
+  #
+  # These exist so the in-memory dataset can be built from the SAME predicates
+  # and the SAME ordering the SQL path uses, rather than from a reimplementation
+  # of them. That is the whole safety argument for the dataset layer, so it is
+  # worth being explicit about why each one is a projection rather than a
+  # reimplementation:
+  #
+  #   * `apply_scope/3` for `:quest` is a three-arm UNION over JSONB payload
+  #     fields, with a task-name blacklist. Rewriting that in Elixir is the most
+  #     likely place in this codebase to introduce a silent divergence, and a
+  #     divergence here means the Quest Items tab quietly shows the wrong items.
+  #     So Postgres computes the id set and the dataset merely holds it.
+  #
+  #   * Ordering is collation-dependent and CANNOT be reproduced by `Enum.sort/1`.
+  #     Measured against production, the two disagree on the very first row:
+  #     Postgres files `"Negotiation" room key` under N (its collation ignores
+  #     leading punctuation) while byte order sorts it above `.300 Blackout AP`.
+  #     So Postgres produces the order, once, and the dataset stores the
+  #     resulting id list. Filtering an ordered list is stable, so every derived
+  #     page keeps that order exactly.
+
+  @doc false
+  @spec ordered_ids(atom()) :: [binary()]
+  def ordered_ids(sort) do
+    Item
+    |> join(:left, [i], c in assoc(i, :category), as: :category)
+    |> apply_items_sort(sort)
+    |> select([i], i.id)
+    |> Repo.all()
+  end
+
+  @doc false
+  @spec scope_ids(atom(), any()) :: [binary()]
+  def scope_ids(scope, game_mode) do
+    Item
+    |> apply_scope(scope, EftBuddy.GameMode.to_db(game_mode))
+    |> select([i], i.id)
+    |> Repo.all()
+  end
+
+  @doc false
+  # Flea-eligible items for a mode, already in the listing's price order. The
+  # ordering is numeric rather than collated, so Elixir *could* reproduce it —
+  # but it is taken from Postgres anyway, because "all ordering comes from one
+  # place" is a property worth more than one saved query every ten minutes.
+  @spec flea_ordered_ids(any()) :: [binary()]
+  def flea_ordered_ids(game_mode) do
+    mode = EftBuddy.GameMode.to_db(game_mode)
+
+    Item
+    |> join(:inner, [i], p in ItemPrice,
+      on: p.item_id == i.id and p.game_mode == ^mode,
+      as: :price
+    )
+    |> where([price: p], not is_nil(p.last_low_price))
+    |> order_by([price: p], desc: p.last_low_price, desc: p.item_id)
+    |> select([i], i.id)
+    |> Repo.all()
+  end
+
+  @doc false
+  # The whole catalogue, category preloaded, WITHOUT any mode price overlay.
+  # Prices are a separate layer precisely so this — the expensive half — is not
+  # rebuilt every ten minutes when only prices moved.
+  @spec catalog_rows() :: [Item.t()]
+  def catalog_rows do
+    Item |> preload(:category) |> Repo.all()
+  end
+
+  @doc false
+  # Every price row for a mode, as the plain map the overlay needs.
+  @spec price_rows(any()) :: [map()]
+  def price_rows(game_mode) do
+    mode = EftBuddy.GameMode.to_db(game_mode)
+
+    from(p in ItemPrice,
+      where: p.game_mode == ^mode,
+      select: %{
+        item_id: p.item_id,
+        base_price: p.base_price,
+        last_low_price: p.last_low_price,
+        avg_24h_price: p.avg_24h_price,
+        low_24h_price: p.low_24h_price,
+        high_24h_price: p.high_24h_price,
+        historical_prices: p.historical_prices
+      }
+    )
+    |> Repo.all()
+  end
+
+  @doc false
+  # The in-memory equivalent of `select_merge_mode_prices/1`, and it must stay
+  # that way. A LEFT join with no matching price row yields NULLs for every
+  # overlaid column, so a missing price must NULL those fields rather than leave
+  # the items table's own values showing — while `base_price` coalesces back to
+  # the item's, matching `coalesce(p.base_price, i.base_price)`.
+  @spec overlay_price(Item.t(), map() | nil) :: Item.t()
+  def overlay_price(item, nil) do
+    %{
+      item
+      | last_low_price: nil,
+        avg_24h_price: nil,
+        low_24h_price: nil,
+        high_24h_price: nil,
+        historical_prices: nil
+    }
+  end
+
+  def overlay_price(item, price) do
+    %{
+      item
+      | base_price: price.base_price || item.base_price,
+        last_low_price: price.last_low_price,
+        avg_24h_price: price.avg_24h_price,
+        low_24h_price: price.low_24h_price,
+        high_24h_price: price.high_24h_price,
+        historical_prices: price.historical_prices
+    }
+  end
+
+  @doc false
+  # Shared by the dataset's search and by nothing else. Public so the equality
+  # tests can assert the tokeniser is the same one the SQL path uses.
+  @spec search_tokens(String.t() | nil) :: [String.t()]
+  def search_tokens(q), do: normalize_query(q)
+
   # Every distinct item_id referenced by any (non-blacklisted)
   # objective for `game_mode`, as a `%{uuid: item_id}` union. Shared
   # by the `:quest` scope filter and the per-page category-flag batch
@@ -589,6 +730,14 @@ defmodule EftBuddy.Items do
   category, so the sum matches the total item count.
   """
   def item_counts_by_category do
+    Cache.fetch(
+      {__MODULE__, :item_counts_by_category},
+      ["ItemsSync"],
+      &item_counts_by_category_uncached/0
+    )
+  end
+
+  defp item_counts_by_category_uncached do
     from(i in Item,
       join: c in assoc(i, :category),
       group_by: c.name,
@@ -691,6 +840,14 @@ defmodule EftBuddy.Items do
   """
   # - Lists items that are listable on the flea market, ordered by their current flea price.
   def list_flea_market_items(opts \\ []) do
+    if Dataset.ready?(Keyword.get(opts, :game_mode)) do
+      Dataset.list_flea_market_items(opts)
+    else
+      list_flea_market_items_sql(opts)
+    end
+  end
+
+  defp list_flea_market_items_sql(opts) do
     limit = Keyword.get(opts, :limit, 40)
     offset = Keyword.get(opts, :offset, 0)
     flea_status = Keyword.get(opts, :flea_status, :all)
@@ -736,6 +893,14 @@ defmodule EftBuddy.Items do
   reveals.
   """
   def flea_market_status_counts(opts \\ []) do
+    if Dataset.ready?(Keyword.get(opts, :game_mode)) do
+      Dataset.flea_market_status_counts(opts)
+    else
+      flea_market_status_counts_sql(opts)
+    end
+  end
+
+  defp flea_market_status_counts_sql(opts) do
     pmc_level = Keyword.get(opts, :pmc_level, 1)
     favorite_slugs = Keyword.get(opts, :favorite_slugs, [])
     floor = flea_unlock_level()
@@ -815,7 +980,13 @@ defmodule EftBuddy.Items do
   and compute per-card lock state without duplicating the constant.
   """
   def flea_unlock_level do
-    EftBuddy.GameSettings.get_int(@flea_unlock_level_key, @default_flea_unlock_level)
+    # A single-row settings lookup, and the least interesting query in the app —
+    # which is exactly why it is worth caching. Every flea listing read, every
+    # status-count read and every per-card lock badge calls it, so it is one of
+    # the most FREQUENT round trips here despite being one of the cheapest.
+    Cache.fetch({__MODULE__, :flea_unlock_level}, ["FleaSettingsSync"], fn ->
+      EftBuddy.GameSettings.get_int(@flea_unlock_level_key, @default_flea_unlock_level)
+    end)
   end
 
   @doc false
@@ -982,6 +1153,24 @@ defmodule EftBuddy.Items do
   def get_item_details(item_id, game_mode \\ EftBuddy.GameMode.default())
 
   def get_item_details(item_id, game_mode) when is_binary(item_id) do
+    # Keyed by item id, so the key space is the catalogue (5,198) rather than
+    # unbounded — but it is still far larger than the whole-list entries, which
+    # is why `EftBuddy.Cache` now carries an entry ceiling and an expiry sweep.
+    #
+    # Everything this returns is sync-written: the item and its prices, the
+    # tasks that need it, the hideout levels that consume it, and its barters
+    # and crafts. Five owners, because the panel is a join across five feeds and
+    # a stale line in any of them is a wrong answer on the page.
+    Cache.fetch(
+      {__MODULE__, :item_details, item_id, EftBuddy.GameMode.to_db(game_mode)},
+      ["ItemsSync", "PricesSync", "TasksSync", "HideoutSync", "BartersSync", "CraftsSync"],
+      fn -> get_item_details_uncached(item_id, game_mode) end
+    )
+  end
+
+  def get_item_details(_, _), do: nil
+
+  defp get_item_details_uncached(item_id, game_mode) do
     mode = EftBuddy.GameMode.to_db(game_mode)
 
     # Preload :category here because the LiveView's row template
@@ -1009,8 +1198,6 @@ defmodule EftBuddy.Items do
         }
     end
   end
-
-  def get_item_details(_, _), do: nil
 
   # Fetch one item with the active mode's prices overlaid onto its
   # struct fields (same overlay the listing queries use), plus the

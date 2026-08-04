@@ -30,6 +30,17 @@ defmodule EftBuddy.Application do
       # a syncer completing before that handler exists would leave stale entries
       # with nothing but their TTL to clear them. See `EftBuddy.Cache`.
       EftBuddy.Cache,
+      # Rebuilds cache entries as soon as the syncer that owns them finishes, so
+      # the server absorbs every cold read instead of the next visitor. Attaches
+      # its OWN telemetry handler, separate from the cache's invalidation one, so
+      # that a failing warm can never detach the handler that keeps the cache
+      # honest — see `EftBuddy.Cache.Warmer`.
+      EftBuddy.Cache.Warmer,
+      # Owns the in-memory item catalogue's ETS tables. Inert until
+      # `ITEM_DATASET=1` — see `EftBuddy.Items.Dataset` — and every read through
+      # it falls back to SQL when it is not ready, so an unbuilt or stale
+      # dataset costs latency rather than correctness.
+      EftBuddy.Items.Dataset,
       # Items.Sync runs two cadences: a frequent lightweight price refresh and
       # an infrequent full pipeline (items + barters + crafts).
       if(start_sync?, do: EftBuddy.Items.Sync),

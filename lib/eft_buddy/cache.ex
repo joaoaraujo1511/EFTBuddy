@@ -65,10 +65,46 @@ defmodule EftBuddy.Cache do
   @table :eft_buddy_cache
   @sync_event [:eft_buddy, :sync, :stop]
 
+  # Counters, not an ETS row, and deliberately so: these are incremented on every
+  # single read, and `:ets.update_counter` on one hot key serialises writers on
+  # that row. `:counters` with `:write_concurrency` gives each scheduler its own
+  # slot and sums them on read, which is the right trade when writes vastly
+  # outnumber reads of the value.
+  #
+  # The reference lives in `:persistent_term` because it is written ONCE at boot
+  # and never again — a `:persistent_term.put/2` triggers a global GC scan, which
+  # is acceptable at startup and would not be at runtime.
+  @stats_key {__MODULE__, :stats}
+  @stat_hits 1
+  @stat_misses 2
+  @stat_invalidations 3
+  @stat_slots 3
+
   # Deliberately generous. This is the "the invalidation signal never came"
   # bound, not the freshness target — the syncers themselves run on intervals
   # from 10 minutes (flea prices) to 6 hours (the full item pipeline).
   @default_ttl_ms 20 * 60 * 1_000
+
+  # Entry ceiling.
+  #
+  # Not needed while everything cached was a whole-list read keyed on a game
+  # mode — a dozen entries, full stop. It became necessary the moment entries
+  # were keyed by ITEM ID: 5,198 items and 1,016 tasks, each detail panel a few
+  # tens of KB, is a table that grows with traffic and never shrinks on its own.
+  #
+  # Eviction is oldest-WRITTEN first, which is not true LRU. It is the right
+  # approximation here because the entries worth keeping are the whole-list ones,
+  # and those are rewritten by the warmer on every sync — so they continuously
+  # renew their position while a detail panel opened once and never revisited
+  # ages out. Say so plainly rather than calling this an LRU.
+  @default_max_entries 2_000
+
+  # Expiry is otherwise LAZY — an entry past its TTL is only noticed when someone
+  # reads that exact key. For the whole-list entries that is fine, since they get
+  # read constantly. For id-keyed entries it is not: a detail panel opened once
+  # would hold its memory forever, expired and unreachable, because nothing ever
+  # looks that key up again.
+  @sweep_interval_ms 60 * 1_000
 
   def start_link(opts \\ []), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
 
@@ -87,9 +123,11 @@ defmodule EftBuddy.Cache do
     if enabled?() do
       case lookup(key) do
         {:ok, value} ->
+          bump(@stat_hits)
           value
 
         :miss ->
+          bump(@stat_misses)
           value = fun.()
           put(key, value, sources, Keyword.get(opts, :ttl_ms, @default_ttl_ms))
           value
@@ -102,20 +140,32 @@ defmodule EftBuddy.Cache do
     end
   end
 
-  @doc "Drops every entry owned by `source`. Called on sync completion."
-  def invalidate_source(source) when is_binary(source) do
-    if table_exists?() do
-      # A full scan, not a match spec: match specs cannot express "this list
-      # contains that element", and the table holds tens of entries, not
-      # millions. Simplicity wins at this size.
-      @table
-      |> :ets.tab2list()
-      |> Enum.each(fn {key, _value, _expires_at, sources} ->
-        if source in sources, do: :ets.delete(@table, key)
-      end)
-    end
+  @doc """
+  Drops every entry owned by `source`. Called on sync completion.
 
-    :ok
+  Returns the number of entries dropped, which is what makes an invalidation
+  observable: "TasksSync finished and evicted 0 entries" is the signature of a
+  source name that no longer matches anything, and that failure is otherwise
+  completely silent.
+  """
+  def invalidate_source(source) when is_binary(source) do
+    dropped =
+      if table_exists?() do
+        # A full scan, not a match spec: match specs cannot express "this list
+        # contains that element", and the table holds tens of entries, not
+        # millions. Simplicity wins at this size.
+        @table
+        |> :ets.tab2list()
+        |> Enum.count(fn {key, _value, _inserted_at, _expires_at, sources} ->
+          source in sources and :ets.delete(@table, key)
+        end)
+      else
+        0
+      end
+
+    if dropped > 0, do: bump(@stat_invalidations, dropped)
+
+    dropped
   end
 
   @doc "Drops everything. Used by tests and available from a remote console."
@@ -129,14 +179,119 @@ defmodule EftBuddy.Cache do
     if table_exists?(), do: :ets.info(@table, :size), else: 0
   end
 
+  @doc """
+  Bytes the table occupies, from `:ets.info/2`.
+
+  This is O(1). Summing `:erts_debug.flat_size/1` per entry would be more
+  precise but has to walk every term — which is fine for a handful of small
+  entries and emphatically not fine once something multi-megabyte is cached,
+  where it would make merely *looking* at the dashboard expensive.
+  """
+  def memory_bytes do
+    case table_exists?() do
+      true -> :ets.info(@table, :memory) * :erlang.system_info(:wordsize)
+      false -> 0
+    end
+  end
+
+  @doc """
+  Per-entry metadata — key, owning syncers, age and time left — for the
+  operator dashboard.
+
+  Deliberately excludes the cached **values**. They are the entire point of the
+  table and can be megabytes each; copying them out to render a page would make
+  observing the cache more expensive than using it.
+  """
+  def entries do
+    if table_exists?() do
+      now = now_ms()
+
+      @table
+      |> :ets.tab2list()
+      |> Enum.map(fn {key, _value, inserted_at, expires_at, sources} ->
+        %{
+          key: key,
+          sources: sources,
+          age_ms: now - inserted_at,
+          expires_in_ms: expires_at - now
+        }
+      end)
+      |> Enum.sort_by(& &1.age_ms)
+    else
+      []
+    end
+  end
+
+  @doc """
+  Cumulative hit / miss / invalidation counts since boot, plus the derived hit
+  rate.
+
+  The number that matters is the hit rate. A cache with a low one is not saving
+  round trips, it is adding a lookup to every read and a whole class of
+  staleness bug for nothing — and without this that would be invisible, because
+  a badly-keyed cache behaves *correctly* in every respect except the one it
+  exists for.
+  """
+  def stats do
+    {hits, misses, invalidations} =
+      case :persistent_term.get(@stats_key, nil) do
+        nil ->
+          {0, 0, 0}
+
+        ref ->
+          {:counters.get(ref, @stat_hits), :counters.get(ref, @stat_misses),
+           :counters.get(ref, @stat_invalidations)}
+      end
+
+    reads = hits + misses
+
+    %{
+      hits: hits,
+      misses: misses,
+      invalidations: invalidations,
+      # nil rather than 0 when nothing has been read yet: "no data" and "every
+      # read missed" are opposite diagnoses and must not render identically.
+      hit_rate: if(reads > 0, do: hits / reads, else: nil),
+      entries: size(),
+      memory_bytes: memory_bytes(),
+      enabled: enabled?()
+    }
+  end
+
   def enabled?, do: Application.get_env(:eft_buddy, :cache_enabled, true)
+
+  @doc false
+  # Invoked by `:telemetry_poller` (see `EftBuddyWeb.Telemetry`).
+  #
+  # Polled rather than event-driven for the same reason sync freshness is: the
+  # interesting states here are ones where nothing happens. A cache whose hit
+  # rate has collapsed emits no event — it just quietly stops helping — and an
+  # entry count stuck at zero after a sync means invalidation is firing and
+  # warming is not. Neither is visible from events alone.
+  def emit_telemetry do
+    s = stats()
+
+    :telemetry.execute(
+      [:eft_buddy, :cache, :state],
+      %{
+        entries: s.entries,
+        memory_bytes: s.memory_bytes,
+        hits: s.hits,
+        misses: s.misses,
+        # Percent, so it charts as an integer-ish gauge rather than a float
+        # between 0 and 1 that reads as "always zero" at a glance.
+        hit_rate_percent: if(s.hit_rate, do: round(s.hit_rate * 100), else: 0)
+      },
+      %{enabled: s.enabled}
+    )
+  end
 
   # ── internals ──────────────────────────────────────────────────────────────
 
   defp lookup(key) do
     if table_exists?() do
       case :ets.lookup(@table, key) do
-        [{^key, value, expires_at, _sources}] ->
+        [{^key, value, _inserted_at, expires_at, _sources}] ->
           if now_ms() < expires_at do
             {:ok, value}
           else
@@ -154,11 +309,47 @@ defmodule EftBuddy.Cache do
 
   defp put(key, value, sources, ttl_ms) do
     if table_exists?() do
-      :ets.insert(@table, {key, value, now_ms() + ttl_ms, sources})
+      now = now_ms()
+      :ets.insert(@table, {key, value, now, now + ttl_ms, sources})
+      enforce_cap()
     end
 
     :ok
   end
+
+  defp enforce_cap do
+    max = max_entries()
+
+    if :ets.info(@table, :size) > max do
+      # Select only `{inserted_at, key}` rather than whole objects: the values
+      # are the expensive part of this table and must not be copied out merely
+      # to decide which ones to drop.
+      @table
+      |> :ets.select([{{:"$1", :_, :"$2", :_, :_}, [], [{{:"$2", :"$1"}}]}])
+      |> Enum.sort()
+      |> Enum.take(max_evictions(max))
+      |> Enum.each(fn {_inserted_at, key} -> :ets.delete(@table, key) end)
+    end
+  end
+
+  # Evict in a batch rather than one-per-insert, so a table sitting exactly at
+  # the ceiling does not pay a full scan on every single write.
+  defp max_evictions(max), do: max(div(max, 10), 1)
+
+  defp sweep_expired do
+    if table_exists?() do
+      # A match spec, so expired entries are deleted without any of their values
+      # crossing into this process.
+      :ets.select_delete(@table, [
+        {{:_, :_, :_, :"$1", :_}, [{:<, :"$1", now_ms()}], [true]}
+      ])
+    else
+      0
+    end
+  end
+
+  defp max_entries,
+    do: Application.get_env(:eft_buddy, :cache_max_entries, @default_max_entries)
 
   # Writes go straight to ETS from the calling process rather than through the
   # GenServer, so a slow reader can never queue behind another one. The GenServer
@@ -172,8 +363,26 @@ defmodule EftBuddy.Cache do
 
   defp now_ms, do: System.monotonic_time(:millisecond)
 
+  defp bump(slot, by \\ 1) do
+    case :persistent_term.get(@stats_key, nil) do
+      nil -> :ok
+      ref -> :counters.add(ref, slot, by)
+    end
+  end
+
+  # Idempotent. A `:persistent_term.put/2` forces a global GC scan, so a
+  # supervisor restart of this GenServer must not pay for one again.
+  defp ensure_stats do
+    case :persistent_term.get(@stats_key, nil) do
+      nil -> :persistent_term.put(@stats_key, :counters.new(@stat_slots, [:write_concurrency]))
+      _ref -> :ok
+    end
+  end
+
   @impl true
   def init(_opts) do
+    ensure_stats()
+
     :ets.new(@table, [
       :set,
       :named_table,
@@ -189,19 +398,56 @@ defmodule EftBuddy.Cache do
       nil
     )
 
+    schedule_sweep()
+
     {:ok, %{}}
   end
+
+  @impl true
+  def handle_info(:sweep, state) do
+    swept = sweep_expired()
+
+    if swept > 0 do
+      Logger.debug("[Cache] swept #{swept} expired entries")
+    end
+
+    schedule_sweep()
+
+    {:noreply, state}
+  end
+
+  def handle_info(_msg, state), do: {:noreply, state}
+
+  defp schedule_sweep, do: Process.send_after(self(), :sweep, @sweep_interval_ms)
 
   @doc false
   # Labels arrive as "TasksSync" or "TasksSync:regular" — the suffix is a per-run
   # variant (game mode), and both write the same tables, so the prefix is what
   # ownership is keyed on.
+  #
+  # WRAPPED IN try/rescue, and this is the single most important defensive line
+  # in the module. `:telemetry` DETACHES a handler that raises, permanently and
+  # with only a log line to show for it. This handler *is* the invalidation
+  # mechanism, so an exception here would silently demote the whole cache to its
+  # 20-minute TTL — the exact failure the TTL exists to bound, arrived at through
+  # the mechanism meant to prevent it. Better to drop one invalidation and keep
+  # the handler than to lose every future one.
   def handle_sync_stop(@sync_event, _measurements, %{label: label}, _config)
       when is_binary(label) do
-    label
-    |> String.split(":", parts: 2)
-    |> hd()
-    |> invalidate_source()
+    source = label |> String.split(":", parts: 2) |> hd()
+    dropped = invalidate_source(source)
+
+    :telemetry.execute(
+      [:eft_buddy, :cache, :invalidated],
+      %{entries: dropped},
+      %{source: source}
+    )
+
+    :ok
+  rescue
+    e ->
+      Logger.error("[Cache] invalidation for #{inspect(label)} failed: #{Exception.message(e)}")
+      :ok
   end
 
   def handle_sync_stop(_event, _measurements, _metadata, _config), do: :ok

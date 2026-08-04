@@ -252,6 +252,30 @@ if config_env() == :prod do
     config :eft_buddy, :max_operator_sessions, String.to_integer(max_sessions)
   end
 
+  # The read cache, ON unless explicitly disabled. This is a KILL SWITCH, not a
+  # feature flag: the cache is the difference between a page rendering in 3 ms
+  # and 1,500 ms, so it should never need turning off — but if it ever serves
+  # something wrong, `CACHE_ENABLED=0` in .env plus a restart is seconds, while
+  # reverting the code is an Elixir release build and minutes of an evening.
+  #
+  # `EftBuddy.Cache.enabled?/0` already defaults to true, so this only ever
+  # subtracts. Warming reads the same flag and does nothing while it is off.
+  config :eft_buddy,
+         :cache_enabled,
+         System.get_env("CACHE_ENABLED", "1") not in ~w(0 false no)
+
+  # The in-memory item catalogue, OFF unless ITEM_DATASET is set.
+  #
+  # Opt-IN rather than opt-out, unlike the read cache above, because this one
+  # does not merely skip a query — it reimplements filtering, ordering and
+  # pagination, so its failure mode is returning the wrong ROWS rather than
+  # returning them slowly. Every read through it also falls back to SQL when the
+  # layer is not ready, so switching it off is a config change and a restart
+  # rather than a rebuild. See `EftBuddy.Items.Dataset`.
+  config :eft_buddy,
+         :item_dataset_enabled,
+         System.get_env("ITEM_DATASET", "0") in ~w(1 true yes)
+
   # The operator dashboard, OFF unless ADMIN_DASHBOARD_PORT is set. Absent, the
   # `:admin_dashboard` key is never written, `EftBuddy.Application` never adds the
   # endpoint to the supervision tree, and nothing binds the port. Fail-closed by

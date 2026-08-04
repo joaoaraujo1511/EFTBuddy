@@ -169,6 +169,57 @@ defmodule EftBuddy.CacheTest do
     end
   end
 
+  describe "observability" do
+    test "counts hits and misses so a cache that saves nothing is visible" do
+      # The failure this exists for: a cache whose written keys are not its read
+      # keys works perfectly — right answer, every time — while saving nothing
+      # and carrying every staleness risk. Nothing else in the system can tell
+      # that apart from a cache that is working.
+      before = Cache.stats()
+
+      Cache.fetch({:t, :counted}, ["ItemsSync"], fn -> :v end)
+      Cache.fetch({:t, :counted}, ["ItemsSync"], fn -> :v end)
+      Cache.fetch({:t, :counted}, ["ItemsSync"], fn -> :v end)
+
+      after_ = Cache.stats()
+
+      assert after_.misses - before.misses == 1
+      assert after_.hits - before.hits == 2
+    end
+
+    test "reports no hit rate at all before anything has been read" do
+      # nil, not 0.0. "Nothing has been asked for yet" and "every read missed"
+      # are opposite diagnoses and must not render identically on a dashboard.
+      assert %{hit_rate: rate} = Cache.stats()
+      assert is_nil(rate) or is_float(rate)
+    end
+
+    test "invalidate_source reports how many entries it dropped" do
+      # Zero dropped by a syncer that owns entries is the signature of a source
+      # name that no longer matches anything — a rename away from silently
+      # serving stale data forever.
+      Cache.fetch({:t, :a}, ["HideoutSync"], fn -> 1 end)
+      Cache.fetch({:t, :b}, ["HideoutSync"], fn -> 2 end)
+      Cache.fetch({:t, :c}, ["MapsSync"], fn -> 3 end)
+
+      assert Cache.invalidate_source("HideoutSync") == 2
+      assert Cache.invalidate_source("HideoutSync") == 0
+    end
+
+    test "entries expose metadata but never the cached values themselves" do
+      # Values are the point of the table and can be megabytes each; copying them
+      # out to render a page would make observing the cache cost more than using
+      # it.
+      Cache.fetch({:t, :meta}, ["ItemsSync", "PricesSync"], fn -> :a_large_value end)
+
+      assert [entry] = Enum.filter(Cache.entries(), &(&1.key == {:t, :meta}))
+      assert entry.sources == ["ItemsSync", "PricesSync"]
+      assert entry.age_ms >= 0
+      assert entry.expires_in_ms > 0
+      refute Map.has_key?(entry, :value)
+    end
+  end
+
   # Exactly the event `EftBuddy.Sync.Reporter.record_status/4` emits, so these
   # tests break if that contract changes rather than silently passing against a
   # shape nothing produces.

@@ -78,6 +78,31 @@ config :eft_buddy, start_sync: false
 # reflects code changes immediately.
 config :eft_buddy, cache_enabled: false
 
+# The warmer coalesces sync-completion events over a window before rebuilding
+# entries. Five seconds is right in production and is dead time in a suite: the
+# window's *duration* is not what any test asserts, only its effect. Shrink it so
+# `EftBuddy.Cache.WarmerTest` costs a second rather than forty.
+config :eft_buddy, cache_warm_debounce_ms: 50
+
+# The in-memory item catalogue is off by default here, so the existing Items and
+# Flea Market tests keep exercising the SQL path. The dataset's own tests enable
+# it explicitly — `DatasetEqualityTest` runs BOTH paths and compares them row for
+# row, and `DatasetDispatchTest` proves the right one is chosen.
+#
+# Set explicitly rather than left absent so the key always holds a real boolean:
+# `Application.get_env/3`'s default only applies to a MISSING key, so a test that
+# restores a previously-absent value by writing nil would otherwise leave nil
+# behind for everything after it.
+config :eft_buddy, item_dataset_enabled: false
+
+# No warm registry in test. The real one issues real queries, and a warm runs in
+# a process SPAWNED by the warmer — which does not own the Ecto sandbox
+# connection the test checked out, so it fails with a confusing ownership error
+# attributed to whichever test happened to be running when the debounce fired.
+# `EftBuddy.Cache.WarmerTest` injects its own harmless specs, and asserts against
+# `default_specs/0` directly where the real registry is what is under test.
+config :eft_buddy, cache_warm_specs: []
+
 # Print only warnings and errors during test
 config :logger, level: :warning
 

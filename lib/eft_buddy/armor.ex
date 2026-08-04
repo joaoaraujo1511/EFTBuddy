@@ -13,6 +13,7 @@ defmodule EftBuddy.Armor do
   import Ecto.Query
 
   alias EftBuddy.Armor.{Material, Plate}
+  alias EftBuddy.Cache
   alias EftBuddy.Repo
   alias EftBuddy.Sortable
 
@@ -43,9 +44,15 @@ defmodule EftBuddy.Armor do
 
   @doc "Every armor plate, with its `:item` preloaded."
   def list_plates do
-    Plate
-    |> preload(:item)
-    |> Repo.all()
+    # Two owners, and the second is easy to miss: the plates come from ArmorSync,
+    # but `preload(:item)` pulls names, icons and prices that ItemsSync owns. A
+    # cache keyed on ArmorSync alone would keep serving an item's old name until
+    # the next armor sync, which is daily.
+    Cache.fetch({__MODULE__, :list_plates}, ["ArmorSync", "ItemsSync"], fn ->
+      Plate
+      |> preload(:item)
+      |> Repo.all()
+    end)
   end
 
   @doc "The sortable plate column keys (the `col` values `sort_header/1` emits)."

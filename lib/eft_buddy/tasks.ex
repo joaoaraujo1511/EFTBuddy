@@ -62,9 +62,22 @@ defmodule EftBuddy.Tasks do
   query cost only when a row is actually opened, not at mount.
   """
   def get_task_details(task_id) when is_binary(task_id) do
-    from(t in Task, where: t.id == ^task_id)
-    |> preload(^@detail_preloads)
-    |> Repo.one()
+    # Keyed by task id — 1,016 possible keys, and only the ones actually opened
+    # are ever written. This is the read that fires when a visitor expands a row,
+    # so it is the difference between a panel that appears instantly and one that
+    # takes a visible beat.
+    #
+    # The second-level preloads reach into items, traders, maps and skills, so
+    # the owners are wider than TasksSync alone.
+    Cache.fetch(
+      {__MODULE__, :task_details, task_id},
+      ["TasksSync", "ItemsSync", "HideoutSync", "MapsSync"],
+      fn ->
+        from(t in Task, where: t.id == ^task_id)
+        |> preload(^@detail_preloads)
+        |> Repo.one()
+      end
+    )
   end
 
   def get_task_details(_), do: nil
@@ -232,7 +245,44 @@ defmodule EftBuddy.Tasks do
       twice (once per mode).
     * `:order_by` — defaults to `[asc: :name]`.
   """
+  # Two owners. The tasks are TasksSync's; the `:trader` preload resolves against
+  # `EftBuddy.Hideout.Trader`, which HideoutSync writes.
+  @list_tasks_sources ["TasksSync", "HideoutSync"]
+
+  # The preload shapes the application actually asks for: `[:trader]` from the
+  # Tasks page and `[]` from the storyline cross-link index.
+  @cacheable_preloads [[], [:trader]]
+
   def list_tasks(opts \\ []) do
+    case cache_key(opts) do
+      nil -> list_tasks_uncached(opts)
+      key -> Cache.fetch(key, @list_tasks_sources, fn -> list_tasks_uncached(opts) end)
+    end
+  end
+
+  # A WHITELIST, not a key built from `opts`.
+  #
+  # `list_tasks/1` is a general query builder — it accepts `:trader_slug`,
+  # `:faction`, `:order_by` and an arbitrary preload list — so keying the cache
+  # on the raw options would key it on a space this function cannot bound, which
+  # is the exact property that disqualifies the flea-market reads from being
+  # cached at all.
+  #
+  # It would also be a memory trap. The DEFAULT preload set is eleven
+  # associations and ~26MB per game mode; nothing in the app calls it that way
+  # today, and the first caller that did would silently park 26MB in ETS. So the
+  # default is deliberately not cacheable, and adding a shape here is a decision
+  # someone has to make on purpose.
+  defp cache_key(opts) do
+    {known, rest} = Keyword.split(opts, [:preloads, :game_mode])
+    preloads = Keyword.get(known, :preloads, @default_preloads)
+
+    if rest == [] and preloads in @cacheable_preloads do
+      {__MODULE__, :list_tasks, preloads, Keyword.get(known, :game_mode)}
+    end
+  end
+
+  defp list_tasks_uncached(opts) do
     preloads = Keyword.get(opts, :preloads, @default_preloads)
     order = Keyword.get(opts, :order_by, asc: :name)
 

@@ -47,6 +47,7 @@ defmodule EftBuddyWeb.HealthController do
   use EftBuddyWeb, :controller
 
   alias EftBuddy.BuildInfo
+  alias EftBuddy.Cache
   alias EftBuddy.Sync.Freshness
   alias EftBuddy.Sync.Reporter
 
@@ -88,7 +89,13 @@ defmodule EftBuddyWeb.HealthController do
       # Kept from the original payload: the raw last-run record per label. The
       # verdict above is derived from it, and having both means a reader can see
       # WHY the verdict is what it is without a second request.
-      runs: render_runs()
+      runs: render_runs(),
+      # REPORTED, NOT JUDGED. Deliberately excluded from `status`: a cold or
+      # even disabled cache is a performance state, not a correctness one, and
+      # draining the only instance over a low hit rate would turn a slow site
+      # into no site. It is here because the tunnel-only dashboard is not always
+      # open and this is the one place the numbers can be read with a curl.
+      cache: render_cache()
     }
 
     json_reply(conn, if(freshness.status == :ok, do: 200, else: 503), body)
@@ -116,6 +123,21 @@ defmodule EftBuddyWeb.HealthController do
          labels: f.labels
        }}
     end)
+  end
+
+  defp render_cache do
+    stats = Cache.stats()
+
+    %{
+      enabled: stats.enabled,
+      entries: stats.entries,
+      memory_bytes: stats.memory_bytes,
+      hits: stats.hits,
+      misses: stats.misses,
+      # null rather than 0 before anything has been read. "Nothing has been
+      # asked for yet" and "everything missed" are opposite diagnoses.
+      hit_rate: if(stats.hit_rate, do: Float.round(stats.hit_rate, 4))
+    }
   end
 
   defp render_runs do

@@ -29,6 +29,7 @@ defmodule EftBuddy.Events do
 
   import Ecto.Query
 
+  alias EftBuddy.Cache
   alias EftBuddy.Repo
   alias EftBuddy.Events.{Event, EventQuest}
   alias EftBuddy.Wiki.Projection
@@ -82,6 +83,10 @@ defmodule EftBuddy.Events do
   """
   @spec list_events() :: [event()]
   def list_events do
+    Cache.fetch({__MODULE__, :list_events}, ["EventsSync"], &list_events_uncached/0)
+  end
+
+  defp list_events_uncached do
     events =
       Repo.all(from(e in Event, order_by: [desc_nulls_last: e.started_on, asc: e.position]))
 

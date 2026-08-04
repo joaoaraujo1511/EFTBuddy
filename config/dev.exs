@@ -214,3 +214,13 @@ config :phoenix_live_view,
 #
 # Set `CACHE_ENABLED=1` to exercise it locally.
 config :eft_buddy, cache_enabled: System.get_env("CACHE_ENABLED") in ~w(1 true)
+
+# The in-memory item catalogue, off for the same reason. `ITEM_DATASET=1`
+# exercises it against the local database — worth doing before a deploy, since
+# it is the one layer that reimplements query semantics rather than skipping a
+# query, and the Items/Flea pages should look identical with it on and off.
+#
+# Note when comparing: a stock local Postgres and Supabase do NOT use the same
+# collation, so the two environments legitimately order punctuation-leading item
+# names differently. The dataset follows whichever database it is talking to.
+config :eft_buddy, item_dataset_enabled: System.get_env("ITEM_DATASET") in ~w(1 true)
