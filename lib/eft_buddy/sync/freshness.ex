@@ -124,6 +124,25 @@ defmodule EftBuddy.Sync.Freshness do
   def budgets, do: @budgets
 
   @doc """
+  Staleness budget in seconds for one label prefix, or `nil` if unknown or
+  `:boot_only`.
+
+  Exists so `EftBuddy.Cache.Warmer` can give a warm-written entry a TTL matched
+  to the feed that owns it, instead of the cache's flat default. This table is
+  already the single source of truth for "how often does this feed run, and how
+  long before absence is a problem", and it is drift-tested against the real
+  cadences — so deriving the TTL from it means a feed whose interval changes
+  cannot leave a cache TTL behind at the old number.
+  """
+  @spec budget_seconds(String.t()) :: pos_integer() | nil
+  def budget_seconds(prefix) when is_binary(prefix) do
+    Enum.find_value(@budgets, fn
+      {^prefix, budget, _owner} when is_integer(budget) -> budget
+      _ -> nil
+    end)
+  end
+
+  @doc """
   Readiness verdict for the background feeds.
 
   Returns `%{status: :ok | :degraded, uptime_seconds: n, syncs: %{family => t}}`.

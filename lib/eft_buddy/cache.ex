@@ -36,11 +36,18 @@ defmodule EftBuddy.Cache do
   handler detached by a bug, a feed quietly wedged. Without it, a cache keyed
   purely on an event that stops firing serves the same answer forever, and the
   failure is invisible: the page keeps rendering, just with data frozen at an
-  arbitrary point. The TTL bounds that to 20 minutes. When the event does
-  arrive, the TTL never comes into play.
+  arbitrary point. When the event does arrive, the TTL never comes into play.
 
   Belt and braces, deliberately: the mechanism is cheap and the failure it
   guards against is silent.
+
+  Entries written by `EftBuddy.Cache.Warmer` get a TTL derived from their
+  owning feed's staleness budget rather than the flat default. A twenty-minute
+  expiry is a sensible bound for a ten-minute price feed and a nonsense one for
+  a feed that runs daily — there it does not bound staleness, it just guarantees
+  the entry spends 23h40m of every cycle cold, which is how most of the warm
+  registry came to be expired in production. The bound is still real; it is now
+  the same number `/health/sync` reports on.
 
   ## What is safe to cache here
 

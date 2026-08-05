@@ -163,9 +163,24 @@ defmodule EftBuddy.Sync.Bootstrap do
 
     case :global.set_lock(@lock_id, nodes, 0) do
       true ->
+        # Hold warming until the whole sequence is done. The steps below are
+        # MINUTES apart, so the warmer's five-second debounce collapses nothing:
+        # each `:stop` event triggers its own batch, and the item catalogue —
+        # owned by five of these feeds — gets rebuilt four times, three of them
+        # against data the next step is about to overwrite.
+        #
+        # Suspension only stops the flush; source names still accumulate, so
+        # `resume/0` warms the union exactly once. It is in the `after` block
+        # with the lock release because a warmer left suspended by a crashed
+        # cold start would be permanently off. (`EftBuddy.Cache.Warmer` also
+        # self-resumes on a deadline, for the case this process is killed
+        # outright and never reaches the `after` at all.)
+        EftBuddy.Cache.Warmer.suspend()
+
         try do
           do_run()
         after
+          EftBuddy.Cache.Warmer.resume()
           :global.del_lock(@lock_id, nodes)
         end
 
