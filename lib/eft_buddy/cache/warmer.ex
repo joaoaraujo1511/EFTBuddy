@@ -413,6 +413,22 @@ defmodule EftBuddy.Cache.Warmer do
   """
   def coverage, do: GenServer.call(__MODULE__, :coverage)
 
+  @doc false
+  # Invoked by `:telemetry_poller` (see `EftBuddyWeb.Telemetry`).
+  #
+  # Polled rather than event-driven, for the same reason the cache's own state
+  # is: the interesting condition here is one where nothing happens. A registry
+  # that has gone cold emits no event — it just stops being warm.
+  def emit_telemetry do
+    summary = coverage_summary()
+
+    :telemetry.execute(
+      [:eft_buddy, :cache, :warm, :state],
+      %{specs_live: summary.live, specs_total: summary.total},
+      %{}
+    )
+  end
+
   @doc "Summary of `coverage/0`: how many specs are live, and which are not."
   def coverage_summary do
     rows = coverage()

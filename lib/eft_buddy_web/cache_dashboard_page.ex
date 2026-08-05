@@ -48,18 +48,27 @@ defmodule EftBuddyWeb.CacheDashboardPage do
 
   @impl true
   def handle_event("warm", _params, socket) do
-    Warmer.warm_all()
+    Warmer.warm_all(:light)
 
-    # Asynchronous by design — `warm_all/0` returns before the batch has run, so
+    # Asynchronous by design — `warm_all/1` returns before the batch has run, so
     # the numbers below will not have moved yet. The refresh loop picks them up.
     {:noreply, load(socket)}
   end
 
+  def handle_event("warm_all", _params, socket) do
+    Warmer.warm_all(:all)
+
+    {:noreply, load(socket)}
+  end
+
   defp load(socket) do
+    coverage = Warmer.coverage()
+
     assign(socket,
       stats: Cache.stats(),
       entries: Cache.entries(),
-      specs: Warmer.specs(),
+      coverage: coverage,
+      summary: Warmer.coverage_summary(),
       dataset: EftBuddy.Items.Dataset.stats()
     )
   end
@@ -69,22 +78,52 @@ defmodule EftBuddyWeb.CacheDashboardPage do
     ~H"""
     <.row>
       <:col>
-        <.card title="Entries" inner_title={state_label(@stats)}>
-          {@stats.entries}
+        <.card
+          title="Warm coverage"
+          inner_title={coverage_label(@summary)}
+          inner_hint="How many registered warm specs are actually live right now. This is the number that catches a cache that has quietly gone cold: entry count, memory and hit rate can all look plausible while most of the registry has expired, because none of them can express 'what should be warm is not'."
+        >
+          {@summary.live} / {@summary.total}
         </.card>
       </:col>
       <:col>
         <.card
           title="Hit rate"
-          inner_title="since boot"
-          inner_hint="Hits over total reads. A low rate means the keys being written are not the keys being read — every page still works, and the cache saves nothing."
+          inner_title="visitor reads only"
+          inner_hint="Hits over total VISITOR reads; the warmer's own reads are counted separately below. A low rate means the keys being written are not the keys being read — every page still works, and the cache saves nothing."
         >
           {hit_rate(@stats)}
         </.card>
       </:col>
       <:col>
+        <.card title="Entries" inner_title={entries_label(@stats)}>
+          {@stats.entries}
+        </.card>
+      </:col>
+    </.row>
+
+    <.row>
+      <:col>
         <.card title="Table memory" inner_title={"#{@stats.hits} hits / #{@stats.misses} misses"}>
           {bytes(@stats.memory_bytes)}
+        </.card>
+      </:col>
+      <:col>
+        <.card
+          title="Warmer reads"
+          inner_title={"#{@stats.warm_writes} entries written"}
+          inner_hint="Reads the warmer made, not visitors. This reads INVERSELY to the hit rate above: with the liveness probe working, warm hits should sit near zero, because the warmer should almost never be reading something it already has. A high warm hit rate means the probe is failing to skip."
+        >
+          {@stats.warm_hits} / {@stats.warm_hits + @stats.warm_misses}
+        </.card>
+      </:col>
+      <:col>
+        <.card
+          title="Expiry"
+          inner_title={"repair every #{duration(Warmer.repair_interval_ms())}"}
+          inner_hint="The default TTL, and the interval at which the warmer re-probes and rebuilds anything that expired. The repair interval is DERIVED from the TTL so the two cannot drift — a warmer ticking on one number while the cache expires on another is what left most of the registry cold."
+        >
+          {duration(Cache.default_ttl_ms())}
         </.card>
       </:col>
     </.row>
@@ -147,7 +186,7 @@ defmodule EftBuddyWeb.CacheDashboardPage do
 
     <.card_title
       title="Warm registry"
-      hint="Which reads get rebuilt ahead of any request, and which syncers finishing trigger the rebuild."
+      hint="Which reads get rebuilt ahead of any request, which syncers finishing trigger the rebuild, and whether each one is live right now. A cold row means the next visitor to that page pays the full read."
     />
     <div class="card mb-4">
       <div class="card-body p-0">
@@ -155,16 +194,22 @@ defmodule EftBuddyWeb.CacheDashboardPage do
           <thead>
             <tr>
               <th>Spec</th>
+              <th>Kind</th>
               <th>Rebuilt when these finish</th>
+              <th class="text-right">Live</th>
+              <th class="text-right">Last warm</th>
             </tr>
           </thead>
           <tbody>
-            <tr :for={spec <- @specs}>
-              <td class="tabular-column-name">{spec.label}</td>
-              <td>{Enum.join(spec.sources, ", ")}</td>
+            <tr :for={row <- @coverage}>
+              <td class="tabular-column-name">{row.label}</td>
+              <td>{kind_label(row)}</td>
+              <td>{Enum.join(row.sources, ", ")}</td>
+              <td class="text-right">{live_label(row)}</td>
+              <td class="text-right">{last_warm_label(row)}</td>
             </tr>
-            <tr :if={@specs == []}>
-              <td colspan="2" class="text-center py-3">
+            <tr :if={@coverage == []}>
+              <td colspan="5" class="text-center py-3">
                 No warm specs registered — every entry is built by whichever visitor
                 happens to arrive first after a sync.
               </td>
@@ -177,11 +222,37 @@ defmodule EftBuddyWeb.CacheDashboardPage do
     <button class="btn btn-primary" phx-click="warm">
       Warm now
     </button>
+    <button class="btn btn-secondary ml-2" phx-click="warm_all">
+      Warm now, including bulk sets
+    </button>
     """
   end
 
-  defp state_label(%{enabled: false}), do: "DISABLED"
-  defp state_label(_), do: "live"
+  defp coverage_label(%{cold: []}), do: "all live"
+  defp coverage_label(%{cold: cold}) when length(cold) <= 3, do: "cold: " <> Enum.join(cold, ", ")
+  defp coverage_label(%{cold: cold}), do: "#{length(cold)} cold, incl. #{hd(cold)}"
+
+  defp entries_label(%{enabled: false}), do: "DISABLED"
+
+  defp entries_label(stats),
+    do: "#{stats.warm_entries} warm / #{stats.read_entries} read — ceiling #{stats.max_entries}"
+
+  defp kind_label(%{kind: kind, cost: :heavy}), do: "#{kind} (heavy)"
+  defp kind_label(%{kind: kind, periodic: false}), do: "#{kind}, not ticked"
+  defp kind_label(%{kind: kind}), do: to_string(kind)
+
+  # `:external` specs write outside this cache, so there is nothing to probe.
+  # Rendering them as 0/0 would read as cold forever.
+  defp live_label(%{state: :unprobed}), do: "n/a"
+  defp live_label(%{live: live, expected: expected}), do: "#{live} / #{expected}"
+
+  defp last_warm_label(%{last_warm_at: nil}), do: "never"
+
+  defp last_warm_label(row) do
+    ago = DateTime.diff(DateTime.utc_now(), row.last_warm_at, :millisecond)
+
+    "#{duration(ago)} ago · #{row.last_outcome}"
+  end
 
   defp dataset_state(%{enabled: false}), do: "OFF — serving from SQL"
   defp dataset_state(%{building: true}), do: "rebuilding — SQL meanwhile"
