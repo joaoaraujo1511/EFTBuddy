@@ -151,12 +151,22 @@ defmodule EftBuddy.Cache do
   def invalidate_source(source) when is_binary(source) do
     dropped =
       if table_exists?() do
-        # A full scan, not a match spec: match specs cannot express "this list
-        # contains that element", and the table holds tens of entries, not
-        # millions. Simplicity wins at this size.
+        # Still a full scan — match specs cannot express "this list contains
+        # that element", so ownership has to be tested in Elixir. But the scan
+        # selects only `{key, sources}`: the VALUES never cross into this
+        # process.
+        #
+        # That distinction is the whole point. This runs inside the telemetry
+        # handler, which runs on the SYNCER'S OWN PROCESS, and the table now
+        # holds thousands of precomputed detail payloads. A `tab2list/1` here
+        # would copy every one of them onto a syncer's heap on every single
+        # sync completion. An earlier version of this function did exactly
+        # that, under a comment reasoning that the table "holds tens of
+        # entries, not millions" — true when it was written, and the warming
+        # work invalidated it.
         @table
-        |> :ets.tab2list()
-        |> Enum.count(fn {key, _value, _inserted_at, _expires_at, sources} ->
+        |> :ets.select([{{:"$1", :_, :_, :_, :"$2"}, [], [{{:"$1", :"$2"}}]}])
+        |> Enum.count(fn {key, sources} ->
           source in sources and :ets.delete(@table, key)
         end)
       else
@@ -201,14 +211,20 @@ defmodule EftBuddy.Cache do
   Deliberately excludes the cached **values**. They are the entire point of the
   table and can be megabytes each; copying them out to render a page would make
   observing the cache more expensive than using it.
+
+  The exclusion has to happen in the MATCH SPEC, not in the `Enum.map/2` that
+  builds these maps. Dropping the value after `:ets.tab2list/1` has already
+  copied it is not an exclusion at all — it just makes the garbage collector,
+  rather than the map, responsible for hundreds of megabytes on every dashboard
+  render.
   """
   def entries do
     if table_exists?() do
       now = now_ms()
 
       @table
-      |> :ets.tab2list()
-      |> Enum.map(fn {key, _value, inserted_at, expires_at, sources} ->
+      |> :ets.select([{{:"$1", :_, :"$2", :"$3", :"$4"}, [], [{{:"$1", :"$2", :"$3", :"$4"}}]}])
+      |> Enum.map(fn {key, inserted_at, expires_at, sources} ->
         %{
           key: key,
           sources: sources,
@@ -319,22 +335,30 @@ defmodule EftBuddy.Cache do
 
   defp enforce_cap do
     max = max_entries()
+    size = :ets.info(@table, :size)
 
-    if :ets.info(@table, :size) > max do
+    if size > max do
       # Select only `{inserted_at, key}` rather than whole objects: the values
       # are the expensive part of this table and must not be copied out merely
       # to decide which ones to drop.
       @table
       |> :ets.select([{{:"$1", :_, :"$2", :_, :_}, [], [{{:"$2", :"$1"}}]}])
       |> Enum.sort()
-      |> Enum.take(max_evictions(max))
+      |> Enum.take(evictions_needed(size, max))
       |> Enum.each(fn {_inserted_at, key} -> :ets.delete(@table, key) end)
     end
   end
 
-  # Evict in a batch rather than one-per-insert, so a table sitting exactly at
-  # the ceiling does not pay a full scan on every single write.
-  defp max_evictions(max), do: max(div(max, 10), 1)
+  # Evict a BATCH rather than one-per-insert, so a table sitting exactly at the
+  # ceiling does not pay a full scan on every single write — but never fewer
+  # than it takes to get back under the ceiling.
+  #
+  # The flat 10% this replaced was correct only while every write was a single
+  # `fetch/4` miss, which can put the table at most one entry over. A bulk warm
+  # inserts thousands at once, and a fixed 10% would then leave the table over
+  # the ceiling after a full scan-and-sort — repeated on the next write, and
+  # the next.
+  defp evictions_needed(size, max), do: max(size - max, div(max, 10))
 
   defp sweep_expired do
     if table_exists?() do
