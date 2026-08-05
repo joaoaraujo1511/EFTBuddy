@@ -90,3 +90,15 @@ private/
 graphify-out/
 .claude/
 .vscode/
+
+# Scratch handoff notes get written to the repo root while work is in progress,
+# and they are not meant to be committed. Four of them once rode a `git add -A`
+# onto public main, carrying the VM's address, the pooler host and an
+# outstanding password-rotation note with them.
+#
+# Ignoring root markdown by default mirrors the .dockerignore rule that already
+# keeps these out of the image, so a new scratch file is safe the moment it is
+# created rather than only if someone remembers to stage selectively.
+/*.md
+!/README.md
+!/AGENTS.md
