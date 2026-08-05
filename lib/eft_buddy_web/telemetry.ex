@@ -181,11 +181,25 @@ defmodule EftBuddyWeb.Telemetry do
         description: "Live cache entries"
       ),
       last_value("eft_buddy.cache.state.hit_rate_percent",
-        description: "Share of reads served from memory since boot"
+        description: "Share of VISITOR reads served from memory since boot"
       ),
       last_value("eft_buddy.cache.state.memory_bytes",
         unit: {:byte, :kilobyte},
         description: "Memory the cache table occupies"
+      ),
+      last_value("eft_buddy.cache.state.warm_entries",
+        description: "Entries written by the warmer rather than by a request"
+      ),
+
+      # The metric that catches the failure the others cannot express. Entry
+      # count, memory and hit rate can all look healthy while most of the warm
+      # registry has quietly expired — this is "how many of the reads that are
+      # supposed to be precomputed actually are".
+      last_value("eft_buddy.cache.warm.state.specs_live",
+        description: "Warm specs currently live"
+      ),
+      last_value("eft_buddy.cache.warm.state.specs_total",
+        description: "Warm specs registered"
       ),
 
       # How much a finishing sync actually dropped. Zero entries dropped by a
@@ -218,7 +232,12 @@ defmodule EftBuddyWeb.Telemetry do
     [
       {EftBuddy.Sync.Reporter, :emit_freshness, []},
       {EftBuddy.OperatorSessions, :emit_telemetry, []},
-      {EftBuddy.Cache, :emit_telemetry, []}
+      {EftBuddy.Cache, :emit_telemetry, []},
+      # Separate from `Cache.emit_telemetry/0` rather than folded into it:
+      # coverage is the WARMER's knowledge (it owns the registry), and computing
+      # it inside the cache would invert the dependency for a dashboard
+      # convenience.
+      {EftBuddy.Cache.Warmer, :emit_telemetry, []}
     ]
   end
 end

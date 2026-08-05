@@ -45,13 +45,66 @@ defmodule EftBuddy.Wiki do
   """
   @spec get_quest(String.t()) :: quest() | nil
   def get_quest(slug) when is_binary(slug) and slug != "" do
-    case Repo.get_by(QuestPage, normalized_name: slug) do
-      nil -> nil
-      %QuestPage{content: content} -> Projection.project(content)
+    # Guarded on the slug SET rather than cached directly on `slug`.
+    #
+    # Two reasons, and the second is the important one. First, key-space:
+    # `wiki_lookup_slugs/1` in the Tasks LiveView derives up to three candidate
+    # slugs per task from its name, so caching every lookup would mint ~3,000
+    # entries, most of them `nil`, keyed on strings no wiki row will ever match.
+    #
+    # Second, and this is what a plain `Cache.fetch` would not fix: `task_wiki/1`
+    # probes those candidates with `Enum.find_value/2`, so MOST calls here are
+    # misses by construction. Testing membership of an already-cached set makes
+    # a miss cost zero round trips instead of one, which is most of the win on a
+    # quest expand.
+    if MapSet.member?(quest_slugs(), slug) do
+      Cache.fetch({__MODULE__, :quest, slug}, ["WikiSync"], fn ->
+        case Repo.get_by(QuestPage, normalized_name: slug) do
+          nil -> nil
+          %QuestPage{content: content} -> Projection.project(content)
+        end
+      end)
     end
   end
 
   def get_quest(_), do: nil
+
+  @doc false
+  # Precompute every quest's projected content.
+  #
+  # One query for all of them, then one `Projection.project/1` per row. The
+  # projection is the expensive half — it walks each page's stored manifest —
+  # and doing it here means a quest expand never pays for it.
+  def warm_quests do
+    rows =
+      Repo.all(from(q in QuestPage, select: {q.normalized_name, q.content}))
+
+    rows
+    |> Enum.chunk_every(Cache.warm_chunk_size())
+    |> Enum.each(fn chunk ->
+      entries =
+        Enum.map(chunk, fn {slug, content} ->
+          {{__MODULE__, :quest, slug}, Projection.project(content)}
+        end)
+
+      Cache.put_many(entries, ["WikiSync"])
+      Process.sleep(Cache.warm_chunk_pause_ms())
+    end)
+
+    {:ok, length(rows)}
+  end
+
+  @doc false
+  # The set of slugs `wiki_quests` actually has a row for.
+  #
+  # Derived from the already-cached, already-warmed `all_quests/0`, so it costs
+  # no extra query — and it is what keeps `{Wiki, :quest, slug}` keyed on rows
+  # that exist rather than on every string a caller can construct.
+  def quest_slugs do
+    Cache.fetch({__MODULE__, :quest_slugs}, ["WikiSync"], fn ->
+      MapSet.new(all_quests(), & &1.normalized_name)
+    end)
+  end
 
   @doc """
   Lightweight rows for every wiki quest, used by the Quests tab to
@@ -88,7 +141,12 @@ defmodule EftBuddy.Wiki do
   @doc "Is there wiki content available for this slug?"
   @spec has_wiki?(String.t()) :: boolean()
   def has_wiki?(slug) when is_binary(slug) and slug != "" do
-    Repo.exists?(from(q in QuestPage, where: q.normalized_name == ^slug))
+    # A set membership test, not a `Repo.exists?`. It has no callers in `lib/`
+    # today, but the per-task version of exactly this query is what once made a
+    # `/tasks` mount cost 500-1200 round trips — leaving a queryful
+    # implementation here invites that straight back the next time someone needs
+    # a badge.
+    MapSet.member?(quest_slugs(), slug)
   end
 
   def has_wiki?(_), do: false
@@ -130,6 +188,12 @@ defmodule EftBuddy.Wiki do
   """
   @spec karma_requirements() :: %{String.t() => {:gte | :lte, integer()}}
   def karma_requirements do
+    # On the connected mount of `/tasks`, which is the app's landing page, so
+    # this ran on every arrival.
+    Cache.fetch({__MODULE__, :karma_requirements}, ["WikiSync"], &karma_requirements_uncached/0)
+  end
+
+  defp karma_requirements_uncached do
     Repo.all(
       from(q in QuestPage,
         where: not is_nil(q.karma_kind),

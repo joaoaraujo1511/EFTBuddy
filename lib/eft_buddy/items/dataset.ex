@@ -235,6 +235,28 @@ defmodule EftBuddy.Items.Dataset do
     :ok
   end
 
+  @doc """
+  One item with the active mode's prices overlaid, straight from memory.
+
+  Exists so `EftBuddy.Items.get_item_details/2` can serve the price-dependent
+  half of a detail panel without a query, while the eight relational halves come
+  from a cache entry that a ten-minute price tick does not touch. Returns nil
+  when the layer is not ready or the item is unknown, and callers fall back to
+  SQL — the same contract as every other read here.
+  """
+  def item_with_price(item_id, game_mode) do
+    # Goes through the projection table rather than straight to `@rows`, so it
+    # takes the same `materialize/2` path every listing row does — and therefore
+    # the same `overlay_price/2`, which is what the equality tests pin against
+    # the SQL overlay.
+    if ready?(game_mode) do
+      case :ets.lookup(@filter, item_id) do
+        [row] -> materialize(row, db_mode(game_mode))
+        [] -> nil
+      end
+    end
+  end
+
   @doc "Drop everything. For tests and for a remote console."
   def clear do
     for table <- [@rows, @filter, @prices, @meta] do

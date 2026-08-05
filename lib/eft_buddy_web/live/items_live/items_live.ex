@@ -552,10 +552,15 @@ defmodule EftBuddyWeb.ItemsLive.Index do
   # stays free of a dependency on the storyline (Chapters) data. No-op for
   # a nil payload (unknown item id).
   #
-  # `Chapters.chapters_for_item/1` reads and projects the `wiki_chapters`
-  # rows from Postgres - it is NOT an ETS lookup, whatever earlier comments
-  # here claimed. The curated chapter set is ~13 rows, so the read is small,
-  # but it is a query and it runs per expand.
+  # `Chapters.chapters_for_item/1` filters `Chapters.list_chapters/0`, which IS
+  # cached and warmed ("chapters.list" in the warm registry), so on a warm node
+  # this costs no round trip — only an in-memory scan of ~13 chapters' item
+  # lists. An earlier comment here asserted the opposite ("it is NOT an ETS
+  # lookup ... it is a query and it runs per expand"); it was describing an
+  # older implementation.
+  #
+  # The scan does re-run `normalize_item_name/1` per item on every expand, which
+  # is CPU rather than I/O. Small enough to leave alone.
   defp with_related_chapters(nil), do: nil
 
   defp with_related_chapters(details) do

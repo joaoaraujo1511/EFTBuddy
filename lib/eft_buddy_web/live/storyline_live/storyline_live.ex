@@ -4,7 +4,6 @@ defmodule EftBuddyWeb.StorylineLive.Index do
   import EftBuddyWeb.StorylineComponents
 
   alias EftBuddy.Chapters
-  alias EftBuddy.Items
 
   @impl true
   def mount(_params, _session, socket) do
@@ -65,8 +64,11 @@ defmodule EftBuddyWeb.StorylineLive.Index do
   # resolution if the item DB is unavailable.
   defp build_item_index(nil), do: %{}
 
-  defp build_item_index(endings) do
-    endings.items |> Enum.map(& &1.page) |> Items.resolve_wiki_items()
+  defp build_item_index(_endings) do
+    # The same shared, cached, warmed index the chapter pages use. A superset of
+    # the endings' own items, which is behaviourally identical here — the
+    # component only ever looks pages up by name.
+    Chapters.item_index()
   rescue
     # Storyline is wiki-only; tolerate the item DB being down or
     # un-migrated, but let genuine bugs crash rather than silently

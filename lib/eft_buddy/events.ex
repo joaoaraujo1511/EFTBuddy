@@ -123,6 +123,23 @@ defmodule EftBuddy.Events do
   """
   @spec get_quest_detail(String.t()) :: map() | nil
   def get_quest_detail(quest_id) when is_binary(quest_id) do
+    # Cast BEFORE the lookup. `quest_id` arrives straight from `phx-value-id`,
+    # and `EventQuest`'s primary key is a `:binary_id` — so a non-UUID binary
+    # made `Repo.get/2` raise `Ecto.Query.CastError` and kill the LiveView,
+    # which then reconnected into the same push. Casting also keeps the cache
+    # key space UUID-shaped rather than "any string a client can send".
+    case Ecto.UUID.cast(quest_id) do
+      {:ok, id} ->
+        Cache.fetch({__MODULE__, :quest_detail, id}, ["EventsSync"], fn -> project(id) end)
+
+      :error ->
+        nil
+    end
+  end
+
+  def get_quest_detail(_), do: nil
+
+  defp project(quest_id) do
     case Repo.get(EventQuest, quest_id) do
       %EventQuest{content: content} when is_map(content) and map_size(content) > 0 ->
         # Merge in the full walkthrough (galleries from every walkthrough
@@ -137,8 +154,6 @@ defmodule EftBuddy.Events do
         nil
     end
   end
-
-  def get_quest_detail(_), do: nil
 
   @doc """
   The de-duplicated set of every event-quest slug, as a `MapSet`.

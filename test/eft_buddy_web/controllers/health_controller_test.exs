@@ -173,4 +173,31 @@ defmodule EftBuddyWeb.HealthControllerTest do
       end
     end
   end
+
+  describe "the cache block" do
+    test "reports warm coverage, including which specs are cold" do
+      # `cold` is the field that diagnoses rather than describes. A single curl
+      # answering `"cold": []` is how an operator confirms warming actually
+      # holds between syncs — the property a flat 20-minute TTL against 6-24h
+      # feeds silently got wrong, while every other number looked fine.
+      body = build_conn() |> get("/health/sync") |> json_response(200)
+
+      assert %{"cache" => %{"warm" => warm}} = body
+
+      assert is_integer(warm["specs_total"])
+      assert is_integer(warm["specs_live"])
+      assert is_list(warm["cold"])
+    end
+
+    test "cache state never changes the HTTP status" do
+      # Deliberately reported, not judged. This endpoint gates readiness, and
+      # draining the only instance because its cache is cold turns a slow site
+      # into no site — the cache is at its coldest immediately after the deploy
+      # that would be rolling out. Pinned so a well-meaning future change cannot
+      # quietly fold it into the verdict.
+      EftBuddy.Cache.clear()
+
+      assert build_conn() |> get("/health/sync") |> json_response(200)
+    end
+  end
 end

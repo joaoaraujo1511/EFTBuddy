@@ -264,6 +264,17 @@ if config_env() == :prod do
          :cache_enabled,
          System.get_env("CACHE_ENABLED", "1") not in ~w(0 false no)
 
+  # Cache entry ceiling.
+  #
+  # Overridable because the warm set is bounded by the game's CONTENT, not by
+  # traffic: every task and item detail panel is precomputed, so the floor grows
+  # with a wipe rather than with visitors. `EftBuddy.Cache` refuses to evict warm
+  # entries to stay under this — it logs and overshoots instead — so a ceiling
+  # set below the warm set's size is an error message, not a memory bound.
+  config :eft_buddy,
+         :cache_max_entries,
+         String.to_integer(System.get_env("CACHE_MAX_ENTRIES") || "20000")
+
   # The in-memory item catalogue, OFF unless ITEM_DATASET is set.
   #
   # Opt-IN rather than opt-out, unlike the read cache above, because this one
@@ -275,6 +286,20 @@ if config_env() == :prod do
   config :eft_buddy,
          :item_dataset_enabled,
          System.get_env("ITEM_DATASET", "0") in ~w(1 true yes)
+
+  # Precomputing every item's detail panel, OFF unless ITEM_DETAILS is set.
+  #
+  # Opt-in only because its MEMORY cost is the one number in the caching work
+  # that cannot be derived by reading code — the payloads embed item structs
+  # once per recipe per participating item, and the estimate spans a wide range.
+  # Measure on the box before enabling; see `EftBuddy.Items.warm_item_details/1`.
+  #
+  # Unlike ITEM_DATASET, this gates only the BUILDER. `get_item_details/2` reads
+  # the same key either way, so turning it off changes latency and can never
+  # change an answer.
+  config :eft_buddy,
+         :item_details_precompute_enabled,
+         System.get_env("ITEM_DETAILS", "0") in ~w(1 true yes)
 
   # The operator dashboard, OFF unless ADMIN_DASHBOARD_PORT is set. Absent, the
   # `:admin_dashboard` key is never written, `EftBuddy.Application` never adds the

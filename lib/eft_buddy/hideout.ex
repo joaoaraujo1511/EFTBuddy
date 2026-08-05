@@ -14,9 +14,17 @@ defmodule EftBuddy.Hideout do
   alias EftBuddy.Cache
   alias EftBuddy.Repo
 
-  # Every read here is owned by this syncer: nothing else writes the hideout
-  # tables, so its completion is exactly when a cached answer stops being true.
+  # The hideout tables themselves have exactly one writer.
   @source "HideoutSync"
+
+  # But the requirement reads EMBED items. `item_requirements` preloads
+  # `[item: i]`, and the grid renders `r.item.name` and `r.item.icon_link`, so a
+  # rename or a new icon from ItemsSync changes what those entries should say.
+  # Keyed on HideoutSync alone they would keep the old name until the next
+  # hideout sync — a DAILY feed. `cache_source_map_test.exs` exists to catch
+  # exactly this class of under-declaration; the hideout entries were simply
+  # never covered by it.
+  @requirement_sources [@source, "ItemsSync"]
 
   alias EftBuddy.Hideout.{
     ItemRequirement,
@@ -67,30 +75,14 @@ defmodule EftBuddy.Hideout do
   """
   def get_level_requirements(slug, level)
       when is_binary(slug) and is_integer(level) and level >= 1 do
-    query =
-      from(l in StationLevel,
-        join: s in assoc(l, :station),
-        where: s.normalized_name == ^slug and l.level == ^level,
-        preload: [
-          item_requirements: ^item_requirements_query(),
-          station_level_requirements: [:required_station],
-          skill_requirements: [:skill],
-          trader_requirements: [:trader]
-        ]
-      )
-
-    case Repo.one(query) do
-      nil ->
-        nil
-
-      level_row ->
-        %{
-          item_requirements: level_row.item_requirements,
-          station_level_requirements: level_row.station_level_requirements,
-          skill_requirements: level_row.skill_requirements,
-          trader_requirements: level_row.trader_requirements
-        }
-    end
+    # Delegates rather than issuing its own query, so there is exactly ONE read
+    # path for hideout requirements. The single-pair version used to be
+    # uncached, which made it invisible to every warming and invalidation
+    # mechanism in the app — and it was the version the LiveView reached on a
+    # fresh mount, once per station.
+    [{slug, level}]
+    |> get_level_requirements_for()
+    |> Map.get({slug, level})
   end
 
   def get_level_requirements(_, _), do: nil
@@ -111,18 +103,42 @@ defmodule EftBuddy.Hideout do
   The cost of a round trip is what makes this matter, not the cost of the query:
   every one of those 155 queries was individually trivial. Against a database on
   localhost the same N+1 is invisible, which is exactly why it survived.
+
+  ## Caching is per PAIR, not per request
+
+  Each `{slug, level}` gets its own entry and the batched query fills only the
+  ones that missed. That keeps both properties at once: the N+1 cannot come back
+  (one query for the whole miss set) and the entries are shared by every visitor
+  (one per row in `hideout_station_levels`, about eighty).
+
+  This used to cache on the whole sorted pair list instead. That was survivable
+  only because the single caller always asked for the same all-stations-at-base
+  set, so there was exactly one key. The moment a caller passes an operator's
+  actual board — which is what the level-restore path needs to do — that key
+  becomes the product of every station's level, near enough per-visitor, missing
+  almost always, and evicting the genuinely shared entries to store it. It is
+  the pattern `EftBuddy.Cache`'s own moduledoc rules out, and it cannot be
+  warmed ahead of time because the server cannot enumerate boards nobody has
+  visited yet.
   """
   def get_level_requirements_for([]), do: %{}
 
   def get_level_requirements_for(pairs) when is_list(pairs) do
-    # Sorted so two callers asking for the same set in a different order share an
-    # entry instead of each populating their own.
-    Cache.fetch(
-      {__MODULE__, :level_requirements_for, Enum.sort(pairs)},
-      [@source],
-      fn -> get_level_requirements_for_uncached(pairs) end
-    )
+    pairs = Enum.uniq(pairs)
+
+    pairs
+    |> Enum.map(&cache_key/1)
+    |> Cache.fetch_many(@requirement_sources, fn missing_keys ->
+      missing_keys
+      |> Enum.map(&pair_from_key/1)
+      |> get_level_requirements_for_uncached()
+      |> Map.new(fn {pair, reqs} -> {cache_key(pair), reqs} end)
+    end)
+    |> Map.new(fn {key, reqs} -> {pair_from_key(key), reqs} end)
   end
+
+  defp cache_key({slug, level}), do: {__MODULE__, :level_requirements, slug, level}
+  defp pair_from_key({__MODULE__, :level_requirements, slug, level}), do: {slug, level}
 
   defp get_level_requirements_for_uncached(pairs) do
     # Grouped by level so the WHERE clause stays exact rather than fetching the
@@ -177,12 +193,49 @@ defmodule EftBuddy.Hideout do
       when is_binary(slug) and is_integer(up_to_level) and up_to_level >= 1 do
     Cache.fetch(
       {__MODULE__, :total_item_cost, slug, up_to_level},
-      [@source],
+      # Selects `item: i`, so ItemsSync owns half of what this renders. Same
+      # under-declaration as the requirement reads above.
+      @requirement_sources,
       fn -> get_total_item_cost_uncached(slug, up_to_level) end
     )
   end
 
   def get_total_item_cost(_, _), do: []
+
+  # ── Warming ────────────────────────────────────────────
+
+  @doc false
+  # Every `{slug, level}` the grid can ask for, in one batched read.
+  #
+  # Possible precisely because the entries are per-pair: this covers EVERY
+  # operator's board, not just the all-at-base-level one the old whole-list key
+  # could hold. Two queries — the pair list, then the batch.
+  def warm_level_requirements do
+    pairs =
+      from(l in StationLevel,
+        join: s in assoc(l, :station),
+        select: {s.normalized_name, l.level}
+      )
+      |> Repo.all()
+
+    get_level_requirements_for(pairs)
+
+    {:ok, length(pairs)}
+  end
+
+  @doc false
+  # `populate_items_used/1` in the LiveView fires for every station at MAX
+  # level, so an operator with a fully built hideout pays one of these per
+  # station on the first mount after each sync. Warming with `max` matches that
+  # call site exactly — warming any other level would populate keys the UI never
+  # reads.
+  def warm_total_item_costs do
+    modules = Enum.filter(list_modules(), &(&1.max >= 1))
+
+    for %{slug: slug, max: max} <- modules, do: get_total_item_cost(slug, max)
+
+    {:ok, length(modules)}
+  end
 
   defp get_total_item_cost_uncached(slug, up_to_level) do
     query =

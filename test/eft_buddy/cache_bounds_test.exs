@@ -72,13 +72,94 @@ defmodule EftBuddy.CacheBoundsTest do
       # keys to delete.
       Application.put_env(:eft_buddy, :cache_max_entries, 10)
 
-      big = List.duplicate(:x, 50_000)
-
-      for i <- 1..40 do
-        Cache.fetch({:bounds_test, :big, i}, ["ItemsSync"], fn -> big end)
-      end
+      fill_with_big_values(40)
 
       assert Cache.size() <= 10
+
+      assert_no_value_copy(fn ->
+        Cache.fetch({:bounds_test, :big, 99}, ["ItemsSync"], fn -> 1 end)
+      end)
+    end
+
+    test "warm entries are never evicted, even as the oldest rows in the table" do
+      # The failure this replaces: the ceiling's eviction rule was justified by
+      # a comment claiming warm entries "continuously renew their position"
+      # because the warmer rewrites them on every sync. Feeds run every 6 to 24
+      # hours, so they do not renew — they are permanently the oldest rows, and
+      # were therefore the FIRST thing dropped under detail-panel traffic. The
+      # cache would then evict precisely the entries the server built on
+      # purpose, silently, while still returning correct answers.
+      Application.put_env(:eft_buddy, :cache_max_entries, 50)
+
+      # Written first, so under oldest-written-first they are the prime targets.
+      warm_keys = for i <- 1..5, do: {:bounds_test, :warm, i}
+      write_as_warm(warm_keys)
+
+      for i <- 1..500 do
+        Cache.fetch({:bounds_test, :read, i}, ["ItemsSync"], fn -> i end)
+      end
+
+      live = Cache.entries() |> Enum.map(& &1.key) |> MapSet.new()
+
+      for key <- warm_keys do
+        assert MapSet.member?(live, key), "warm entry #{inspect(key)} was evicted"
+      end
+    end
+
+    test "a table over the ceiling with only warm entries overshoots and says so" do
+      Application.put_env(:eft_buddy, :cache_max_entries, 10)
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          write_as_warm(for(i <- 1..40, do: {:bounds_test, :warm, i}))
+        end)
+
+      # Overshooting is the correct failure. The ceiling is a guess; the warm
+      # set is bounded by the game's content. Silently discarding it to honour
+      # the guess would be worse than using more memory than configured — but it
+      # must be loud enough that an operator can act on it.
+      assert Cache.size() == 40
+      assert log =~ "over the 10-entry ceiling"
+      assert log =~ "CACHE_MAX_ENTRIES"
+    end
+
+    test "an over-ceiling insert gets back under in a single pass" do
+      # The flat 10% this replaced could not: a bulk write that overshoots by
+      # more than a tenth of the ceiling would stay over after a full
+      # scan-and-sort, and stay over on the next write too.
+      Application.put_env(:eft_buddy, :cache_max_entries, 20)
+
+      for i <- 1..200 do
+        Cache.fetch({:bounds_test, i}, ["ItemsSync"], fn -> i end)
+      end
+
+      assert Cache.size() <= 20
+    end
+  end
+
+  describe "no operation copies cached values into the caller" do
+    # These are the reason the whole table can hold thousands of precomputed
+    # detail payloads. Both operations below run somewhere a multi-hundred-MB
+    # copy would be a real incident: `invalidate_source/1` on the SYNCER'S OWN
+    # process (via the telemetry handler), and `entries/0` on every render of
+    # the operator dashboard.
+    #
+    # Asserting on `Cache.size()` would not catch a regression here — the
+    # results are correct either way. So instead each operation runs in a
+    # process with a HARD HEAP CEILING: copying the values out cannot fit under
+    # it, so a regression to `tab2list` kills the process and fails the test,
+    # while the match-spec version stays kilobytes wide.
+
+    test "invalidate_source/1 selects keys and sources, not values" do
+      fill_with_big_values(40)
+
+      assert_no_value_copy(fn -> Cache.invalidate_source("ItemsSync") end)
+    end
+
+    test "entries/0 selects metadata, not values" do
+      fill_with_big_values(40)
+
+      assert_no_value_copy(fn -> Cache.entries() end)
     end
   end
 
@@ -115,6 +196,54 @@ defmodule EftBuddy.CacheBoundsTest do
       _ = :sys.get_state(Cache)
 
       assert Cache.entries() |> Enum.map(& &1.key) == [{:bounds_test, :live}]
+    end
+  end
+
+  # 40 entries of ~50k words each. Copying them all is ~2M words; the heap
+  # ceiling below is 100k, so any implementation that copies dies and any
+  # implementation that selects only keys/sources/metadata is nowhere near it.
+  defp fill_with_big_values(count) do
+    big = List.duplicate(:x, 50_000)
+
+    for i <- 1..count do
+      Cache.fetch({:bounds_test, :big, i}, ["ItemsSync"], fn -> big end)
+    end
+  end
+
+  # Writes each key from a process marked as the warmer, so the entries are
+  # tagged `:warm` exactly as a real warm build's would be.
+  defp write_as_warm(keys) do
+    {_pid, ref} =
+      spawn_monitor(fn ->
+        Cache.mark_warm_process()
+        Cache.put_many(Enum.map(keys, &{&1, :v}), ["ItemsSync"])
+      end)
+
+    receive do
+      {:DOWN, ^ref, :process, _pid, :normal} -> :ok
+    after
+      5_000 -> flunk("warm write did not finish")
+    end
+  end
+
+  defp assert_no_value_copy(fun) do
+    {_pid, ref} =
+      :erlang.spawn_opt(fun, [
+        :monitor,
+        max_heap_size: %{size: 100_000, kill: true, error_logger: false}
+      ])
+
+    receive do
+      {:DOWN, ^ref, :process, _pid, :normal} ->
+        :ok
+
+      {:DOWN, ^ref, :process, _pid, reason} ->
+        flunk("""
+        the operation exceeded a 100k-word heap, which means it copied cached \
+        values out of the table. Exit reason: #{inspect(reason)}
+        """)
+    after
+      5_000 -> flunk("the operation did not finish within 5s")
     end
   end
 end

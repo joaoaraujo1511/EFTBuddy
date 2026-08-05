@@ -14,6 +14,7 @@ defmodule EftBuddyWeb.CacheDashboardPageTest do
   import Phoenix.LiveViewTest
 
   alias EftBuddy.Cache
+  alias EftBuddy.Cache.Warmer
   alias EftBuddyWeb.CacheDashboardPage
 
   setup do
@@ -33,10 +34,31 @@ defmodule EftBuddyWeb.CacheDashboardPageTest do
     render_component(&CacheDashboardPage.render/1,
       stats: Cache.stats(),
       entries: Cache.entries(),
-      specs: EftBuddy.Cache.Warmer.default_specs(),
+      coverage: EftBuddy.Cache.Warmer.coverage(),
+      summary: EftBuddy.Cache.Warmer.coverage_summary(),
       dataset: EftBuddy.Items.Dataset.stats()
     )
   end
+
+  # A freshly-booted cache: nothing read, nothing written.
+  defp blank_stats do
+    %{
+      entries: 0,
+      warm_entries: 0,
+      read_entries: 0,
+      max_entries: 20_000,
+      memory_bytes: 0,
+      hits: 0,
+      misses: 0,
+      warm_hits: 0,
+      warm_misses: 0,
+      warm_writes: 0,
+      hit_rate: nil,
+      enabled: true
+    }
+  end
+
+  defp blank_summary, do: %{total: 0, live: 0, cold: []}
 
   # The dataset panel's "nothing built" state, which is what the page shows
   # whenever the layer is switched off — i.e. by default.
@@ -83,16 +105,10 @@ defmodule EftBuddyWeb.CacheDashboardPageTest do
     # diagnoses; rendering both as 0% would make the page actively misleading.
     html =
       render_component(&CacheDashboardPage.render/1,
-        stats: %{
-          entries: 0,
-          memory_bytes: 0,
-          hits: 0,
-          misses: 0,
-          hit_rate: nil,
-          enabled: true
-        },
+        stats: blank_stats(),
         entries: [],
-        specs: [],
+        coverage: [],
+        summary: blank_summary(),
         dataset: blank_dataset()
       )
 
@@ -102,16 +118,10 @@ defmodule EftBuddyWeb.CacheDashboardPageTest do
   test "says so loudly when the cache is switched off" do
     html =
       render_component(&CacheDashboardPage.render/1,
-        stats: %{
-          entries: 0,
-          memory_bytes: 0,
-          hits: 0,
-          misses: 0,
-          hit_rate: nil,
-          enabled: false
-        },
+        stats: %{blank_stats() | enabled: false},
         entries: [],
-        specs: [],
+        coverage: [],
+        summary: blank_summary(),
         dataset: blank_dataset()
       )
 
@@ -119,9 +129,33 @@ defmodule EftBuddyWeb.CacheDashboardPageTest do
   end
 
   test "renders the warm registry so an unwarmed dataset is visible as absence" do
+    # The test env registry is empty (config/test.exs), so point the page at the
+    # REAL one. `coverage/0` only probes — it never runs a spec — so this cannot
+    # touch the database. Restored on exit so a later flush cannot reach a spec
+    # that would.
+    original = Application.get_env(:eft_buddy, :cache_warm_specs)
+    Application.put_env(:eft_buddy, :cache_warm_specs, Warmer.default_specs())
+    on_exit(fn -> Application.put_env(:eft_buddy, :cache_warm_specs, original || []) end)
+
     html = render_page()
 
     assert html =~ "hideout.modules"
     assert html =~ "HideoutSync"
+  end
+
+  test "the coverage card names the specs that are cold" do
+    # The signal the whole warming rework turns on: entry count, memory and hit
+    # rate can all look healthy while most of the registry has quietly expired.
+    html =
+      render_component(&CacheDashboardPage.render/1,
+        stats: blank_stats(),
+        entries: [],
+        coverage: [],
+        summary: %{total: 19, live: 5, cold: ["ammo.rounds", "chapters.list"]},
+        dataset: blank_dataset()
+      )
+
+    assert html =~ "5 / 19"
+    assert html =~ "ammo.rounds"
   end
 end

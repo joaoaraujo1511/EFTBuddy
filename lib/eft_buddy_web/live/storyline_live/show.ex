@@ -4,7 +4,6 @@ defmodule EftBuddyWeb.StorylineLive.Show do
   import EftBuddyWeb.StorylineComponents
 
   alias EftBuddy.Chapters
-  alias EftBuddy.Items
 
   # The "Endings" overview (descriptions, rewards, and the Smokey
   # flowchart) belongs on the endgame chapter where the four endings
@@ -48,12 +47,12 @@ defmodule EftBuddyWeb.StorylineLive.Show do
   # genuine items and leave wiki concept links ("building materials", ...)
   # as plain text. Degrades to no resolution if the item DB is
   # unavailable (everything then renders as plain text).
-  defp build_item_index(chapter, endings) do
-    ending_items = if endings, do: endings.items, else: []
-
-    (chapter.items ++ ending_items)
-    |> Enum.map(& &1.page)
-    |> Items.resolve_wiki_items()
+  defp build_item_index(_chapter, _endings) do
+    # One shared index for every chapter rather than one built per page. The
+    # components only do `Map.get(index, page)`, so a superset resolves
+    # identically — and this one is cached and warmed, where a per-chapter index
+    # would be keyed on a list of page names.
+    Chapters.item_index()
   rescue
     # Storyline is wiki-only; tolerate the item DB being down or
     # un-migrated, but let genuine bugs crash rather than silently

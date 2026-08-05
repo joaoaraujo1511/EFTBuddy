@@ -127,16 +127,34 @@ defmodule EftBuddyWeb.HealthController do
 
   defp render_cache do
     stats = Cache.stats()
+    warm = EftBuddy.Cache.Warmer.coverage_summary()
 
     %{
       enabled: stats.enabled,
       entries: stats.entries,
+      warm_entries: stats.warm_entries,
+      read_entries: stats.read_entries,
+      max_entries: stats.max_entries,
       memory_bytes: stats.memory_bytes,
+      ttl_ms: Cache.default_ttl_ms(),
+      # Visitors only; the warmer's own reads are reported under `warm`.
       hits: stats.hits,
       misses: stats.misses,
       # null rather than 0 before anything has been read. "Nothing has been
       # asked for yet" and "everything missed" are opposite diagnoses.
-      hit_rate: if(stats.hit_rate, do: Float.round(stats.hit_rate, 4))
+      hit_rate: if(stats.hit_rate, do: Float.round(stats.hit_rate, 4)),
+      # `cold` names the specs that should be warm and are not — the one field
+      # here that diagnoses rather than describes. A single curl answering
+      # `"cold": []` is the check that the warming actually holds between syncs,
+      # which is what a flat 20-minute TTL against 6-24h feeds got wrong.
+      warm: %{
+        specs_total: warm.total,
+        specs_live: warm.live,
+        cold: warm.cold,
+        hits: stats.warm_hits,
+        misses: stats.warm_misses,
+        writes: stats.warm_writes
+      }
     }
   end
 
