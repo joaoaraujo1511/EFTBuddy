@@ -268,6 +268,31 @@ defmodule EftBuddy.Cache do
   end
 
   @doc """
+  How many entries a bulk builder should write per `put_many/3` call.
+
+  Lives here rather than in each builder so the three of them cannot drift.
+  Chunking bounds the transient allocation of building the row list, and lets a
+  build be interrupted at a chunk boundary with everything written so far still
+  valid — every entry is self-contained, so a partial build is a correct partial
+  build.
+
+  Note it does NOT relieve the connection pool: by the time a builder is
+  fanning out, its query has already returned and no database work is in
+  flight. Pool pressure is handled by running heavy warm specs strictly
+  serially (`EftBuddy.Cache.Warmer`).
+  """
+  def warm_chunk_size, do: 500
+
+  @doc """
+  Pause between bulk-write chunks, in milliseconds.
+
+  Yields the scheduler and gives the garbage collector a window between
+  allocations. Warming is work done ahead of a request that has not arrived, so
+  wall-clock here is the cheapest thing to spend.
+  """
+  def warm_chunk_pause_ms, do: 50
+
+  @doc """
   Read without computing. `:miss` when the key is absent or expired.
 
   Counts as a read, so a caller using this instead of `fetch/4` still shows up

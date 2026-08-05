@@ -52,6 +52,10 @@ defmodule EftBuddy.Tasks do
     [offer_unlocks: [:trader, :item]]
   ]
 
+  # Wider than TasksSync alone: the second-level preloads above reach into
+  # items, traders, maps and skills.
+  @task_details_sources ["TasksSync", "ItemsSync", "HideoutSync", "MapsSync"]
+
   @doc """
   Returns a single task with every association needed to render the
   expanded detail panel: trader, objectives (ordered), all reward
@@ -62,16 +66,15 @@ defmodule EftBuddy.Tasks do
   query cost only when a row is actually opened, not at mount.
   """
   def get_task_details(task_id) when is_binary(task_id) do
-    # Keyed by task id — 1,016 possible keys, and only the ones actually opened
-    # are ever written. This is the read that fires when a visitor expands a row,
-    # so it is the difference between a panel that appears instantly and one that
-    # takes a visible beat.
+    # Keyed by task id — about a thousand possible keys, all of them precomputed
+    # by `warm_details/0` after each sync, so a visitor expanding a row gets an
+    # ETS hit rather than the ~17 round trips this costs cold.
     #
     # The second-level preloads reach into items, traders, maps and skills, so
     # the owners are wider than TasksSync alone.
     Cache.fetch(
-      {__MODULE__, :task_details, task_id},
-      ["TasksSync", "ItemsSync", "HideoutSync", "MapsSync"],
+      task_details_key(task_id),
+      @task_details_sources,
       fn ->
         from(t in Task, where: t.id == ^task_id)
         |> preload(^@detail_preloads)
@@ -81,6 +84,42 @@ defmodule EftBuddy.Tasks do
   end
 
   def get_task_details(_), do: nil
+
+  # One definition, shared by the read above and the bulk builder below. Two
+  # copies of a key expression is how a warmer ends up populating something the
+  # UI never reads.
+  defp task_details_key(task_id), do: {__MODULE__, :task_details, task_id}
+
+  @doc false
+  # Precompute EVERY task's detail panel.
+  #
+  # The reason this is affordable, and it is easy to get backwards: `preload/2`
+  # over a whole result set batches PER ASSOCIATION, not per row. Ecto issues
+  # one query per association with `WHERE task_id IN (...)` covering every task
+  # at once. So this is ~17 queries for a thousand panels, not 17,000 — the same
+  # cost as opening a single panel today.
+  #
+  # Deliberately unfiltered by game mode: regular and pve tasks are distinct
+  # rows with distinct ids, which is why the cache key carries no mode.
+  def warm_details do
+    rows =
+      Task
+      |> preload(^@detail_preloads)
+      |> Repo.all()
+
+    rows
+    |> Enum.chunk_every(Cache.warm_chunk_size())
+    |> Enum.each(fn chunk ->
+      Cache.put_many(
+        Enum.map(chunk, &{task_details_key(&1.id), &1}),
+        @task_details_sources
+      )
+
+      Process.sleep(Cache.warm_chunk_pause_ms())
+    end)
+
+    {:ok, length(rows)}
+  end
 
   @doc """
   Returns the items referenced by any of the task's objectives —

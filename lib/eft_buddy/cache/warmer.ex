@@ -235,6 +235,46 @@ defmodule EftBuddy.Cache.Warmer do
       spec("wiki.all_quests", ["WikiSync"], {EftBuddy.Wiki, :all_quests, []},
         keys: [{EftBuddy.Wiki, :all_quests}]
       ),
+      spec("wiki.quest_slugs", ["WikiSync"], {EftBuddy.Wiki, :quest_slugs, []},
+        keys: [{EftBuddy.Wiki, :quest_slugs}]
+      ),
+      spec("wiki.karma_requirements", ["WikiSync"], {EftBuddy.Wiki, :karma_requirements, []},
+        keys: [{EftBuddy.Wiki, :karma_requirements}]
+      ),
+      spec("chapters.endings", ["ChaptersSync"], {EftBuddy.Chapters, :get_endings, []},
+        # `get_endings/0` calls `endings_page/0`, so warming it fills both.
+        keys: [{EftBuddy.Chapters, :endings}, {EftBuddy.Chapters, :endings_page}]
+      ),
+      spec(
+        "storyline.item_index",
+        ["ChaptersSync", "ItemsSync", "QuestItemsSync"],
+        {EftBuddy.Chapters, :item_index, []},
+        keys: [{EftBuddy.Chapters, :item_index}]
+      ),
+
+      # ── Bulk sets ────────────────────────────────────────
+      #
+      # These write thousands of id-keyed entries from one query set, so that no
+      # visitor is ever the first to open a given panel. Coverage is tracked by
+      # a sentinel rather than by enumerating every key on each probe.
+      bulk_spec(
+        "hideout.level_requirements",
+        ["HideoutSync", "ItemsSync"],
+        {EftBuddy.Hideout, :warm_level_requirements, []},
+        cost: :light
+      ),
+      bulk_spec(
+        "hideout.total_item_costs",
+        ["HideoutSync", "ItemsSync"],
+        {EftBuddy.Hideout, :warm_total_item_costs, []},
+        cost: :light
+      ),
+      bulk_spec("wiki.quests", ["WikiSync"], {EftBuddy.Wiki, :warm_quests, []}),
+      bulk_spec(
+        "tasks.details",
+        ["TasksSync", "ItemsSync", "HideoutSync", "MapsSync"],
+        {EftBuddy.Tasks, :warm_details, []}
+      ),
 
       # The in-memory item catalogue. The catalogue half is rebuilt by every
       # feed that contributes a scope membership set — items themselves, plus
@@ -313,6 +353,16 @@ defmodule EftBuddy.Cache.Warmer do
       # forever.
       keys: Keyword.get(opts, :keys, [])
     }
+  end
+
+  # Writes many entries itself and returns `{:ok, count}`.
+  #
+  # Heavy by default, because a bulk build is a full pass over a dataset — but
+  # overridable: the two hideout sets are a couple of queries covering ~100
+  # entries, and making those wait behind a serial queue would delay the page
+  # that motivated this work for no reason.
+  defp bulk_spec(label, sources, mfa, opts \\ []) do
+    spec(label, sources, mfa, kind: :bulk, cost: Keyword.get(opts, :cost, :heavy))
   end
 
   # Writes somewhere other than `EftBuddy.Cache`, so there is nothing to probe

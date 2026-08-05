@@ -481,10 +481,18 @@ defmodule EftBuddy.Cache.WarmerTest do
       end
     end
 
-    test "only :bulk and :external specs are heavy" do
+    test "single-entry specs are never heavy, and external specs always are" do
+      # `:heavy` means "run alone, nothing else concurrent" — the right
+      # treatment for a multi-second rebuild, and pure latency for a single
+      # cached read. `:bulk` is deliberately NOT pinned either way: the two
+      # hideout sets are a couple of queries covering ~100 entries and should
+      # not queue behind a serial lane, while the item-detail build must.
       for spec <- Warmer.default_specs() do
-        assert spec.cost == :heavy == spec.kind in [:bulk, :external],
-               "#{spec.label} has cost #{spec.cost} for kind #{spec.kind}"
+        case spec.kind do
+          :entry -> assert spec.cost == :light, "#{spec.label} is a single entry but heavy"
+          :external -> assert spec.cost == :heavy, "#{spec.label} is external but light"
+          :bulk -> assert spec.cost in [:light, :heavy]
+        end
       end
     end
 

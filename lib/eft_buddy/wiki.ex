@@ -70,6 +70,31 @@ defmodule EftBuddy.Wiki do
   def get_quest(_), do: nil
 
   @doc false
+  # Precompute every quest's projected content.
+  #
+  # One query for all of them, then one `Projection.project/1` per row. The
+  # projection is the expensive half — it walks each page's stored manifest —
+  # and doing it here means a quest expand never pays for it.
+  def warm_quests do
+    rows =
+      Repo.all(from(q in QuestPage, select: {q.normalized_name, q.content}))
+
+    rows
+    |> Enum.chunk_every(Cache.warm_chunk_size())
+    |> Enum.each(fn chunk ->
+      entries =
+        Enum.map(chunk, fn {slug, content} ->
+          {{__MODULE__, :quest, slug}, Projection.project(content)}
+        end)
+
+      Cache.put_many(entries, ["WikiSync"])
+      Process.sleep(Cache.warm_chunk_pause_ms())
+    end)
+
+    {:ok, length(rows)}
+  end
+
+  @doc false
   # The set of slugs `wiki_quests` actually has a row for.
   #
   # Derived from the already-cached, already-warmed `all_quests/0`, so it costs
