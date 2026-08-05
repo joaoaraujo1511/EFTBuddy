@@ -5,6 +5,8 @@ defmodule EftBuddy.Items do
 
   import Ecto.Query
 
+  require Logger
+
   alias EftBuddy.Hideout.ItemRequirement, as: HideoutItemRequirement
   # Only the *RequiredItem / *RewardItem schemas are referenced by
   # name here — the bare `Craft` / `Barter` modules are reached via
@@ -1251,20 +1253,74 @@ defmodule EftBuddy.Items do
 
       built
       |> Enum.chunk_every(Cache.warm_chunk_size())
-      |> Enum.each(fn chunk ->
+      |> Enum.reduce_while({0, [], Cache.memory_bytes()}, fn chunk, {n, written, start_bytes} ->
+        keys = Enum.map(chunk, fn {id, _} -> detail_key(id, mode) end)
+
         Cache.put_many(
           Enum.map(chunk, fn {id, details} -> {detail_key(id, mode), details} end),
           @detail_sources,
           ttl_ms: @detail_ttl_ms
         )
 
-        Process.sleep(Cache.warm_chunk_pause_ms())
-      end)
+        written = keys ++ written
+        grown = Cache.memory_bytes() - start_bytes
 
-      {:ok, map_size(built)}
+        if grown > details_max_bytes() do
+          # Unwind. A half-written set left in the table is memory spent on
+          # entries the build has just decided it should not have spent — and
+          # every reader falls back to the lazy path for a missing key, so
+          # dropping them costs latency and nothing else. The sentinel is not
+          # written, so coverage reports the set cold rather than claiming it.
+          Cache.drop(written)
+
+          Logger.error("""
+          [Items] item detail precompute for #{mode} exceeded its memory budget \
+          (#{div(grown, 1_048_576)}MB > #{div(details_max_bytes(), 1_048_576)}MB) \
+          after #{n + length(chunk)} panels. Dropped what it wrote; panels stay \
+          lazy. Raise :item_details_max_bytes (env ITEM_DETAILS_MAX_MB) if the \
+          box genuinely has the headroom, or leave ITEM_DETAILS off.\
+          """)
+
+          :telemetry.execute(
+            [:eft_buddy, :items, :details_build],
+            %{bytes: grown, entries: 0},
+            %{mode: mode, outcome: :over_budget}
+          )
+
+          {:halt, {:error, :over_budget}}
+        else
+          Process.sleep(Cache.warm_chunk_pause_ms())
+          {:cont, {n + length(chunk), written, start_bytes}}
+        end
+      end)
+      |> case do
+        {:error, :over_budget} ->
+          {:ok, 0}
+
+        {n, _written, start_bytes} ->
+          :telemetry.execute(
+            [:eft_buddy, :items, :details_build],
+            %{bytes: Cache.memory_bytes() - start_bytes, entries: n},
+            %{mode: mode, outcome: :ok}
+          )
+
+          {:ok, n}
+      end
     else
       {:ok, 0}
     end
+  end
+
+  # Ceiling on how much this build may add to the cache table.
+  #
+  # Bounds the PERSISTENT cost only. The transient peak is larger and not
+  # covered: `relational_details_for(:all, …)` materialises every section for
+  # the whole catalogue before the first entry is written, so the build's own
+  # high-water mark is reached before this check ever runs. Bounding that too
+  # would mean streaming the build per chunk of items, which costs a query set
+  # per chunk instead of twelve in total.
+  defp details_max_bytes do
+    Application.get_env(:eft_buddy, :item_details_max_bytes, 250 * 1_048_576)
   end
 
   # ── The subject switch ─────────────────────────────────

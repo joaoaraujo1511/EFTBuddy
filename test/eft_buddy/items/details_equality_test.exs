@@ -319,6 +319,50 @@ defmodule EftBuddy.Items.DetailsEqualityTest do
     end
   end
 
+  describe "the memory budget" do
+    test "a build that overruns unwinds itself rather than leaving a partial set" do
+      # There is no automatic brake otherwise: the box this runs on has ~1.2GB
+      # free, `restart: unless-stopped` brings the container back with the flag
+      # still set, so an OOM mid-build is a crashloop rather than a one-off.
+      #
+      # Dropping the partial set costs nothing but latency — every missing key
+      # falls through to the lazy path — and withholding the sentinel means
+      # coverage reports the set cold instead of claiming it is warm.
+      seed()
+      original = Application.get_env(:eft_buddy, :item_details_max_bytes)
+      Application.put_env(:eft_buddy, :item_details_max_bytes, 1)
+      on_exit(fn -> Application.put_env(:eft_buddy, :item_details_max_bytes, original) end)
+
+      Cache.clear()
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:ok, 0} = Items.warm_item_details(:pvp)
+        end)
+
+      assert log =~ "exceeded its memory budget"
+      assert log =~ "ITEM_DETAILS_MAX_MB"
+
+      refute Enum.any?(
+               Cache.entries(),
+               &match?({EftBuddy.Items, :item_details_rel, _, _}, &1.key)
+             )
+    end
+
+    test "a build inside its budget writes normally" do
+      seed()
+      Cache.clear()
+
+      assert {:ok, n} = Items.warm_item_details(:pvp)
+      assert n > 0
+
+      assert Enum.any?(
+               Cache.entries(),
+               &match?({EftBuddy.Items, :item_details_rel, _, _}, &1.key)
+             )
+    end
+  end
+
   describe "cost" do
     test "the bulk build's query count does not scale with the catalogue" do
       # The property that makes precomputing thousands of panels possible at

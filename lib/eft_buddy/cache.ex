@@ -411,6 +411,21 @@ defmodule EftBuddy.Cache do
     dropped
   end
 
+  @doc """
+  Drops the given keys. Returns how many existed.
+
+  For a bulk builder unwinding its own partial work — a half-written set that
+  stays in the table is memory spent on entries whose build already decided it
+  should not have spent it.
+  """
+  def drop(keys) when is_list(keys) do
+    if table_exists?() do
+      Enum.count(keys, &:ets.delete(@table, &1))
+    else
+      0
+    end
+  end
+
   @doc "Drops everything. Used by tests and available from a remote console."
   def clear do
     if table_exists?(), do: :ets.delete_all_objects(@table)
