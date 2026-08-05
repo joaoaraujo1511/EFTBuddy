@@ -315,6 +315,23 @@ defmodule EftBuddy.Cache.Warmer do
         )
       end ++
       for mode <- @ui_modes do
+        # The largest set in the registry: ~5,400 relational panels per mode.
+        #
+        # Sources deliberately omit PricesSync and must stay identical to
+        # `Items.detail_sources/0` — the price-dependent half of a panel is
+        # resolved at read time from the dataset's own price layer, so a
+        # ten-minute tick does not throw away thousands of entries that do not
+        # depend on prices. `cache_source_map_test.exs` pins the two together.
+        #
+        # No-ops unless ITEM_DETAILS is set. Registered unconditionally so
+        # coverage still lists it, mirroring how the dataset specs behave.
+        bulk_spec(
+          "items.details:#{mode}",
+          EftBuddy.Items.detail_sources(),
+          {EftBuddy.Items, :warm_item_details, [mode]}
+        )
+      end ++
+      for mode <- @ui_modes do
         spec("tasks.prereq_map:#{mode}", ["TasksSync"], {EftBuddy.Tasks, :prereq_map, [mode]},
           keys: [{EftBuddy.Tasks, :prereq_map, mode}]
         )

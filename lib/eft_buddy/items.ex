@@ -1153,50 +1153,203 @@ defmodule EftBuddy.Items do
   def get_item_details(item_id, game_mode \\ EftBuddy.GameMode.default())
 
   def get_item_details(item_id, game_mode) when is_binary(item_id) do
-    # Keyed by item id, so the key space is the catalogue (5,198) rather than
-    # unbounded — but it is still far larger than the whole-list entries, which
-    # is why `EftBuddy.Cache` now carries an entry ceiling and an expiry sweep.
+    mode = EftBuddy.GameMode.to_db(game_mode)
+
+    # The item itself is resolved FIRST and separately from the eight relational
+    # sections, and the split is the whole reason a ten-minute price tick is
+    # affordable here.
     #
-    # Everything this returns is sync-written: the item and its prices, the
-    # tasks that need it, the hideout levels that consume it, and its barters
-    # and crafts. Five owners, because the panel is a join across five feeds and
-    # a stale line in any of them is a wrong answer on the page.
-    Cache.fetch(
-      {__MODULE__, :item_details, item_id, EftBuddy.GameMode.to_db(game_mode)},
-      ["ItemsSync", "PricesSync", "TasksSync", "HideoutSync", "BartersSync", "CraftsSync"],
-      fn -> get_item_details_uncached(item_id, game_mode) end
-    )
+    # `:item` is the only part of this payload that depends on prices. Keeping
+    # `"PricesSync"` in the relational entry's sources meant every one of these
+    # panels was thrown away six times an hour by a feed that changes one of
+    # nine keys — so even the lazy cache was rebuilding constantly. Splitting it
+    # out makes the relational half live on its owning feeds' schedule, and the
+    # price half a memory read.
+    #
+    # Resolving the item first also stops a nonexistent id minting a cached
+    # `nil`: 20,000 random UUIDs used to fill the table.
+    case resolve_item(item_id, mode) do
+      nil -> nil
+      item -> Map.put(relational_details(item.id, mode), :item, item)
+    end
   end
 
   def get_item_details(_, _), do: nil
 
-  defp get_item_details_uncached(item_id, game_mode) do
+  # Deliberately WITHOUT "PricesSync" — see `get_item_details/2`.
+  @detail_sources ["ItemsSync", "TasksSync", "HideoutSync", "BartersSync", "CraftsSync"]
+
+  @doc false
+  # Public so the warm registry and the equality tests can name one list rather
+  # than each keeping their own copy. A spec whose sources drift from these is
+  # warmed on one schedule and invalidated on another.
+  def detail_sources, do: @detail_sources
+
+  @doc false
+  def detail_key(item_id, mode), do: {__MODULE__, :item_details_rel, item_id, mode}
+
+  # Rebuilt by ItemsSync at six hours, so eight gives headroom without letting a
+  # broken warm sit unnoticed forever. Explicit because the 20-minute default
+  # would expire every one of these between syncs — the failure the warming
+  # rework exists to fix, and one that would land hardest here.
+  @detail_ttl_ms 8 * 60 * 60 * 1_000
+
+  defp relational_details(item_id, mode) do
+    Cache.fetch(
+      detail_key(item_id, mode),
+      @detail_sources,
+      fn -> relational_details_uncached(item_id, mode) end,
+      ttl_ms: @detail_ttl_ms
+    )
+  end
+
+  # Prefers the in-memory price layer, which `PricesSync` already refreshes in
+  # one small query, and falls back to SQL exactly like every other dataset
+  # read: a miss costs latency, never correctness.
+  #
+  # `:category` must be loaded either way. The listing query preloads it and the
+  # row template reads `row.item.category.name` on every render, so returning a
+  # bare `Repo.get/2` result would replace the row's `%Item{}` with one whose
+  # `:category` is `%Ecto.Association.NotLoaded{}` and crash the next diff.
+  defp resolve_item(item_id, mode) do
+    Dataset.item_with_price(item_id, mode) || item_with_mode_price(item_id, mode)
+  end
+
+  defp relational_details_uncached(item_id, mode) do
+    item_id
+    |> then(&[&1])
+    |> relational_details_for(mode)
+    |> Map.get(item_id, empty_details())
+  end
+
+  @doc false
+  # Whether the bulk detail build runs. Coerced with `!!` for the same reason
+  # `Dataset.enabled?/0` is: `Application.get_env/3`'s default only applies to a
+  # MISSING key, so a key explicitly set to nil returns nil, and a nil chained
+  # through `and` raises rather than reading as false.
+  def details_precompute_enabled?,
+    do: !!Application.get_env(:eft_buddy, :item_details_precompute_enabled, false)
+
+  @doc false
+  # Precompute every item's relational detail panel for one game mode.
+  #
+  # 12 queries for the whole catalogue, versus the 11-18 PER ITEM the lazy path
+  # costs — because every section query is the same query the lazy path uses,
+  # with its subject filter left off.
+  #
+  # Unlike `ITEM_DATASET`, this flag gates only the BUILDER, never the read
+  # path. `get_item_details/2` looks up the same key whichever way the flag is
+  # set; with it off the entries simply are not there and every read is lazy. So
+  # turning this off can change latency and can never change an answer, which is
+  # why it needs far less ceremony than the dataset layer — that one gates a
+  # read path which reimplements query semantics.
+  def warm_item_details(game_mode) do
     mode = EftBuddy.GameMode.to_db(game_mode)
 
-    # Preload :category here because the LiveView's row template
-    # reads `row.item.category.name` on every render. The listing
-    # query (`list_all_items/1`) preloads it; if we returned a bare
-    # Repo.get/2 result, expanding a row would replace the original
-    # %Item{} with one whose `:category` is `%Ecto.Association.NotLoaded{}`,
-    # crashing the next diff cycle. We also overlay the active mode's
-    # prices so the expanded panel matches the row.
-    case item_with_mode_price(item_id, mode) do
-      nil ->
-        nil
+    if details_precompute_enabled?() do
+      built = relational_details_for(:all, mode)
 
-      item ->
-        %{
-          item: item,
-          needed_by_tasks: needed_by_tasks(item.id, mode),
-          needed_by_hideout: needed_by_hideout(item.id),
-          needed_for_crafts: needed_for_crafts(item.id),
-          needed_for_barters: needed_for_barters(item.id, mode),
-          obtained_from_tasks: obtained_from_tasks(item.id, mode),
-          obtained_from_barters: obtained_from_barters(item.id, mode),
-          obtained_from_crafts: obtained_from_crafts(item.id),
-          unlocked_from_tasks: unlocked_from_tasks(item.id, mode)
-        }
+      built
+      |> Enum.chunk_every(Cache.warm_chunk_size())
+      |> Enum.each(fn chunk ->
+        Cache.put_many(
+          Enum.map(chunk, fn {id, details} -> {detail_key(id, mode), details} end),
+          @detail_sources,
+          ttl_ms: @detail_ttl_ms
+        )
+
+        Process.sleep(Cache.warm_chunk_pause_ms())
+      end)
+
+      {:ok, map_size(built)}
+    else
+      {:ok, 0}
     end
+  end
+
+  # ── The subject switch ─────────────────────────────────
+  #
+  # Every section query below is written ONCE and parameterised by its subject:
+  # `[item_id]` for one panel, `:all` for the bulk build. Writing the nine
+  # sections twice — a per-item version and a whole-catalogue version — would
+  # be nine chances for the two to drift, and the failure mode is a panel that
+  # renders perfectly while being wrong. `EftBuddy.Items.Dataset` avoided the
+  # same trap by calling the very `apply_scope/3` the SQL path uses; this is
+  # that lesson applied literally.
+  #
+  # Each section's pivot table carries `as: :subject`, so one clause covers all
+  # of them.
+
+  defp for_subject(query, :all), do: query
+
+  defp for_subject(query, ids) when is_list(ids),
+    do: where(query, [subject: s], s.item_id in ^ids)
+
+  # Rows come back carrying their subject's id; this strips it and buckets them.
+  # `Enum.group_by/3` preserves order of appearance within each key, so slicing
+  # a globally-ordered result per item reproduces exactly what a per-item
+  # `ORDER BY` would have returned — provided the sort key is total and does not
+  # involve the subject, which is why the tiebreakers below were added.
+  defp group_by_subject(rows),
+    do: Enum.group_by(rows, & &1.item_id, &Map.delete(&1, :item_id))
+
+  defp at(grouped, item_id), do: Map.get(grouped, item_id, [])
+
+  # Every key present and empty, not absent. An item with no relations at all is
+  # the likeliest thing to get wrong here, and a missing key crashes the
+  # template rather than rendering an empty section.
+  defp empty_details do
+    %{
+      needed_by_tasks: [],
+      needed_by_hideout: [],
+      needed_for_crafts: [],
+      needed_for_barters: [],
+      obtained_from_tasks: [],
+      obtained_from_barters: [],
+      obtained_from_crafts: [],
+      unlocked_from_tasks: []
+    }
+  end
+
+  # Build the eight relational sections for `subject` (`:all` or a list of ids)
+  # in one pass, returning `%{item_id => details_map}`.
+  #
+  # 12 queries per mode, whether that covers one item or five thousand.
+  defp relational_details_for(subject, mode) do
+    needed_by_tasks = needed_by_tasks_rows(subject, mode)
+    needed_by_hideout = needed_by_hideout_rows(subject)
+    needed_for_crafts = needed_for_crafts_rows(subject)
+    needed_for_barters = needed_for_barters_rows(subject, mode)
+    obtained_from_tasks = obtained_from_tasks_rows(subject, mode)
+    obtained_from_barters = obtained_from_barters_rows(subject, mode)
+    obtained_from_crafts = obtained_from_crafts_rows(subject)
+    unlocked_from_tasks = unlocked_from_tasks_rows(subject, mode)
+
+    [
+      needed_by_tasks,
+      needed_by_hideout,
+      needed_for_crafts,
+      needed_for_barters,
+      obtained_from_tasks,
+      obtained_from_barters,
+      obtained_from_crafts,
+      unlocked_from_tasks
+    ]
+    |> Enum.flat_map(&Map.keys/1)
+    |> Enum.uniq()
+    |> Map.new(fn id ->
+      {id,
+       %{
+         needed_by_tasks: at(needed_by_tasks, id),
+         needed_by_hideout: at(needed_by_hideout, id),
+         needed_for_crafts: at(needed_for_crafts, id),
+         needed_for_barters: at(needed_for_barters, id),
+         obtained_from_tasks: at(obtained_from_tasks, id),
+         obtained_from_barters: at(obtained_from_barters, id),
+         obtained_from_crafts: at(obtained_from_crafts, id),
+         unlocked_from_tasks: at(unlocked_from_tasks, id)
+       }}
+    end)
   end
 
   # Fetch one item with the active mode's prices overlaid onto its
@@ -1240,62 +1393,24 @@ defmodule EftBuddy.Items do
   # that reference the key only via `payload.items` are still
   # surfaced (we don't drop them), they just get the key sentence
   # instead of a numeric "needs to be obtained" one.
-  defp needed_by_tasks(item_id, game_mode) do
-    item_id_str = uuid_to_string(item_id)
-    item_is_key? = item_used_as_key?(item_id_str, game_mode)
+  defp needed_by_tasks_rows(subject, game_mode) do
+    key_ids = key_item_ids(game_mode)
 
     item_rows =
-      from(o in Objective,
-        join: t in assoc(o, :task),
-        where:
-          fragment(
-            "jsonb_typeof(?->'items') = 'array' AND ? @> jsonb_build_array(?::text)",
-            o.payload,
-            o.payload["items"],
-            ^item_id_str
-          ) and t.name not in ^@task_name_blacklist and t.game_mode == ^game_mode,
-        group_by: [
-          t.id,
-          t.name,
-          fragment("COALESCE((?->>'foundInRaid')::bool, false)", o.payload)
-        ],
-        select: %{
-          kind: :item,
-          task_id: t.id,
-          task_name: t.name,
-          count: type(max(fragment("COALESCE((?->>'count')::int, 1)", o.payload)), :integer),
-          found_in_raid: fragment("COALESCE((?->>'foundInRaid')::bool, false)", o.payload)
-        }
-      )
-      |> Repo.all()
-      # When the item is a key, rewrite the kind so the template
-      # renders the key sentence. The count / found_in_raid fields
-      # are still in the map but the `:key` clause of
-      # `quest_needed_sentence/1` ignores them.
+      subject
+      |> objective_array_rows(game_mode, "items")
       |> Enum.map(fn row ->
-        if item_is_key?, do: %{row | kind: :key}, else: row
+        # When the item is a key, rewrite the kind so the template renders the
+        # key sentence. The count / found_in_raid fields are still in the map
+        # but the `:key` clause of `quest_needed_sentence/1` ignores them.
+        if MapSet.member?(key_ids, row.item_id), do: %{row | kind: :key}, else: row
       end)
 
     key_rows =
-      from(o in Objective,
-        join: t in assoc(o, :task),
-        where:
-          fragment(
-            "jsonb_typeof(?->'required_key_ids') = 'array' AND ? @> jsonb_build_array(?::text)",
-            o.payload,
-            o.payload["required_key_ids"],
-            ^item_id_str
-          ) and t.name not in ^@task_name_blacklist and t.game_mode == ^game_mode,
-        distinct: true,
-        select: %{
-          kind: :key,
-          task_id: t.id,
-          task_name: t.name,
-          count: 1,
-          found_in_raid: false
-        }
-      )
-      |> Repo.all()
+      subject
+      |> objective_array_rows(game_mode, "required_key_ids")
+      |> Enum.map(&%{&1 | kind: :key, count: 1, found_in_raid: false})
+      |> Enum.uniq_by(&{&1.item_id, &1.task_id})
 
     # Quest-exclusive items (Golden Zibbo lighter, Cult medallion,
     # …) are referenced by their objective via the scalar
@@ -1312,12 +1427,15 @@ defmodule EftBuddy.Items do
     # surprising phrasing drift).
     quest_item_rows =
       from(o in Objective,
+        as: :subject,
         join: t in assoc(o, :task),
         where:
-          fragment("?->>'questItem' = ?", o.payload, ^item_id_str) and
+          not is_nil(fragment("?->>'questItem'", o.payload)) and
             t.name not in ^@task_name_blacklist and t.game_mode == ^game_mode,
-        group_by: [t.id, t.name],
+        group_by: [fragment("?->>'questItem'", o.payload), t.id, t.name],
+        order_by: [asc: t.name, asc: t.id],
         select: %{
+          item_id: fragment("?->>'questItem'", o.payload),
           kind: :item,
           task_id: t.id,
           task_name: t.name,
@@ -1325,19 +1443,36 @@ defmodule EftBuddy.Items do
           found_in_raid: false
         }
       )
+      |> quest_item_subject(subject)
       |> Repo.all()
       |> Enum.map(fn row ->
-        if item_is_key?, do: %{row | kind: :key}, else: row
+        if MapSet.member?(key_ids, row.item_id), do: %{row | kind: :key}, else: row
       end)
 
-    # Prefer `:item` rows when a task appears in more than one set —
-    # the item demand is the "real" requirement, the key is
-    # incidental. We treat the `payload.items` and `payload.questItem`
-    # rows as the "item side" (deduping the latter against the
-    # former), then drop any key row for a task already covered by
-    # the item side. When `item_is_key?` is true, the item-side rows
-    # above were rewritten to `:key`, so this filtering still does
-    # the right thing (it just deduplicates by task_id).
+    # Everything above is now grouped per SUBJECT before the dedupe rules run,
+    # because those rules are per-item: "prefer the item row over the key row
+    # FOR THIS ITEM". Applying them across the whole catalogue at once would
+    # let one item's task suppress another's.
+    by_item = group_by_subject(item_rows)
+    quest_by_item = group_by_subject(quest_item_rows)
+    keys_by_item = group_by_subject(key_rows)
+
+    [by_item, quest_by_item, keys_by_item]
+    |> Enum.flat_map(&Map.keys/1)
+    |> Enum.uniq()
+    |> Map.new(fn id ->
+      {id, merge_task_rows(at(by_item, id), at(quest_by_item, id), at(keys_by_item, id))}
+    end)
+  end
+
+  # Prefer `:item` rows when a task appears in more than one set — the item
+  # demand is the "real" requirement, the key is incidental. The
+  # `payload.items` and `payload.questItem` rows are the "item side" (deduping
+  # the latter against the former), then any key row for a task already covered
+  # by the item side is dropped. When the item is also a key the item-side rows
+  # were already rewritten to `:key`, so this still does the right thing — it
+  # just deduplicates by task_id.
+  defp merge_task_rows(item_rows, quest_item_rows, key_rows) do
     item_task_ids = MapSet.new(item_rows, & &1.task_id)
 
     deduped_quest_items =
@@ -1348,67 +1483,149 @@ defmodule EftBuddy.Items do
 
     deduped_keys = Enum.reject(key_rows, &MapSet.member?(item_side_task_ids, &1.task_id))
 
+    # Sorted in ELIXIR, not by an `ORDER BY`, and that is deliberate: this is
+    # byte order, whereas Postgres would apply its collation. Supabase's
+    # collation ignores leading punctuation, so moving this into SQL would
+    # silently reorder every quest list in production while looking correct
+    # locally — the same trap `EftBuddy.Items.Dataset` documents.
+    #
+    # `Enum.sort_by/2` is stable, so the concatenation order below decides
+    # name-ties. The queries feeding it are now totally ordered, which is what
+    # makes that reproducible between the per-item and whole-catalogue paths.
     (item_rows ++ deduped_quest_items ++ deduped_keys)
     |> Enum.sort_by(& &1.task_name)
   end
 
-  # True when *any* (non-blacklisted) quest objective references
-  # this item via `payload.required_key_ids`. We use the same
-  # data signal that surfaces keys in the new "Quest Items" scope
-  # so the two stay in lockstep — if the scope filter would put
-  # an item into the keys bucket, the per-item panel will phrase
-  # it as a key too.
-  defp item_used_as_key?(item_id_str, game_mode) when is_binary(item_id_str) do
-    from(o in Objective,
-      join: t in assoc(o, :task),
-      where:
-        fragment(
-          "jsonb_typeof(?->'required_key_ids') = 'array' AND ? @> jsonb_build_array(?::text)",
-          o.payload,
-          o.payload["required_key_ids"],
-          ^item_id_str
-        ) and t.name not in ^@task_name_blacklist and t.game_mode == ^game_mode,
-      select: 1,
-      limit: 1
+  # Objective rows whose `payload->'<field>'` ARRAY contains an item, inverted:
+  # one row per (item, task) rather than a containment test per item.
+  #
+  # The set-returning function sits in a subquery's SELECT, never in a LATERAL
+  # join. Postgres evaluates a SRF in the select list AFTER the WHERE clause, so
+  # the `jsonb_typeof(...) = 'array'` guard genuinely protects it; in a LATERAL
+  # it is evaluated in the FROM clause, before the filter, and raises "cannot
+  # extract elements from an object" on the first non-array payload. That
+  # failure would pass every test whose fixtures happen to be well-formed.
+  # `quest_item_union/1` above already does it this way.
+  #
+  # The extracted id is compared as TEXT, never cast to `::uuid`. Ecto's
+  # `:binary_id` loads as the canonical lowercase 36-char string and `@>` on a
+  # jsonb text array is exact string equality, so text is byte-equivalent to the
+  # containment test it replaces — while `::uuid` would be more permissive
+  # (normalising case and brace forms) and would RAISE on a malformed string
+  # instead of quietly not matching.
+  defp objective_array_rows(subject, game_mode, field) do
+    inner =
+      from(o in Objective,
+        join: t in assoc(o, :task),
+        where:
+          fragment("jsonb_typeof(?->?) = 'array'", o.payload, ^field) and
+            t.name not in ^@task_name_blacklist and t.game_mode == ^game_mode,
+        select: %{
+          task_id: t.id,
+          task_name: t.name,
+          item_id: fragment("jsonb_array_elements_text(?->?)", o.payload, ^field),
+          fir: fragment("COALESCE((?->>'foundInRaid')::bool, false)", o.payload),
+          cnt: fragment("COALESCE((?->>'count')::int, 1)", o.payload)
+        }
+      )
+
+    from(x in subquery(inner),
+      as: :subject,
+      group_by: [x.item_id, x.task_id, x.task_name, x.fir],
+      # `MAX(count)` per (item, task, fir) is unchanged in meaning from the
+      # per-item version, whose WHERE had already pinned the item. A duplicate
+      # id inside one objective's array expands to two rows in the same group,
+      # so MAX over the same scalar does not inflate it.
+      order_by: [asc: x.task_name, asc: x.task_id, asc: x.fir],
+      select: %{
+        item_id: x.item_id,
+        kind: :item,
+        task_id: x.task_id,
+        task_name: x.task_name,
+        count: type(max(x.cnt), :integer),
+        found_in_raid: x.fir
+      }
     )
-    |> Repo.one()
-    |> case do
-      nil -> false
-      _ -> true
-    end
+    |> for_subject(subject)
+    |> Repo.all()
   end
 
-  defp needed_by_hideout(item_id) do
+  # Every item referenced as a required key by ANY non-blacklisted quest.
+  #
+  # One query for the whole catalogue, replacing a per-item `EXISTS` that ran
+  # 5,449 times per mode. The rule it encodes is unchanged: if an item is used
+  # as a key anywhere, every reference to it reads as a key.
+  defp key_item_ids(game_mode) do
+    inner =
+      from(o in Objective,
+        join: t in assoc(o, :task),
+        where:
+          fragment("jsonb_typeof(?->'required_key_ids') = 'array'", o.payload) and
+            t.name not in ^@task_name_blacklist and t.game_mode == ^game_mode,
+        select: %{
+          item_id: fragment("jsonb_array_elements_text(?->'required_key_ids')", o.payload)
+        }
+      )
+
+    from(x in subquery(inner), distinct: true, select: x.item_id)
+    |> Repo.all()
+    |> MapSet.new()
+  end
+
+  # `questItem` is a SCALAR, so there is no array to expand and the grouped
+  # id is already the subject — but it is text, and `for_subject/2` compares
+  # against a `:binary_id` column elsewhere, so it needs its own clause.
+  defp quest_item_subject(query, :all), do: query
+
+  defp quest_item_subject(query, ids) when is_list(ids) do
+    strings = Enum.map(ids, &uuid_to_string/1)
+
+    where(query, [o], fragment("?->>'questItem'", o.payload) in ^strings)
+  end
+
+  defp needed_by_hideout_rows(subject) do
     from(r in HideoutItemRequirement,
+      as: :subject,
       join: l in assoc(r, :level),
       join: s in assoc(l, :station),
-      where: r.item_id == ^item_id,
       select: %{
+        item_id: r.item_id,
         station_name: s.name,
         station_slug: s.normalized_name,
         level: l.level,
         quantity: r.quantity
       },
-      order_by: [asc: s.name, asc: l.level]
+      # `asc: r.id` makes the order TOTAL. Without it two requirements on the
+      # same station and level tie, and a globally-ordered query can break that
+      # tie differently from a per-item one — so the same panel would render in
+      # a different order depending on how it was built. Insertion order matches
+      # the API's declaration order.
+      order_by: [asc: s.name, asc: l.level, asc: r.id]
     )
+    |> for_subject(subject)
     |> Repo.all()
+    |> group_by_subject()
   end
 
   # Tasks that grant this item as a reward, with the phase
   # (start = on-accept, finish = on-turn-in) so the UI can label.
-  defp obtained_from_tasks(item_id, game_mode) do
+  defp obtained_from_tasks_rows(subject, game_mode) do
     from(r in ItemReward,
+      as: :subject,
       join: t in assoc(r, :task),
-      where: r.item_id == ^item_id and t.game_mode == ^game_mode,
+      where: t.game_mode == ^game_mode,
       select: %{
+        item_id: r.item_id,
         task_id: t.id,
         task_name: t.name,
         quantity: r.quantity,
         phase: r.reward_phase
       },
-      order_by: [asc: t.name]
+      order_by: [asc: t.name, asc: t.id, asc: r.id]
     )
+    |> for_subject(subject)
     |> Repo.all()
+    |> group_by_subject()
   end
 
   # Tasks that unlock this item as a *trader offer* — i.e. after
@@ -1420,12 +1637,14 @@ defmodule EftBuddy.Items do
   # which is often the cheapest/only route to an otherwise
   # locked item. Ordered by trader then loyalty level for a
   # stable, scannable list.
-  defp unlocked_from_tasks(item_id, game_mode) do
+  defp unlocked_from_tasks_rows(subject, game_mode) do
     from(ou in OfferUnlock,
+      as: :subject,
       join: t in assoc(ou, :task),
       join: tr in assoc(ou, :trader),
-      where: ou.item_id == ^item_id and t.game_mode == ^game_mode,
+      where: t.game_mode == ^game_mode,
       select: %{
+        item_id: ou.item_id,
         task_id: t.id,
         task_name: t.name,
         trader_name: tr.name,
@@ -1433,17 +1652,20 @@ defmodule EftBuddy.Items do
         level: ou.level,
         phase: ou.reward_phase
       },
-      order_by: [asc: tr.name, asc: ou.level]
+      order_by: [asc: tr.name, asc: ou.level, asc: ou.id]
     )
+    |> for_subject(subject)
     |> Repo.all()
+    |> group_by_subject()
   end
 
   # Barters whose `rewardItems` contains this item. We pull the full
   # required-items list per barter so the UI can render the cost
   # column without a follow-up query.
-  defp obtained_from_barters(item_id, game_mode) do
-    barter_query =
+  defp obtained_from_barters_rows(subject, game_mode) do
+    barters =
       from(rw in BarterRewardItem,
+        as: :subject,
         join: b in assoc(rw, :barter),
         join: tr in assoc(b, :trader),
         left_join: tu in assoc(b, :task_unlock),
@@ -1452,9 +1674,10 @@ defmodule EftBuddy.Items do
         # separately so the "After completing X task Y" line is
         # accurate even on the rare cross-trader unlock.
         left_join: tut in assoc(tu, :trader),
-        where: rw.item_id == ^item_id and b.game_mode == ^game_mode,
-        order_by: [asc: tr.name, asc: b.level],
+        where: b.game_mode == ^game_mode,
+        order_by: [asc: tr.name, asc: b.level, asc: rw.id],
         select: %{
+          item_id: rw.item_id,
           barter_id: b.id,
           trader_name: tr.name,
           trader_slug: tr.normalized_name,
@@ -1467,40 +1690,113 @@ defmodule EftBuddy.Items do
           output_quantity: rw.quantity
         }
       )
+      |> for_subject(subject)
+      |> Repo.all()
 
-    barters = Repo.all(barter_query)
-    barter_ids = Enum.map(barters, & &1.barter_id)
+    required = barter_required_items(barters)
 
-    required =
-      if barter_ids == [] do
-        %{}
-      else
-        from(rq in BarterRequiredItem,
-          join: i in assoc(rq, :item),
-          where: rq.barter_id in ^barter_ids,
-          select: %{
-            barter_id: rq.barter_id,
-            item: i,
-            count: rq.count,
-            quantity: rq.quantity,
-            attributes: rq.attributes
-          }
-        )
-        |> Repo.all()
-        |> Enum.group_by(& &1.barter_id, &Map.delete(&1, :barter_id))
-      end
+    barters
+    |> Enum.map(fn b -> Map.put(b, :required, Map.get(required, b.barter_id, [])) end)
+    |> group_by_subject()
+  end
 
-    Enum.map(barters, fn b ->
-      Map.put(b, :required, Map.get(required, b.barter_id, []))
+  # ── Recipe children ────────────────────────────────────
+  #
+  # The ingredient and output lists for a set of barters or crafts. Shared
+  # between the "obtained from" and "needed for" directions, which each used to
+  # build their own copy of the identical query.
+  #
+  # Filtering on the parent ids we already found keeps ONE query shape for both
+  # the single-panel and whole-catalogue cases, which is the point: the empty
+  # list is the only special case, and it exists because `IN ()` is not valid
+  # SQL rather than for any semantic reason.
+
+  defp barter_required_items([]), do: %{}
+
+  defp barter_required_items(barters) do
+    from(rq in BarterRequiredItem,
+      join: i in assoc(rq, :item),
+      where: rq.barter_id in ^parent_ids(barters, :barter_id),
+      # This query had NO `order_by` at all, so the ingredient tiles rendered in
+      # whatever order Postgres happened to return — stable enough per item,
+      # but not something a query over every barter would reproduce. `asc: rq.id`
+      # makes it defined; the ids are insertion-ordered by the syncer, so this
+      # is the API's own declaration order.
+      order_by: [asc: rq.id],
+      select: %{
+        barter_id: rq.barter_id,
+        item: i,
+        count: rq.count,
+        quantity: rq.quantity,
+        attributes: rq.attributes
+      }
+    )
+    |> Repo.all()
+    |> Enum.group_by(& &1.barter_id, &Map.delete(&1, :barter_id))
+  end
+
+  defp barter_outputs([]), do: %{}
+
+  defp barter_outputs(barters) do
+    from(rw in BarterRewardItem,
+      join: i in assoc(rw, :item),
+      where: rw.barter_id in ^parent_ids(barters, :barter_id),
+      order_by: [asc: rw.id],
+      select: %{barter_id: rw.barter_id, item: i, quantity: rw.quantity}
+    )
+    |> Repo.all()
+    # First-write-wins because the query is ordered ASC — the primary output.
+    |> Enum.reduce(%{}, fn row, acc ->
+      Map.put_new(acc, row.barter_id, Map.delete(row, :barter_id))
     end)
   end
+
+  defp craft_required_items([]), do: %{}
+
+  defp craft_required_items(crafts) do
+    from(rq in CraftRequiredItem,
+      join: i in assoc(rq, :item),
+      where: rq.craft_id in ^parent_ids(crafts, :craft_id),
+      order_by: [asc: rq.id],
+      select: %{
+        craft_id: rq.craft_id,
+        item: i,
+        count: rq.count,
+        quantity: rq.quantity,
+        attributes: rq.attributes
+      }
+    )
+    |> Repo.all()
+    |> Enum.group_by(& &1.craft_id, &Map.delete(&1, :craft_id))
+  end
+
+  defp craft_outputs([]), do: %{}
+
+  defp craft_outputs(crafts) do
+    from(rw in CraftRewardItem,
+      join: i in assoc(rw, :item),
+      where: rw.craft_id in ^parent_ids(crafts, :craft_id),
+      order_by: [asc: rw.id],
+      select: %{craft_id: rw.craft_id, item: i, quantity: rw.quantity}
+    )
+    |> Repo.all()
+    |> Enum.reduce(%{}, fn row, acc ->
+      Map.put_new(acc, row.craft_id, Map.delete(row, :craft_id))
+    end)
+  end
+
+  # Deduped: the whole-catalogue query returns one row per (parent, subject),
+  # so a barter rewarding two items appears twice and would otherwise be named
+  # twice in the `IN` list.
+  defp parent_ids(rows, key), do: rows |> Enum.map(&Map.fetch!(&1, key)) |> Enum.uniq()
 
   # Same shape as `obtained_from_barters/1` but joining through
   # crafts → station_level → station so the UI can show
   # "Workbench level 2 (45m)".
-  defp obtained_from_crafts(item_id) do
-    craft_query =
+  defp obtained_from_crafts_rows(subject) do
+    crafts =
       from(rw in CraftRewardItem,
+        as: :subject,
         join: c in assoc(rw, :craft),
         join: l in assoc(c, :station_level),
         join: s in assoc(l, :station),
@@ -1510,9 +1806,9 @@ defmodule EftBuddy.Items do
         # so we surface this so the UI can phrase it as
         # "After completing <trader> task <task>".
         left_join: tut in assoc(tu, :trader),
-        where: rw.item_id == ^item_id,
-        order_by: [asc: s.name, asc: l.level],
+        order_by: [asc: s.name, asc: l.level, asc: rw.id],
         select: %{
+          item_id: rw.item_id,
           craft_id: c.id,
           station_name: s.name,
           station_slug: s.normalized_name,
@@ -1525,32 +1821,14 @@ defmodule EftBuddy.Items do
           output_quantity: rw.quantity
         }
       )
+      |> for_subject(subject)
+      |> Repo.all()
 
-    crafts = Repo.all(craft_query)
-    craft_ids = Enum.map(crafts, & &1.craft_id)
+    required = craft_required_items(crafts)
 
-    required =
-      if craft_ids == [] do
-        %{}
-      else
-        from(rq in CraftRequiredItem,
-          join: i in assoc(rq, :item),
-          where: rq.craft_id in ^craft_ids,
-          select: %{
-            craft_id: rq.craft_id,
-            item: i,
-            count: rq.count,
-            quantity: rq.quantity,
-            attributes: rq.attributes
-          }
-        )
-        |> Repo.all()
-        |> Enum.group_by(& &1.craft_id, &Map.delete(&1, :craft_id))
-      end
-
-    Enum.map(crafts, fn c ->
-      Map.put(c, :required, Map.get(required, c.craft_id, []))
-    end)
+    crafts
+    |> Enum.map(fn c -> Map.put(c, :required, Map.get(required, c.craft_id, [])) end)
+    |> group_by_subject()
   end
 
   # Crafts that *consume* this item as an input. Mirror of
@@ -1576,20 +1854,21 @@ defmodule EftBuddy.Items do
   # plus by-products. We surface only the primary (first) reward
   # here so the row stays a single line; if we ever need to
   # expose by-products this is the place to extend.
-  defp needed_for_crafts(item_id) do
-    craft_query =
+  defp needed_for_crafts_rows(subject) do
+    crafts =
       from(rq in CraftRequiredItem,
+        as: :subject,
         join: c in assoc(rq, :craft),
         join: l in assoc(c, :station_level),
         join: s in assoc(l, :station),
         left_join: tu in assoc(c, :task_unlock),
-        # Same trader-of-the-unlock-task pull as `obtained_from_crafts/1`
+        # Same trader-of-the-unlock-task pull as `obtained_from_crafts_rows/1`
         # so the "After completing <trader> task <task>" copy renders
         # identically in both directions.
         left_join: tut in assoc(tu, :trader),
-        where: rq.item_id == ^item_id,
-        order_by: [asc: s.name, asc: l.level],
+        order_by: [asc: s.name, asc: l.level, asc: rq.id],
         select: %{
+          item_id: rq.item_id,
           craft_id: c.id,
           station_name: s.name,
           station_slug: s.normalized_name,
@@ -1600,60 +1879,21 @@ defmodule EftBuddy.Items do
           task_unlock_trader_name: tut.name
         }
       )
+      |> for_subject(subject)
+      |> Repo.all()
 
-    crafts = Repo.all(craft_query)
-    craft_ids = Enum.map(crafts, & &1.craft_id)
+    # The SAME two child maps `obtained_from_crafts_rows/1` builds. Each
+    # direction used to compute its own copy of an identical query.
+    required = craft_required_items(crafts)
+    output = craft_outputs(crafts)
 
-    {required_by_craft, output_by_craft} =
-      if craft_ids == [] do
-        {%{}, %{}}
-      else
-        required =
-          from(rq in CraftRequiredItem,
-            join: i in assoc(rq, :item),
-            where: rq.craft_id in ^craft_ids,
-            select: %{
-              craft_id: rq.craft_id,
-              item: i,
-              count: rq.count,
-              quantity: rq.quantity,
-              attributes: rq.attributes
-            }
-          )
-          |> Repo.all()
-          |> Enum.group_by(& &1.craft_id, &Map.delete(&1, :craft_id))
-
-        # Primary reward per craft, keyed by craft_id. We order by
-        # the row's id ascending and take the first row — the API
-        # preserves declaration order, which matches the wiki's
-        # "primary" output. Multi-output crafts are rare; if one
-        # comes through this just picks whichever row was inserted
-        # first, which is stable.
-        output =
-          from(rw in CraftRewardItem,
-            join: i in assoc(rw, :item),
-            where: rw.craft_id in ^craft_ids,
-            order_by: [asc: rw.id],
-            select: %{
-              craft_id: rw.craft_id,
-              item: i,
-              quantity: rw.quantity
-            }
-          )
-          |> Repo.all()
-          |> Enum.reduce(%{}, fn row, acc ->
-            # First-write-wins because the query is ordered ASC.
-            Map.put_new(acc, row.craft_id, Map.delete(row, :craft_id))
-          end)
-
-        {required, output}
-      end
-
-    Enum.map(crafts, fn c ->
+    crafts
+    |> Enum.map(fn c ->
       c
-      |> Map.put(:required, Map.get(required_by_craft, c.craft_id, []))
-      |> Map.put(:output, Map.get(output_by_craft, c.craft_id))
+      |> Map.put(:required, Map.get(required, c.craft_id, []))
+      |> Map.put(:output, Map.get(output, c.craft_id))
     end)
+    |> group_by_subject()
   end
 
   # Barters whose `requiredItems` contains this item — i.e. the
@@ -1676,20 +1916,22 @@ defmodule EftBuddy.Items do
   # (id-ordered for stability) to keep the row a single line.
   # If a multi-reward barter ever needs full enumeration, this
   # is the place to extend.
-  defp needed_for_barters(item_id, game_mode) do
-    barter_query =
+  defp needed_for_barters_rows(subject, game_mode) do
+    barters =
       from(rq in BarterRequiredItem,
+        as: :subject,
         join: b in assoc(rq, :barter),
         join: tr in assoc(b, :trader),
         left_join: tu in assoc(b, :task_unlock),
         # Trader the *unlock task* belongs to. Same pattern as
-        # `obtained_from_barters/1` — usually equal to the barter's
+        # `obtained_from_barters_rows/2` — usually equal to the barter's
         # trader, but pulled separately for accuracy on cross-trader
         # unlocks.
         left_join: tut in assoc(tu, :trader),
-        where: rq.item_id == ^item_id and b.game_mode == ^game_mode,
-        order_by: [asc: tr.name, asc: b.level],
+        where: b.game_mode == ^game_mode,
+        order_by: [asc: tr.name, asc: b.level, asc: rq.id],
         select: %{
+          item_id: rq.item_id,
           barter_id: b.id,
           trader_name: tr.name,
           trader_slug: tr.normalized_name,
@@ -1700,57 +1942,19 @@ defmodule EftBuddy.Items do
           task_unlock_trader_name: tut.name
         }
       )
+      |> for_subject(subject)
+      |> Repo.all()
 
-    barters = Repo.all(barter_query)
-    barter_ids = Enum.map(barters, & &1.barter_id)
+    required = barter_required_items(barters)
+    output = barter_outputs(barters)
 
-    {required_by_barter, output_by_barter} =
-      if barter_ids == [] do
-        {%{}, %{}}
-      else
-        required =
-          from(rq in BarterRequiredItem,
-            join: i in assoc(rq, :item),
-            where: rq.barter_id in ^barter_ids,
-            select: %{
-              barter_id: rq.barter_id,
-              item: i,
-              count: rq.count,
-              quantity: rq.quantity,
-              attributes: rq.attributes
-            }
-          )
-          |> Repo.all()
-          |> Enum.group_by(& &1.barter_id, &Map.delete(&1, :barter_id))
-
-        # Primary reward per barter, keyed by barter_id. Same
-        # first-write-wins strategy as `needed_for_crafts/1` so
-        # the row stays single-line for the common single-reward
-        # case and is stable for the rare multi-reward one.
-        output =
-          from(rw in BarterRewardItem,
-            join: i in assoc(rw, :item),
-            where: rw.barter_id in ^barter_ids,
-            order_by: [asc: rw.id],
-            select: %{
-              barter_id: rw.barter_id,
-              item: i,
-              quantity: rw.quantity
-            }
-          )
-          |> Repo.all()
-          |> Enum.reduce(%{}, fn row, acc ->
-            Map.put_new(acc, row.barter_id, Map.delete(row, :barter_id))
-          end)
-
-        {required, output}
-      end
-
-    Enum.map(barters, fn b ->
+    barters
+    |> Enum.map(fn b ->
       b
-      |> Map.put(:required, Map.get(required_by_barter, b.barter_id, []))
-      |> Map.put(:output, Map.get(output_by_barter, b.barter_id))
+      |> Map.put(:required, Map.get(required, b.barter_id, []))
+      |> Map.put(:output, Map.get(output, b.barter_id))
     end)
+    |> group_by_subject()
   end
 
   # Normalize an item id to its canonical string UUID. Accepts an

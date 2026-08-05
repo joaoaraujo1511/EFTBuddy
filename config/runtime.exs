@@ -287,6 +287,20 @@ if config_env() == :prod do
          :item_dataset_enabled,
          System.get_env("ITEM_DATASET", "0") in ~w(1 true yes)
 
+  # Precomputing every item's detail panel, OFF unless ITEM_DETAILS is set.
+  #
+  # Opt-in only because its MEMORY cost is the one number in the caching work
+  # that cannot be derived by reading code — the payloads embed item structs
+  # once per recipe per participating item, and the estimate spans a wide range.
+  # Measure on the box before enabling; see `EftBuddy.Items.warm_item_details/1`.
+  #
+  # Unlike ITEM_DATASET, this gates only the BUILDER. `get_item_details/2` reads
+  # the same key either way, so turning it off changes latency and can never
+  # change an answer.
+  config :eft_buddy,
+         :item_details_precompute_enabled,
+         System.get_env("ITEM_DETAILS", "0") in ~w(1 true yes)
+
   # The operator dashboard, OFF unless ADMIN_DASHBOARD_PORT is set. Absent, the
   # `:admin_dashboard` key is never written, `EftBuddy.Application` never adds the
   # endpoint to the supervision tree, and nothing binds the port. Fail-closed by

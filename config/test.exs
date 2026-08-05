@@ -95,6 +95,11 @@ config :eft_buddy, cache_warm_debounce_ms: 50
 # behind for everything after it.
 config :eft_buddy, item_dataset_enabled: false
 
+# Off by default, like the dataset layer: the bulk builder writes thousands of
+# entries and the suite reads its own fixtures back. The equality test enables
+# it explicitly.
+config :eft_buddy, item_details_precompute_enabled: false
+
 # No warm registry in test. The real one issues real queries, and a warm runs in
 # a process SPAWNED by the warmer — which does not own the Ecto sandbox
 # connection the test checked out, so it fails with a confusing ownership error

@@ -250,3 +250,6 @@ config :eft_buddy, start_sync: System.get_env("START_SYNC", "1") not in ~w(0 fal
 # collation, so the two environments legitimately order punctuation-leading item
 # names differently. The dataset follows whichever database it is talking to.
 config :eft_buddy, item_dataset_enabled: System.get_env("ITEM_DATASET") in ~w(1 true)
+
+config :eft_buddy,
+  item_details_precompute_enabled: System.get_env("ITEM_DETAILS") in ~w(1 true)
