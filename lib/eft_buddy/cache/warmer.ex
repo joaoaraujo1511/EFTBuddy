@@ -458,9 +458,19 @@ defmodule EftBuddy.Cache.Warmer do
     )
   end
 
-  @doc "Summary of `coverage/0`: how many specs are live, and which are not."
+  @doc """
+  Summary of `coverage/0`: how many specs are live, and which are not.
+
+  Computed straight from the registry and ETS rather than through the
+  GenServer. `coverage/0` has to ask the server because it reports each spec's
+  last warm outcome, which lives in server state — but liveness does not, and
+  routing this through a `call` made it fail during boot: `EftBuddyWeb.Telemetry`
+  is the first child in the supervision tree and this warmer is the fourth, so
+  the first poll called a process that did not exist yet. Observed in
+  production as `Error when calling MFA defined by measurement`.
+  """
   def coverage_summary do
-    rows = coverage()
+    rows = Enum.map(specs(), &liveness/1)
 
     %{
       total: length(rows),
@@ -832,15 +842,14 @@ defmodule EftBuddy.Cache.Warmer do
     |> max(Cache.default_ttl_ms())
   end
 
-  defp coverage_row(spec, results) do
+  # The part of a coverage row that needs only the registry and ETS.
+  defp liveness(spec) do
     {expected, live} =
       case spec do
         %{kind: :entry, keys: [_ | _] = keys} -> {length(keys), Cache.live_count(keys)}
         %{kind: :bulk, label: label} -> {1, Cache.live_count([sentinel_key(label)])}
         _ -> {0, 0}
       end
-
-    last = Map.get(results, spec.label, %{})
 
     %{
       label: spec.label,
@@ -850,12 +859,21 @@ defmodule EftBuddy.Cache.Warmer do
       sources: spec.sources,
       expected: expected,
       live: live,
-      state: coverage_state(expected, live),
+      state: coverage_state(expected, live)
+    }
+  end
+
+  defp coverage_row(spec, results) do
+    last = Map.get(results, spec.label, %{})
+
+    spec
+    |> liveness()
+    |> Map.merge(%{
       last_outcome: Map.get(last, :outcome),
       last_warm_at: Map.get(last, :at),
       last_warm_ms: Map.get(last, :duration_ms),
       last_entries: Map.get(last, :entries)
-    }
+    })
   end
 
   # `:external` specs write outside `EftBuddy.Cache`, so there is nothing to

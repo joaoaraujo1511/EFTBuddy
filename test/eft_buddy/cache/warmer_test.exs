@@ -438,6 +438,32 @@ defmodule EftBuddy.Cache.WarmerTest do
       assert summary.cold == ["probe.b"]
     end
 
+    test "the summary works with the warmer process not running" do
+      # `EftBuddyWeb.Telemetry` is the FIRST child in the supervision tree and
+      # this warmer is the fourth, so the poller's first measurement runs before
+      # the GenServer exists. Routing the summary through a `call` made that
+      # crash on every boot — observed in production as "Error when calling MFA
+      # defined by measurement".
+      #
+      # Liveness comes from the registry and ETS, neither of which needs the
+      # server, so the summary must not require it.
+      Application.put_env(:eft_buddy, :cache_warm_specs, [
+        probe_spec("probe.a", ["HideoutSync"], {:warm_test, :a}) |> with_keys([{:warm_test, :a}])
+      ])
+
+      pid = Process.whereis(Warmer)
+      :ok = Supervisor.terminate_child(EftBuddy.Supervisor, Warmer)
+      refute Process.whereis(Warmer)
+
+      try do
+        assert %{total: 1, live: 0, cold: ["probe.a"]} = Warmer.coverage_summary()
+        assert Warmer.emit_telemetry() == :ok
+      after
+        {:ok, _} = Supervisor.restart_child(EftBuddy.Supervisor, Warmer)
+        assert Process.whereis(Warmer) != pid
+      end
+    end
+
     test "external specs are unprobed rather than reported cold forever" do
       Application.put_env(:eft_buddy, :cache_warm_specs, [
         %{
