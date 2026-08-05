@@ -96,10 +96,70 @@ defmodule EftBuddy.Chapters do
   """
   @spec get_endings() :: chapter() | nil
   def get_endings do
-    case get_chapter(@endings_slug) do
-      nil -> nil
-      chapter -> %{chapter | content_sections: condense_endings(chapter.content_sections)}
-    end
+    # Cached because `condense_endings/1` is a real fold over the projected
+    # sections and this runs on every storyline mount, both on the index and on
+    # the endgame chapter.
+    Cache.fetch({__MODULE__, :endings}, ["ChaptersSync"], fn ->
+      case endings_page() do
+        nil -> nil
+        chapter -> %{chapter | content_sections: condense_endings(chapter.content_sections)}
+      end
+    end)
+  end
+
+  @doc """
+  Every wiki "Related items" page name any chapter (or the Endings page)
+  references, resolved to a real DB item, as one `%{page => item}` map.
+
+  Deliberately GLOBAL rather than per chapter. The components only ever do
+  `Map.get(index, page)`, so a superset resolves identically — and one shared
+  entry beats one per chapter keyed on a list of page names, which is what
+  caching `Items.resolve_wiki_items/1` directly would produce (a
+  several-hundred-element list sitting inside an ETS key, copied on every
+  lookup).
+
+  `Chapters -> Items` is the allowed direction. `Items` stays free of any
+  storyline dependency.
+  """
+  def item_index do
+    Cache.fetch(
+      {__MODULE__, :item_index},
+      # Page names come from ChaptersSync and resolution from ItemsSync — plus
+      # QuestItemsSync, because these are literally the wiki's related QUEST
+      # items and most resolve to `is_quest_item: true` rows written by that run.
+      ["ChaptersSync", "ItemsSync", "QuestItemsSync"],
+      &item_index_uncached/0
+    )
+  end
+
+  defp item_index_uncached do
+    ending_items =
+      case get_endings() do
+        nil -> []
+        endings -> endings.items
+      end
+
+    (Enum.flat_map(list_chapters(), & &1.items) ++ ending_items)
+    |> Enum.map(& &1.page)
+    |> EftBuddy.Items.resolve_wiki_items()
+  end
+
+  # The Endings page as projected, WITHOUT the display fold.
+  #
+  # A separate entry from `get_endings/0` rather than one shared with it,
+  # because `/storyline/endings` must render the uncondensed page —
+  # `condense_endings/1` is a presentation transform for the Endings TAB only.
+  # Collapsing the two would silently change what that route shows.
+  #
+  # Not served from `list_chapters/0` like the other slugs: the endings page is
+  # a reference page, not a chapter, and does not appear in that list.
+  defp endings_page do
+    Cache.fetch({__MODULE__, :endings_page}, ["ChaptersSync"], fn ->
+      case Repo.get_by(ChapterPage, normalized_name: @endings_slug) do
+        nil -> nil
+        %ChapterPage{content: content} -> Projection.project(content)
+      end
+    end)
   end
 
   # The scraped "Endings" page renders as nine sections — a leading
@@ -156,16 +216,22 @@ defmodule EftBuddy.Chapters do
   (e.g. `"boreas"`). Returns nil for unknown slugs.
   """
   @spec get_chapter(String.t()) :: chapter() | nil
+  def get_chapter(@endings_slug), do: endings_page()
+
   def get_chapter(slug) when is_binary(slug) and slug != "" do
-    # Bounded by the number of storyline chapters, and each result is a
-    # `Projection.project/1` pass over the page's wiki markup — so this caches
-    # meaningful CPU alongside the round trip.
-    Cache.fetch({__MODULE__, :chapter, slug}, ["ChaptersSync"], fn ->
-      case Repo.get_by(ChapterPage, normalized_name: slug) do
-        nil -> nil
-        %ChapterPage{content: content} -> Projection.project(content)
-      end
-    end)
+    # Served from `list_chapters/0`, which is already cached AND warmed and
+    # already holds every chapter's projection. So this costs no round trip on a
+    # warm node, and an unknown slug costs nothing at all.
+    #
+    # It used to have its own `{Chapters, :chapter, slug}` entry, where `slug`
+    # is the `/storyline/:slug` PATH PARAM — an externally-controlled key space.
+    # Every garbage slug was a database round trip and a cached `nil`, so
+    # walking a few thousand URLs would evict the whole table. Deriving from the
+    # already-warm list removes the key rather than trying to guard it.
+    #
+    # `Enum.find` over ~13 materialised projections is not worth turning into a
+    # map; that would just be a second copy of the same data in ETS.
+    Enum.find(list_chapters(), &(&1.normalized_name == slug))
   end
 
   def get_chapter(_), do: nil

@@ -112,7 +112,27 @@ defmodule EftBuddy.Tasks do
   a single `WHERE id IN ... OR external_id IN ...` query. Old
   payloads still resolve until they get re-synced.
   """
-  def required_items_for(%{objectives: objs}) when is_list(objs) do
+  def required_items_for(%Task{id: id, objectives: objs}) when is_binary(id) and is_list(objs) do
+    Cache.fetch(
+      {__MODULE__, :required_items, id},
+      # QuestItemsSync is the one that is easy to miss. Quest-exclusive items —
+      # the ones most likely to appear here — live in `items` with
+      # `is_quest_item: true` and are written by their OWN Reporter run, not by
+      # ItemsSync. Keyed on TasksSync and ItemsSync alone, a renamed quest item
+      # would show its old name until the next task sync.
+      ["TasksSync", "ItemsSync", "QuestItemsSync"],
+      fn -> required_items_uncached(objs) end
+    )
+  end
+
+  # A task-shaped map without an id (a view model, a WIP wiki row) still has to
+  # work; it just cannot be cached, because there is nothing stable to key on.
+  def required_items_for(%{objectives: objs}) when is_list(objs),
+    do: required_items_uncached(objs)
+
+  def required_items_for(_), do: []
+
+  defp required_items_uncached(objs) do
     meta_by_ref =
       objs
       |> Enum.flat_map(&objective_item_refs_with_meta/1)
@@ -142,8 +162,6 @@ defmodule EftBuddy.Tasks do
         |> Enum.sort_by(& &1.item.name)
     end
   end
-
-  def required_items_for(_), do: []
 
   # Walk every per-objective payload field that can carry an item
   # ref, pairing each ref with the display metadata for that

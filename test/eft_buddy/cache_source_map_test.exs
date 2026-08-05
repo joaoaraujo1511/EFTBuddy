@@ -12,6 +12,7 @@ defmodule EftBuddy.CacheSourceMapTest do
   use EftBuddy.DataCase, async: false
 
   alias EftBuddy.Cache
+  alias EftBuddy.Fixtures
 
   setup do
     original = Application.get_env(:eft_buddy, :cache_enabled)
@@ -141,6 +142,80 @@ defmodule EftBuddy.CacheSourceMapTest do
       EftBuddy.Tasks.list_tasks(preloads: [:trader], game_mode: :pve)
 
       assert Cache.size() == 2
+    end
+  end
+
+  describe "hideout requirements name ItemsSync" do
+    test "level requirements are dropped by ItemsSync, not just HideoutSync" do
+      # The value embeds `%Item{}` and the grid renders `item.name` and
+      # `item.icon_link`. Keyed on HideoutSync alone — as it was — a renamed
+      # item kept its old name on the grid until the next hideout sync, a DAILY
+      # feed. This describe block is exactly the class of bug this module exists
+      # for; hideout was simply never covered by it.
+      station = Fixtures.station(%{name: "Medstation", normalized_name: "medstation"})
+      level = Fixtures.station_level(%{station_id: station.id, level: 1})
+      item = Fixtures.item(%{name: "Bolts", normalized_name: "bolts"})
+      Fixtures.item_requirement(%{level_id: level.id, item_id: item.id, quantity: 1})
+
+      EftBuddy.Hideout.get_level_requirements("medstation", 1)
+
+      sources = sources_for({EftBuddy.Hideout, :level_requirements, "medstation", 1})
+
+      assert "HideoutSync" in sources
+      assert "ItemsSync" in sources
+    end
+
+    test "total item cost is dropped by ItemsSync too" do
+      station = Fixtures.station(%{name: "Medstation", normalized_name: "medstation"})
+      level = Fixtures.station_level(%{station_id: station.id, level: 1})
+      item = Fixtures.item(%{name: "Bolts", normalized_name: "bolts"})
+      Fixtures.item_requirement(%{level_id: level.id, item_id: item.id, quantity: 1})
+
+      EftBuddy.Hideout.get_total_item_cost("medstation", 1)
+
+      sources = sources_for({EftBuddy.Hideout, :total_item_cost, "medstation", 1})
+
+      assert "HideoutSync" in sources
+      assert "ItemsSync" in sources
+    end
+  end
+
+  describe "key spaces stay bounded by rows that exist" do
+    test "a batched hideout read mints nothing for a pair that does not exist" do
+      # `fetch_many/4` stores only what the fill function returned. Without that
+      # property the key space would be "whatever a caller asks about" rather
+      # than "rows in hideout_station_levels".
+      station = Fixtures.station(%{name: "Medstation", normalized_name: "medstation"})
+      Fixtures.station_level(%{station_id: station.id, level: 1})
+
+      EftBuddy.Hideout.get_level_requirements_for([
+        {"medstation", 1},
+        {"medstation", 99},
+        {"no-such-station", 1}
+      ])
+
+      assert Cache.entries() |> Enum.map(& &1.key) == [
+               {EftBuddy.Hideout, :level_requirements, "medstation", 1}
+             ]
+    end
+
+    test "an unknown chapter slug caches nothing" do
+      # The slug is a URL path param, so this key space was externally
+      # controlled: every garbage slug was a round trip AND a cached nil, and a
+      # few thousand of them would evict the whole table. `get_chapter/1` now
+      # filters the already-warm chapter list instead of owning a key.
+      assert EftBuddy.Chapters.get_chapter("../../etc/passwd") == nil
+
+      refute Enum.any?(Cache.entries(), &match?({EftBuddy.Chapters, :chapter, _}, &1.key))
+    end
+
+    test "an unknown wiki slug caches nothing" do
+      # `wiki_lookup_slugs/1` derives up to three candidate slugs per task from
+      # its name, so caching every lookup would mint thousands of nil entries
+      # keyed on strings no row will ever match.
+      assert EftBuddy.Wiki.get_quest("no-such-quest") == nil
+
+      refute Enum.any?(Cache.entries(), &match?({EftBuddy.Wiki, :quest, _}, &1.key))
     end
   end
 end
