@@ -1,5 +1,8 @@
 defmodule EftBuddy.HideoutTest do
-  use EftBuddy.DataCase, async: true
+  # `async: false`: `count_queries/1` in the batching tests counts repo
+  # telemetry with no pid filter (it has to — Ecto runs preloads in separate
+  # processes), so a concurrently-running test's queries would be counted too.
+  use EftBuddy.DataCase, async: false
 
   alias EftBuddy.Fixtures
   alias EftBuddy.Hideout
@@ -98,20 +101,22 @@ defmodule EftBuddy.HideoutTest do
       end
     end
 
-    # Counts repo queries issued BY THIS PROCESS. Ecto emits the telemetry event
-    # from the calling process, so the pid filter keeps this usable in an async
-    # test without counting a neighbouring test's queries.
+    # Counts EVERY repo query, with no pid filter.
+    #
+    # An earlier version filtered on `self() == test_pid`, reasoning that Ecto
+    # emits its telemetry from the calling process. That is true of the parent
+    # query and false of the preloads: Ecto runs those in SEPARATE processes, so
+    # the filter counted 1 of the ~5 queries a preloaded read issues and the
+    # "does not scale" assertion below was measuring almost nothing. Counting
+    # everything is why this module is `async: false`.
     defp count_queries(fun) do
-      test_pid = self()
       counter = :counters.new(1, [])
       handler_id = {__MODULE__, System.unique_integer()}
 
       :telemetry.attach(
         handler_id,
         [:eft_buddy, :repo, :query],
-        fn _event, _measure, _meta, _cfg ->
-          if self() == test_pid, do: :counters.add(counter, 1, 1)
-        end,
+        fn _event, _measure, _meta, _cfg -> :counters.add(counter, 1, 1) end,
         nil
       )
 
@@ -123,19 +128,22 @@ defmodule EftBuddy.HideoutTest do
       end
     end
 
-    test "matches get_level_requirements/2 exactly, keyed by {slug, level}" do
-      slugs = stations_with_requirements(3)
-      pairs = Enum.map(slugs, &{&1, 1})
+    test "returns the real requirement content, keyed by {slug, level}" do
+      # Asserts on CONTENT rather than against `get_level_requirements/2`.
+      # Comparing the two used to be meaningful when each issued its own query;
+      # now that the single-pair function delegates to this one, such a
+      # comparison would be tautological and would pass even if both returned
+      # nonsense.
+      station = Fixtures.station(%{name: "Medstation", normalized_name: "medstation"})
+      level = Fixtures.station_level(%{station_id: station.id, level: 1})
+      item = Fixtures.item(%{name: "Bolts", normalized_name: "bolts"})
+      Fixtures.item_requirement(%{level_id: level.id, item_id: item.id, quantity: 7})
 
-      batched = Hideout.get_level_requirements_for(pairs)
+      batched = Hideout.get_level_requirements_for([{"medstation", 1}])
 
-      assert map_size(batched) == 3
-
-      # The batched read must be indistinguishable from the per-station one —
-      # this is a performance change, not a behaviour change.
-      for slug <- slugs do
-        assert batched[{slug, 1}] == Hideout.get_level_requirements(slug, 1)
-      end
+      assert %{item_requirements: [req]} = batched[{"medstation", 1}]
+      assert req.quantity == 7
+      assert req.item.name == "Bolts"
     end
 
     test "query count does NOT scale with the number of stations" do
