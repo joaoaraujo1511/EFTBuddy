@@ -81,6 +81,48 @@ defmodule EftBuddy.CacheBoundsTest do
       end)
     end
 
+    test "warm entries are never evicted, even as the oldest rows in the table" do
+      # The failure this replaces: the ceiling's eviction rule was justified by
+      # a comment claiming warm entries "continuously renew their position"
+      # because the warmer rewrites them on every sync. Feeds run every 6 to 24
+      # hours, so they do not renew — they are permanently the oldest rows, and
+      # were therefore the FIRST thing dropped under detail-panel traffic. The
+      # cache would then evict precisely the entries the server built on
+      # purpose, silently, while still returning correct answers.
+      Application.put_env(:eft_buddy, :cache_max_entries, 50)
+
+      # Written first, so under oldest-written-first they are the prime targets.
+      warm_keys = for i <- 1..5, do: {:bounds_test, :warm, i}
+      write_as_warm(warm_keys)
+
+      for i <- 1..500 do
+        Cache.fetch({:bounds_test, :read, i}, ["ItemsSync"], fn -> i end)
+      end
+
+      live = Cache.entries() |> Enum.map(& &1.key) |> MapSet.new()
+
+      for key <- warm_keys do
+        assert MapSet.member?(live, key), "warm entry #{inspect(key)} was evicted"
+      end
+    end
+
+    test "a table over the ceiling with only warm entries overshoots and says so" do
+      Application.put_env(:eft_buddy, :cache_max_entries, 10)
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          write_as_warm(for(i <- 1..40, do: {:bounds_test, :warm, i}))
+        end)
+
+      # Overshooting is the correct failure. The ceiling is a guess; the warm
+      # set is bounded by the game's content. Silently discarding it to honour
+      # the guess would be worse than using more memory than configured — but it
+      # must be loud enough that an operator can act on it.
+      assert Cache.size() == 40
+      assert log =~ "over the 10-entry ceiling"
+      assert log =~ "CACHE_MAX_ENTRIES"
+    end
+
     test "an over-ceiling insert gets back under in a single pass" do
       # The flat 10% this replaced could not: a bulk write that overshoots by
       # more than a tenth of the ceiling would stay over after a full
@@ -165,6 +207,22 @@ defmodule EftBuddy.CacheBoundsTest do
 
     for i <- 1..count do
       Cache.fetch({:bounds_test, :big, i}, ["ItemsSync"], fn -> big end)
+    end
+  end
+
+  # Writes each key from a process marked as the warmer, so the entries are
+  # tagged `:warm` exactly as a real warm build's would be.
+  defp write_as_warm(keys) do
+    {_pid, ref} =
+      spawn_monitor(fn ->
+        Cache.mark_warm_process()
+        Cache.put_many(Enum.map(keys, &{&1, :v}), ["ItemsSync"])
+      end)
+
+    receive do
+      {:DOWN, ^ref, :process, _pid, :normal} -> :ok
+    after
+      5_000 -> flunk("warm write did not finish")
     end
   end
 

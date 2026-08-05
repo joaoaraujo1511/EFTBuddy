@@ -220,6 +220,247 @@ defmodule EftBuddy.CacheTest do
     end
   end
 
+  describe "put/4 and put_many/3" do
+    test "put/4 writes an entry fetch/4 then serves without recomputing" do
+      Cache.put({:put_test, :a}, :written, ["ItemsSync"])
+
+      {counter, bump} = counting_fun()
+
+      assert Cache.fetch({:put_test, :a}, ["ItemsSync"], fn ->
+               bump.()
+               :recomputed
+             end) == :written
+
+      assert calls(counter) == 0
+    end
+
+    test "put_many/3 applies the same sources to every entry" do
+      Cache.put_many([{{:pm, 1}, :a}, {{:pm, 2}, :b}], ["TasksSync"])
+
+      assert Cache.size() == 2
+      assert Cache.invalidate_source("TasksSync") == 2
+      assert Cache.size() == 0
+    end
+
+    test "put_many/3 with an empty list is a no-op" do
+      assert Cache.put_many([], ["TasksSync"]) == :ok
+      assert Cache.size() == 0
+    end
+  end
+
+  describe "get/1" do
+    test "returns the value without computing, or :miss" do
+      assert Cache.get({:get_test, :absent}) == :miss
+
+      Cache.put({:get_test, :present}, :v, ["ItemsSync"])
+      assert Cache.get({:get_test, :present}) == {:ok, :v}
+    end
+
+    test "an expired entry is a miss" do
+      Cache.put({:get_test, :stale}, :v, ["ItemsSync"], ttl_ms: 0)
+      Process.sleep(5)
+
+      assert Cache.get({:get_test, :stale}) == :miss
+    end
+  end
+
+  describe "live?/1" do
+    test "is true for a live entry and false for an expired or absent one" do
+      Cache.put({:live_test, :fresh}, :v, ["ItemsSync"])
+      Cache.put({:live_test, :stale}, :v, ["ItemsSync"], ttl_ms: 0)
+      Process.sleep(5)
+
+      assert Cache.live?({:live_test, :fresh})
+      refute Cache.live?({:live_test, :stale})
+      refute Cache.live?({:live_test, :absent})
+    end
+
+    test "does NOT delete the expired entry it reports on" do
+      # The sweep is the single deleter. A probe with a side effect is a probe
+      # you cannot run from a dashboard, and `live_count/1` over a whole spec
+      # registry would otherwise quietly mutate the table it is describing.
+      Cache.put({:live_test, :stale}, :v, ["ItemsSync"], ttl_ms: 0)
+      Process.sleep(5)
+
+      refute Cache.live?({:live_test, :stale})
+      assert Cache.size() == 1
+    end
+
+    test "does not count as a read" do
+      before = Cache.stats()
+
+      Cache.put({:live_test, :fresh}, :v, ["ItemsSync"])
+      Cache.live?({:live_test, :fresh})
+      Cache.live?({:live_test, :absent})
+
+      after_stats = Cache.stats()
+      assert after_stats.hits == before.hits
+      assert after_stats.misses == before.misses
+    end
+
+    test "does not copy the value out of the table" do
+      # The whole reason a periodic re-warm is affordable. Reading through
+      # `fetch/4` instead would copy every cached value into the warmer on every
+      # pass; `live?/1` reads one integer.
+      big = List.duplicate(:x, 50_000)
+      for i <- 1..40, do: Cache.put({:live_test, :big, i}, big, ["ItemsSync"])
+
+      keys = for i <- 1..40, do: {:live_test, :big, i}
+
+      {_pid, ref} =
+        :erlang.spawn_opt(fn -> 40 = Cache.live_count(keys) end, [
+          :monitor,
+          max_heap_size: %{size: 100_000, kill: true, error_logger: false}
+        ])
+
+      assert_receive {:DOWN, ^ref, :process, _pid, :normal}, 5_000
+    end
+  end
+
+  describe "fetch_many/4" do
+    test "calls the fill function with only the keys that missed" do
+      Cache.put({:fm, 1}, :cached, ["ItemsSync"])
+
+      test_pid = self()
+
+      result =
+        Cache.fetch_many([{:fm, 1}, {:fm, 2}], ["ItemsSync"], fn missing ->
+          send(test_pid, {:asked_for, missing})
+          Map.new(missing, &{&1, :filled})
+        end)
+
+      assert_received {:asked_for, [{:fm, 2}]}
+      assert result == %{{:fm, 1} => :cached, {:fm, 2} => :filled}
+    end
+
+    test "does not call the fill function at all when everything hits" do
+      Cache.put({:fm, 1}, :a, ["ItemsSync"])
+      Cache.put({:fm, 2}, :b, ["ItemsSync"])
+
+      test_pid = self()
+
+      result =
+        Cache.fetch_many([{:fm, 1}, {:fm, 2}], ["ItemsSync"], fn missing ->
+          send(test_pid, {:asked_for, missing})
+          %{}
+        end)
+
+      refute_received {:asked_for, _}
+      assert result == %{{:fm, 1} => :a, {:fm, 2} => :b}
+    end
+
+    test "keys the fill function omits are neither stored nor returned" do
+      # This is what keeps a batched read's key space bounded by rows that
+      # exist. A caller asking about something absent must not mint an entry for
+      # it, or the key space becomes whatever callers can name.
+      result =
+        Cache.fetch_many([{:fm, :real}, {:fm, :bogus}], ["ItemsSync"], fn _missing ->
+          %{{:fm, :real} => :v}
+        end)
+
+      assert result == %{{:fm, :real} => :v}
+      assert Cache.entries() |> Enum.map(& &1.key) == [{:fm, :real}]
+    end
+
+    test "counts a hit and a miss per key, not per call" do
+      Cache.put({:fm, 1}, :a, ["ItemsSync"])
+      before = Cache.stats()
+
+      Cache.fetch_many([{:fm, 1}, {:fm, 2}, {:fm, 3}], ["ItemsSync"], fn missing ->
+        Map.new(missing, &{&1, :v})
+      end)
+
+      after_stats = Cache.stats()
+      assert after_stats.hits - before.hits == 1
+      assert after_stats.misses - before.misses == 2
+    end
+
+    test "with the cache disabled, the fill function receives every key" do
+      Application.put_env(:eft_buddy, :cache_enabled, false)
+
+      result =
+        Cache.fetch_many([{:fm, 1}, {:fm, 2}], ["ItemsSync"], fn missing ->
+          Map.new(missing, &{&1, :v})
+        end)
+
+      assert result == %{{:fm, 1} => :v, {:fm, 2} => :v}
+      assert Cache.size() == 0
+    end
+  end
+
+  describe "origin attribution" do
+    test "a plain process is a visitor; a marked process is the warmer" do
+      # Without this split the warmer's own builds land in the visitor miss
+      # column, and once it re-probes on a timer it becomes the busiest reader
+      # on the node — at which point the hit rate stops describing anybody.
+      before = Cache.stats()
+
+      Cache.fetch({:origin, :v}, ["ItemsSync"], fn -> :x end)
+      Cache.fetch({:origin, :v}, ["ItemsSync"], fn -> :x end)
+
+      in_warm_process(fn ->
+        Cache.fetch({:origin, :w}, ["ItemsSync"], fn -> :x end)
+        Cache.fetch({:origin, :w}, ["ItemsSync"], fn -> :x end)
+      end)
+
+      s = Cache.stats()
+      assert s.hits - before.hits == 1
+      assert s.misses - before.misses == 1
+      assert s.warm_hits - before.warm_hits == 1
+      assert s.warm_misses - before.warm_misses == 1
+    end
+
+    test "a warm write is tagged :warm and counted" do
+      # Deltas, not absolutes: `Cache.clear/0` empties the table but the
+      # counters are cumulative since boot, so an earlier test in this module
+      # has already moved them.
+      before = Cache.stats()
+
+      in_warm_process(fn -> Cache.put_many([{{:o, 1}, :a}, {{:o, 2}, :b}], ["ItemsSync"]) end)
+      Cache.put({:o, 3}, :c, ["ItemsSync"])
+
+      assert Cache.size_by_origin() == %{warm: 2, read: 1}
+      assert Cache.stats().warm_writes - before.warm_writes == 2
+    end
+
+    test "the marking cannot leak into a later plain process" do
+      in_warm_process(fn -> Cache.put({:o, :w}, :v, ["ItemsSync"]) end)
+
+      before = Cache.stats()
+      Cache.fetch({:o, :later}, ["ItemsSync"], fn -> :x end)
+
+      s = Cache.stats()
+      assert s.misses - before.misses == 1
+      assert s.warm_misses == before.warm_misses
+    end
+
+    test "put_ttl_override/1 applies only to writes without an explicit ttl" do
+      in_warm_process(fn ->
+        Cache.put_ttl_override(60_000)
+        Cache.put({:ttl, :derived}, :v, ["ItemsSync"])
+        Cache.put({:ttl, :explicit}, :v, ["ItemsSync"], ttl_ms: 5_000)
+      end)
+
+      by_key = Map.new(Cache.entries(), &{&1.key, &1})
+
+      assert by_key[{:ttl, :derived}].expires_in_ms > 30_000
+      assert by_key[{:ttl, :explicit}].expires_in_ms <= 5_000
+    end
+  end
+
+  # Runs `fun` in a spawned process marked as the warmer, and waits for it.
+  # Spawned rather than inline because the marking is process-scoped and must
+  # not bleed into the assertions that follow.
+  defp in_warm_process(fun) do
+    {_pid, ref} =
+      spawn_monitor(fn ->
+        Cache.mark_warm_process()
+        fun.()
+      end)
+
+    assert_receive {:DOWN, ^ref, :process, _pid, :normal}, 5_000
+  end
+
   # Exactly the event `EftBuddy.Sync.Reporter.record_status/4` emits, so these
   # tests break if that contract changes rather than silently passing against a
   # shape nothing produces.

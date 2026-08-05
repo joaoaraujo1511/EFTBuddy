@@ -264,6 +264,17 @@ if config_env() == :prod do
          :cache_enabled,
          System.get_env("CACHE_ENABLED", "1") not in ~w(0 false no)
 
+  # Cache entry ceiling.
+  #
+  # Overridable because the warm set is bounded by the game's CONTENT, not by
+  # traffic: every task and item detail panel is precomputed, so the floor grows
+  # with a wipe rather than with visitors. `EftBuddy.Cache` refuses to evict warm
+  # entries to stay under this — it logs and overshoots instead — so a ceiling
+  # set below the warm set's size is an error message, not a memory bound.
+  config :eft_buddy,
+         :cache_max_entries,
+         String.to_integer(System.get_env("CACHE_MAX_ENTRIES") || "20000")
+
   # The in-memory item catalogue, OFF unless ITEM_DATASET is set.
   #
   # Opt-IN rather than opt-out, unlike the read cache above, because this one
