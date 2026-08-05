@@ -1249,9 +1249,21 @@ defmodule EftBuddy.Items do
     mode = EftBuddy.GameMode.to_db(game_mode)
 
     if details_precompute_enabled?() do
+      # Seeded with EVERY item id, not just the ones the section queries
+      # returned. `relational_details_for/2` keys its result on ids that appear
+      # in at least one section, and on the real catalogue that is only about a
+      # third of it — the rest are loot, mods and ammo with no task, hideout,
+      # barter or craft involvement at all. Without this they get no entry and
+      # stay fully lazy, which measured as 1,772 of 5,449 items precomputed and
+      # the other 3,677 exactly as slow as before.
+      #
+      # An empty panel is a real answer and costs eight empty lists to store.
+      # One extra query buys the other two thirds of the catalogue.
+      all_ids = Repo.all(from(i in Item, select: i.id))
       built = relational_details_for(:all, mode)
 
-      built
+      all_ids
+      |> Map.new(fn id -> {id, Map.get(built, id, empty_details())} end)
       |> Enum.chunk_every(Cache.warm_chunk_size())
       |> Enum.reduce_while({0, [], Cache.memory_bytes()}, fn chunk, {n, written, start_bytes} ->
         keys = Enum.map(chunk, fn {id, _} -> detail_key(id, mode) end)

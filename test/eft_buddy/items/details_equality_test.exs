@@ -226,6 +226,29 @@ defmodule EftBuddy.Items.DetailsEqualityTest do
       assert details.item.id == orphan.id
     end
 
+    test "every item in the catalogue gets an entry, relations or not" do
+      # Measured on the real catalogue before this was fixed: 1,772 of 5,449
+      # items precomputed per mode. The section queries only return ids that
+      # appear in some section, so the two thirds of the catalogue that are
+      # loot, mods and ammo — with no task, hideout, barter or craft
+      # involvement — got no entry and stayed exactly as slow as before.
+      #
+      # Which is most of what a visitor clicks, so the feature looked like it
+      # was working while missing the common case.
+      items = seed()
+      Cache.clear()
+
+      assert {:ok, n} = Items.warm_item_details(:pvp)
+      assert n == Repo.aggregate(EftBuddy.Items.Item, :count)
+
+      # The orphan has no relations whatsoever and must still be a cache hit.
+      before = Cache.stats()
+      assert Items.get_item_details(items.orphan.id, :pvp)
+
+      assert Cache.stats().misses == before.misses,
+             "an item with no relations was not precomputed"
+    end
+
     test "a nonexistent item is nil and caches nothing" do
       seed()
 
