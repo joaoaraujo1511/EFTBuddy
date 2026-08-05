@@ -314,23 +314,7 @@ defmodule EftBuddy.Cache.Warmer do
           keys: [{EftBuddy.Tasks, :list_tasks, [:trader], mode}]
         )
       end ++
-      for mode <- @ui_modes do
-        # The largest set in the registry: ~5,400 relational panels per mode.
-        #
-        # Sources deliberately omit PricesSync and must stay identical to
-        # `Items.detail_sources/0` — the price-dependent half of a panel is
-        # resolved at read time from the dataset's own price layer, so a
-        # ten-minute tick does not throw away thousands of entries that do not
-        # depend on prices. `cache_source_map_test.exs` pins the two together.
-        #
-        # No-ops unless ITEM_DETAILS is set. Registered unconditionally so
-        # coverage still lists it, mirroring how the dataset specs behave.
-        bulk_spec(
-          "items.details:#{mode}",
-          EftBuddy.Items.detail_sources(),
-          {EftBuddy.Items, :warm_item_details, [mode]}
-        )
-      end ++
+      item_detail_specs() ++
       for mode <- @ui_modes do
         spec("tasks.prereq_map:#{mode}", ["TasksSync"], {EftBuddy.Tasks, :prereq_map, [mode]},
           keys: [{EftBuddy.Tasks, :prereq_map, mode}]
@@ -351,6 +335,34 @@ defmodule EftBuddy.Cache.Warmer do
           keys: [{EftBuddy.Items, :flea_counts_by_category, mode}]
         )
       end
+  end
+
+  # The largest sets in the registry: ~5,400 relational panels per mode.
+  #
+  # Sources deliberately omit PricesSync and must stay identical to
+  # `Items.detail_sources/0` — the price-dependent half of a panel is resolved
+  # at read time from the dataset's own price layer, so a ten-minute tick does
+  # not throw away thousands of entries that do not depend on prices.
+  # `cache_source_map_test.exs` pins the two together.
+  #
+  # Registered ONLY when the builder is switched on, rather than registered
+  # unconditionally and left to no-op. A spec that can never populate anything
+  # is reported cold forever, and `cold: []` is the single check an operator
+  # runs to confirm warming is holding — one permanently-cold row makes that
+  # signal unreadable, which is worse than not listing the capability. The
+  # dashboard shows the flag's state separately.
+  defp item_detail_specs do
+    if EftBuddy.Items.details_precompute_enabled?() do
+      for mode <- @ui_modes do
+        bulk_spec(
+          "items.details:#{mode}",
+          EftBuddy.Items.detail_sources(),
+          {EftBuddy.Items, :warm_item_details, [mode]}
+        )
+      end
+    else
+      []
+    end
   end
 
   defp spec(label, sources, mfa, opts) do
