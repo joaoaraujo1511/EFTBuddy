@@ -132,7 +132,13 @@ defmodule EftBuddy.Wiki do
           normalized_name: q.normalized_name,
           task_name: q.name,
           given_by: q.given_by,
-          wip: q.wip
+          wip: q.wip,
+          # One more cheap column on a query that already runs. The banner used
+          # to live only inside `content`, which this read deliberately never
+          # touches — projecting every wiki page at mount to find a thumbnail is
+          # the cost this shape exists to avoid — so WIP rows had no banner
+          # available at list time and rendered an empty placeholder.
+          banner_url: q.banner_url
         }
       )
     )

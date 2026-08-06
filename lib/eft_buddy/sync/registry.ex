@@ -27,6 +27,8 @@ defmodule EftBuddy.Sync.Registry do
     * `:mod` — the module. Must `use EftBuddy.Sync.Scheduler`.
     * `:bootstrap` — mirrors the module's own `bootstrap_mode/0`; feeds that are
       `:ran` or `:released` receive the completion cast.
+    * `:upstream` — whose API this feed hits. Feeds on different upstreams
+      contend on nothing, so only same-upstream staggers have to stay apart.
 
   ## The cold start is a list of CALLS, not of feeds
 
@@ -59,19 +61,30 @@ defmodule EftBuddy.Sync.Registry do
   """
 
   @feeds [
-    %{mod: EftBuddy.Items.Sync, bootstrap: :ran},
-    %{mod: EftBuddy.Maps.Sync, bootstrap: :ran},
-    %{mod: EftBuddy.Ammo.Sync, bootstrap: :ran},
-    %{mod: EftBuddy.Armor.Sync, bootstrap: :ran},
-    %{mod: EftBuddy.Hideout.Sync, bootstrap: :ran},
-    %{mod: EftBuddy.Tasks.Sync, bootstrap: :ran},
+    %{mod: EftBuddy.Items.Sync, bootstrap: :ran, upstream: :tarkov_dev},
+    %{mod: EftBuddy.Maps.Sync, bootstrap: :ran, upstream: :tarkov_dev},
+    %{mod: EftBuddy.Ammo.Sync, bootstrap: :ran, upstream: :tarkov_dev},
+    %{mod: EftBuddy.Armor.Sync, bootstrap: :ran, upstream: :tarkov_dev},
+    %{mod: EftBuddy.Hideout.Sync, bootstrap: :ran, upstream: :tarkov_dev},
+    %{mod: EftBuddy.Tasks.Sync, bootstrap: :ran, upstream: :tarkov_dev},
 
     # The three Fandom scrapes. None is in the cold start: Bootstrap releases the
     # first two by cast and the quest scrape chains off the events one.
-    %{mod: EftBuddy.Chapters.Sync, bootstrap: :released},
-    %{mod: EftBuddy.Events.Sync, bootstrap: :released},
-    %{mod: EftBuddy.Wiki.Sync, bootstrap: :chained}
+    %{mod: EftBuddy.Chapters.Sync, bootstrap: :released, upstream: :fandom},
+    %{mod: EftBuddy.Events.Sync, bootstrap: :released, upstream: :fandom},
+    %{mod: EftBuddy.Wiki.Sync, bootstrap: :chained, upstream: :fandom}
   ]
+
+  @doc """
+  Minimum gap between two feeds hitting the same upstream, once their staggers
+  are reduced modulo the shortest cycle.
+
+  See `EftBuddy.Sync.RegistryTest` for why the comparison is modular.
+  """
+  def min_stagger_gap_ms, do: 20 * 60 * 1_000
+
+  @doc "The shortest cycle any feed runs on, which is the modulus staggers collide under."
+  def shortest_cycle_ms, do: 6 * 60 * 60 * 1_000
 
   @doc "Every registered feed."
   def all, do: @feeds

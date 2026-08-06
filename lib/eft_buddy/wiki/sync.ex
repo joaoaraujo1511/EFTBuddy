@@ -4,11 +4,35 @@ defmodule EftBuddy.Wiki.Sync do
   into `wiki_quests`. Replaces the old offline `dump_wiki_quests.exs`
   script + committed JSON manifests + boot-time ETS load.
 
-  Scheduled like the other syncers: a background run a short while after
-  boot (so the Tasks sync has populated the `tasks` table first), then
-  daily. Can also be triggered synchronously from IEx:
+  Runs every six hours, and can also be triggered synchronously from IEx:
 
       EftBuddy.Wiki.Sync.run()
+
+  ## Chained AND self-timed, which is new
+
+  This scrape reads the `event_quests` blacklist `EftBuddy.Events.Sync` writes,
+  so it is armed by that sync completing rather than by a fixed offset. That was
+  the whole schedule while both ran daily.
+
+  It now runs at 6h while events runs at 12h, so "a minute after every events
+  run" can no longer deliver the cadence. It keeps a real 6h timer, and the
+  `:events_complete` cast re-arms it — `arm_first_run/2` cancels and reschedules,
+  so a chained run simply replaces the pending self-timed one.
+
+  The consequence is that roughly half the runs use a blacklist up to twelve
+  hours old. That is acceptable: the blacklist is a set of event-quest slugs,
+  and it changes when an event starts or ends, not continuously. A quest that
+  slips through for one cycle shows as WIP on the Tasks tab and is corrected on
+  the next.
+
+  ## On the 6h cadence
+
+  This is the heaviest scrape in the app — it enumerates `Category:Quests`, then
+  fetches every quest page's lead section and its remaining sections — and it
+  points four times the traffic at a third party that already rate-limits with
+  503s. Conditional fetching (compare each page's `revid` before pulling
+  sections) is the mitigation, and should be treated as required rather than
+  optional if the Fandom error rate rises.
 
   Pipeline (all the pure parts are reused from the dump pipeline so this
   module is only the impure glue):
@@ -53,7 +77,8 @@ defmodule EftBuddy.Wiki.Sync do
   # quest table cannot go stale forever.
   use EftBuddy.Sync.Scheduler,
     label: "WikiSync",
-    interval: 24 * 60 * 60 * 1_000,
+    interval: 6 * 60 * 60 * 1_000,
+    stagger: 90 * 60 * 1_000,
     bootstrap: :chained,
     fallback: 45 * 60 * 1_000,
     config_key: :wiki
@@ -69,6 +94,9 @@ defmodule EftBuddy.Wiki.Sync do
   @api_url "https://escapefromtarkov.fandom.com/api.php"
   @category "Category:Quests"
   @imageinfo_batch 50
+
+  # MediaWiki caps `titles` at 50 per query for anonymous callers.
+  @revisions_batch 50
 
   # How long after `:events_complete` this scrape starts.
   @post_events_gap 1 * 60 * 1_000
@@ -104,6 +132,8 @@ defmodule EftBuddy.Wiki.Sync do
     :given_by,
     :karma_kind,
     :karma_value,
+    :banner_url,
+    :revision_id,
     :content,
     :updated_at
   ]
@@ -165,8 +195,16 @@ defmodule EftBuddy.Wiki.Sync do
     end
   end
 
-  defp scrape_and_upsert(titles, db_index) do
-    quests = Enum.map(titles, &Dump.build_quest(&1, db_index))
+  defp scrape_and_upsert(all_quests, db_index) do
+    all_quests = Enum.map(all_quests, &Dump.build_quest(&1, db_index))
+
+    # One batched `prop=revisions` query per fifty pages tells us which pages
+    # have actually been edited since we last stored them. Everything else is
+    # skipped without fetching a single section.
+    revisions = current_revision_ids(all_quests)
+    {quests, unchanged} = partition_by_revision(all_quests, revisions)
+
+    log_skipped_unchanged(unchanged, all_quests)
 
     # Fetched up front for the whole page set so the per-page credits cost
     # a handful of batched requests rather than one request per quest.
@@ -176,7 +214,7 @@ defmodule EftBuddy.Wiki.Sync do
       Dump.run(quests,
         fetch: &fetch_quest_sections/1,
         resolve: &resolve_image_urls/1,
-        write: &upsert_quest(&1, &2, rosters)
+        write: &upsert_quest(&1, &2, rosters, revisions)
       )
 
     # Blacklisted quests (Ref / historical content) were skipped by the
@@ -185,8 +223,14 @@ defmodule EftBuddy.Wiki.Sync do
     # clearing them out of the Tasks-tab WIP list.
     blacklisted = MapSet.new(result.skipped, & &1.slug)
 
+    # UNCHANGED PAGES MUST STAY IN THE KEEP-SET, and this is the sharp edge of
+    # the whole optimisation. `prune/1` deletes every row whose slug is absent,
+    # so a page skipped because nothing changed looks identical to a page that
+    # vanished from the wiki — and the first incremental run would delete most of
+    # the table. The keep-set is built from ALL enumerated quests for exactly
+    # that reason; only the blacklisted ones are removed from it.
     keep_slugs =
-      quests
+      all_quests
       |> Enum.map(& &1.normalized_name)
       |> Enum.reject(&MapSet.member?(blacklisted, &1))
 
@@ -195,14 +239,106 @@ defmodule EftBuddy.Wiki.Sync do
     {:ok,
      %{
        processed: result.summary.processed,
+       unchanged: length(unchanged),
        failed: result.summary.failed,
        blacklisted: result.summary.skipped,
        pruned: pruned,
        wip:
-         Enum.count(quests, fn q ->
+         Enum.count(all_quests, fn q ->
            q.wip and not MapSet.member?(blacklisted, q.normalized_name)
          end)
      }}
+  end
+
+  # Split the enumerated quests into "needs scraping" and "unchanged since the
+  # last run".
+  #
+  # A quest is scraped when anything is unknown: no stored row, no stored
+  # revision, or no revision reported by the API. Unknown resolves to "scrape it"
+  # in every direction, because the cost of a needless scrape is one page fetch
+  # and the cost of a wrongly-skipped one is a walkthrough that never updates.
+  @doc false
+  # Public so the "unknown means scrape it" rule can be tested directly; the
+  # alternative is exercising it through a network call.
+  def partition_by_revision(quests, revisions) do
+    stored = stored_revision_ids()
+
+    Enum.split_with(quests, fn quest ->
+      current = Map.get(revisions, quest.wiki_title)
+      previous = Map.get(stored, quest.normalized_name)
+
+      is_nil(current) or is_nil(previous) or current != previous
+    end)
+  end
+
+  defp stored_revision_ids do
+    Repo.all(from(q in QuestPage, select: {q.normalized_name, q.revision_id}))
+    |> Map.new()
+  end
+
+  defp log_skipped_unchanged([], _all), do: :ok
+
+  defp log_skipped_unchanged(unchanged, all) do
+    Logger.info(
+      "[#{prefix()}] #{length(unchanged)} of #{length(all)} quest pages unedited since the " <>
+        "last run; fetching sections for the remaining #{length(all) - length(unchanged)}."
+    )
+  end
+
+  # `%{wiki_title => revision_id}` for every enumerated page, batched.
+  #
+  # A failed batch yields nothing rather than raising, which degrades to a full
+  # scrape of those pages — the behaviour before conditional fetching existed.
+  defp current_revision_ids(quests) do
+    quests
+    |> Enum.map(& &1.wiki_title)
+    |> Enum.uniq()
+    |> Enum.chunk_every(@revisions_batch)
+    |> Enum.flat_map(&revision_batch/1)
+    |> Map.new()
+  end
+
+  defp revision_batch(batch) do
+    case DumpScript.api_get(
+           %{
+             "action" => "query",
+             "titles" => Enum.join(batch, "|"),
+             "prop" => "revisions",
+             # Ids only. This is the cheapest thing the API can answer with, and
+             # asking for content here would defeat the point.
+             "rvprop" => "ids",
+             "format" => "json",
+             "formatversion" => "2",
+             "redirects" => "1"
+           },
+           http_opts()
+         ) do
+      {:ok, body} ->
+        # Titles are normalised and redirected by the API, so map the answers
+        # back to the titles we asked about — otherwise every redirected page
+        # reads as "unknown revision" and is scraped on every run.
+        rewrites =
+          ((get_in(body, ["query", "normalized"]) || []) ++
+             (get_in(body, ["query", "redirects"]) || []))
+          |> Map.new(fn %{"from" => from, "to" => to} -> {to, from} end)
+
+        (get_in(body, ["query", "pages"]) || [])
+        |> Enum.flat_map(fn
+          %{"title" => title, "revisions" => [%{"revid" => revid} | _]} when is_integer(revid) ->
+            [{Map.get(rewrites, title, title), revid}]
+
+          _other ->
+            []
+        end)
+
+      {:error, reason} ->
+        Reporter.silent_warn(
+          "[#{prefix()}] revision probe failed (#{inspect(reason)}); " <>
+            "scraping this batch unconditionally"
+        )
+
+        []
+    end
   end
 
   # Delete rows for quests no longer present on the wiki (or now
@@ -211,9 +347,13 @@ defmodule EftBuddy.Wiki.Sync do
   # prior row is preserved — and we only reach here on a non-empty
   # enumeration. The empty clause guards the pathological "everything got
   # blacklisted" case so it can't `NOT IN ()` the whole table away.
-  defp prune([]), do: 0
+  @doc false
+  # Public because it is the destructive step: it deletes every row whose slug is
+  # absent from the keep-set, so the keep-set being wrong is how the whole table
+  # goes away. Tested directly rather than inferred.
+  def prune([]), do: 0
 
-  defp prune(keep_slugs) do
+  def prune(keep_slugs) do
     {deleted, _} =
       Repo.delete_all(from(q in QuestPage, where: q.normalized_name not in ^keep_slugs))
 
@@ -222,7 +362,7 @@ defmodule EftBuddy.Wiki.Sync do
 
   # ── Injected write: upsert one quest's manifest as a row ───────────
 
-  defp upsert_quest(quest, manifest, rosters) do
+  defp upsert_quest(quest, manifest, rosters, revisions) do
     # Round-trip the atom-keyed manifest through JSON so `content` is
     # stored string-keyed (exactly what a JSONB read returns) and the
     # projection/karma parsing below see the same shape as at read time.
@@ -247,6 +387,16 @@ defmodule EftBuddy.Wiki.Sync do
       given_by: manifest.given_by,
       karma_kind: karma_kind,
       karma_value: karma_value,
+      # Promoted out of `content` so the Tasks list can render it as a row
+      # thumbnail. `Projection.project/1` still reads the same file from the
+      # manifest for the detail panel; this is the same value, reachable without
+      # projecting every page at mount.
+      banner_url: banner_url(content),
+      # Stamped from the SAME probe that decided this page needed scraping, not
+      # re-fetched here. A second read could see a newer revision than the one
+      # these sections came from, and the row would then claim to be current for
+      # an edit it does not contain — skipped on every subsequent run.
+      revision_id: Map.get(revisions, quest.wiki_title),
       content: content
     }
 
@@ -259,6 +409,17 @@ defmodule EftBuddy.Wiki.Sync do
     |> case do
       {:ok, _row} -> :ok
       {:error, changeset} -> {:error, changeset.errors}
+    end
+  end
+
+  # The banner's URL, read off the same string-keyed manifest the projection
+  # reads. Deliberately reuses `EftBuddy.Wiki.Projection`'s extraction rather
+  # than re-finding the `banner: true` file here — two copies of "which file is
+  # the banner" is how the column and the panel end up disagreeing.
+  defp banner_url(content) do
+    case Projection.project(content) do
+      %{banner: %{url: url}} when is_binary(url) -> url
+      _ -> nil
     end
   end
 

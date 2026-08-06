@@ -24,6 +24,15 @@ defmodule EftBuddy.Wiki.QuestPage do
     field :given_by, :string
     field :karma_kind, :string
     field :karma_value, :integer
+
+    # Promoted out of `content` so the Tasks list can render a row thumbnail
+    # without projecting every wiki page at mount — see `EftBuddy.Wiki.all_quests/0`.
+    field :banner_url, :string
+
+    # The wiki revision this manifest was scraped from. `nil` means unknown, and
+    # the only safe reading of unknown is "scrape it" — see `EftBuddy.Wiki.Sync`.
+    field :revision_id, :integer
+
     field :content, :map, default: %{}
 
     belongs_to :task, EftBuddy.Tasks.Task
@@ -39,6 +48,8 @@ defmodule EftBuddy.Wiki.QuestPage do
     :given_by,
     :karma_kind,
     :karma_value,
+    :banner_url,
+    :revision_id,
     :content
   ]
 

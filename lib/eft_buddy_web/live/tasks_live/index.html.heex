@@ -321,15 +321,11 @@
                         No objectives captured from the wiki for this quest.
                       </p>
                     </div>
-                    <aside class="space-y-6 min-w-0">
-                      <img
-                        :if={task.details.banner_url}
-                        src={task.details.banner_url}
-                        alt={task.name <> " banner"}
-                        loading="lazy"
-                        class="max-w-full h-auto border border-line"
-                      />
-                    </aside>
+                    <%!-- No banner here: it's rendered as a thumbnail on the collapsed
+                         row above, exactly as it is for API-backed quests. It
+                         used to render here instead, because the WIP row had no
+                         banner to show — which is what made the two sources
+                         disagree about where a quest's banner belongs. --%>
                   </div>
                 </div>
 

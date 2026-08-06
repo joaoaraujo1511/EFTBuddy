@@ -132,6 +132,59 @@ defmodule EftBuddy.Sync.RegistryTest do
     end
   end
 
+  describe "the stagger table" do
+    test "no two feeds on the same upstream collide, at any cycle coincidence" do
+      # THE INVARIANT THAT MAKES THE SCHEDULE MEAN ANYTHING.
+      #
+      # Three cycles run at once — 6h, 12h and 24h — so they periodically
+      # coincide, and two feeds whose staggers are congruent modulo the shortest
+      # cycle collide on every coincidence, forever. Comparing the raw staggers
+      # would miss that entirely: 0h50 and 6h50 look 6 hours apart and are the
+      # same instant every other cycle.
+      #
+      # Reduced mod 6h and kept ≥20 minutes apart, they never collide, whatever
+      # the cycle lengths. Feeds on different upstreams contend on nothing, so
+      # the rule is per-group.
+      modulus = Registry.shortest_cycle_ms()
+      min_gap = Registry.min_stagger_gap_ms()
+
+      Registry.all()
+      |> Enum.group_by(& &1.upstream)
+      |> Enum.each(fn {upstream, feeds} ->
+        slots =
+          feeds
+          |> Enum.map(&{&1.mod, rem(&1.mod.stagger_ms(), modulus)})
+          |> Enum.sort_by(&elem(&1, 1))
+
+        slots
+        |> Enum.chunk_every(2, 1, :discard)
+        |> Enum.each(fn [{mod_a, a}, {mod_b, b}] ->
+          assert b - a >= min_gap,
+                 "#{upstream}: #{inspect(mod_a)} (#{div(a, 60_000)}m) and " <>
+                   "#{inspect(mod_b)} (#{div(b, 60_000)}m) are #{div(b - a, 60_000)}m apart " <>
+                   "mod 6h; they will overlap on every cycle coincidence"
+        end)
+      end)
+    end
+
+    test "jitter cannot swamp the minimum gap" do
+      # Uncapped ±10% jitter at a twelve-hour interval is 0-72 minutes of
+      # one-sided drift, which makes a 20-minute stagger table decorative. The
+      # cap has to stay comfortably under it.
+      assert EftBuddy.Sync.Scheduler.max_jitter_ms() < Registry.min_stagger_gap_ms()
+    end
+
+    test "every stagger is shorter than the cycle it sits in" do
+      # A stagger longer than its own interval would push a feed past its next
+      # tick, so its first scheduled run would land after the second.
+      for feed <- Registry.all() do
+        assert feed.mod.stagger_ms() < feed.mod.interval_ms(),
+               "#{inspect(feed.mod)}: stagger #{feed.mod.stagger_ms()}ms exceeds its " <>
+                 "own #{feed.mod.interval_ms()}ms interval"
+      end
+    end
+  end
+
   describe "the cold-start sequence" do
     test "runs items first, since everything below resolves against them" do
       assert [%{key: :items} | _] = Registry.cold_start_steps()
