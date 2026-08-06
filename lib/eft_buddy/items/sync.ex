@@ -45,9 +45,7 @@ defmodule EftBuddy.Items.Sync do
     Vendor
   }
 
-  alias EftBuddy.Hideout.{Station, StationLevel, Trader}
-  alias EftBuddy.Tasks.Task, as: TaskRow
-
+  alias EftBuddy.Items.Sync.Resolvers
   alias EftBuddy.Sync.Reporter
 
   # All durations are in milliseconds and MUST be integers — `Process.send_after/3`
@@ -536,7 +534,7 @@ defmodule EftBuddy.Items.Sync do
   # at all. Treat it as private; `cleanup_stale/2` above is public for the same
   # reason.
   def refresh_item_prices_flea(repo, raw, game_mode) do
-    item_map = fetch_item_map(repo)
+    item_map = Resolvers.item_map(repo)
     history_map = fetch_history_map(repo, game_mode)
     now = now_naive()
     now_ms = System.system_time(:millisecond)
@@ -1111,21 +1109,21 @@ defmodule EftBuddy.Items.Sync do
       insert_categories(repo, items)
     end)
     |> Ecto.Multi.run(:category_map, fn repo, _ ->
-      {:ok, fetch_category_map(repo)}
+      {:ok, Resolvers.category_map(repo)}
     end)
     # 2. Vendors next — FK targets for sell_for / buy_for.
     |> Ecto.Multi.run(:insert_vendors, fn repo, _ ->
       insert_vendors(repo, items)
     end)
     |> Ecto.Multi.run(:vendor_map, fn repo, _ ->
-      {:ok, fetch_vendor_map(repo)}
+      {:ok, Resolvers.vendor_map(repo)}
     end)
     # 3. Items — single bulk upsert keyed on :external_id.
     |> Ecto.Multi.run(:upsert_items, fn repo, %{category_map: category_map} ->
       upsert_items(repo, items, category_map)
     end)
     |> Ecto.Multi.run(:item_map, fn repo, _ ->
-      {:ok, fetch_item_map(repo)}
+      {:ok, Resolvers.item_map(repo)}
     end)
     # 3b. Populate `contains_item_id` for ammo boxes. Has to come
     # after `:item_map` because we need every item's UUID resolved
@@ -1185,12 +1183,6 @@ defmodule EftBuddy.Items.Sync do
     end
   end
 
-  defp fetch_category_map(repo) do
-    from(c in Category, select: {c.external_id, c.id})
-    |> repo.all()
-    |> Map.new()
-  end
-
   # ── Vendors ────────────────────────────────────────────
 
   defp insert_vendors(repo, items) do
@@ -1224,12 +1216,6 @@ defmodule EftBuddy.Items.Sync do
 
         {:ok, count}
     end
-  end
-
-  defp fetch_vendor_map(repo) do
-    from(v in Vendor, select: {v.name, v.id})
-    |> repo.all()
-    |> Map.new()
   end
 
   # ── Items ──────────────────────────────────────────────
@@ -1322,12 +1308,6 @@ defmodule EftBuddy.Items.Sync do
 
         {:ok, total}
     end
-  end
-
-  defp fetch_item_map(repo) do
-    from(i in Item, select: {i.external_id, i.id})
-    |> repo.all()
-    |> Map.new()
   end
 
   # ── Contained items ────────────────────────────────────
@@ -1505,8 +1485,8 @@ defmodule EftBuddy.Items.Sync do
           Repo.transaction(
             fn ->
               insert_vendors(Repo, items)
-              item_map = fetch_item_map(Repo)
-              vendor_map = fetch_vendor_map(Repo)
+              item_map = Resolvers.item_map(Repo)
+              vendor_map = Resolvers.vendor_map(Repo)
 
               {:ok, prices} = upsert_item_prices(Repo, items, item_map, game_mode)
 
@@ -1709,9 +1689,9 @@ defmodule EftBuddy.Items.Sync do
   defp sync_barters(game_mode) do
     Reporter.with_run("BartersSync:#{game_mode}", fn ->
       with {:ok, raw} <- EftBuddy.TarkovApi.barters(game_mode),
-           {:ok, items_map} <- {:ok, fetch_item_map(Repo)},
-           {:ok, traders_map} <- {:ok, fetch_trader_map(Repo)},
-           {:ok, tasks_map} <- {:ok, fetch_task_map(Repo, game_mode)} do
+           {:ok, items_map} <- {:ok, Resolvers.item_map(Repo)},
+           {:ok, traders_map} <- {:ok, Resolvers.trader_map(Repo)},
+           {:ok, tasks_map} <- {:ok, Resolvers.task_map(Repo, game_mode)} do
         barters = sanitize_barters(raw, items_map, traders_map)
 
         if barters == [] do
@@ -1735,7 +1715,7 @@ defmodule EftBuddy.Items.Sync do
                 )
               end)
 
-              barter_id_map = fetch_barter_id_map(Repo, game_mode)
+              barter_id_map = Resolvers.barter_id_map(Repo, game_mode)
 
               child_required_rows =
                 build_barter_child_rows(
@@ -1802,8 +1782,8 @@ defmodule EftBuddy.Items.Sync do
              true <- Map.has_key?(traders_map, slug),
              refs when is_list(refs) <- b["requiredItems"],
              rewards when is_list(rewards) <- b["rewardItems"],
-             true <- all_items_resolvable?(refs, items_map),
-             true <- all_items_resolvable?(rewards, items_map) do
+             true <- Resolvers.all_items_resolvable?(refs, items_map),
+             true <- Resolvers.all_items_resolvable?(rewards, items_map) do
           true
         else
           _ -> false
@@ -1812,15 +1792,6 @@ defmodule EftBuddy.Items.Sync do
 
     log_dropped("barters", dropped, items_map, traders_map)
     kept
-  end
-
-  defp all_items_resolvable?(list, items_map) do
-    Enum.all?(list, fn entry ->
-      case entry do
-        %{"item" => %{"id" => id}} -> Map.has_key?(items_map, id)
-        _ -> false
-      end
-    end)
   end
 
   # Surface barters / crafts that `sanitize_*` dropped so a
@@ -1959,7 +1930,7 @@ defmodule EftBuddy.Items.Sync do
         buy_limit: b["buyLimit"],
         game_mode: game_mode,
         trader_id: Map.get(traders_map, b["trader"]["normalizedName"]),
-        task_unlock_id: resolve_task_unlock(b["taskUnlock"], tasks_map),
+        task_unlock_id: Resolvers.resolve_task_unlock(b["taskUnlock"], tasks_map),
         inserted_at: now,
         updated_at: now
       }
@@ -1976,8 +1947,8 @@ defmodule EftBuddy.Items.Sync do
         Enum.map(b[key] || [], fn entry ->
           row = %{
             id: Ecto.UUID.generate(),
-            count: trunc_or_nil(entry["count"]),
-            quantity: trunc_or_nil(entry["quantity"]),
+            count: Resolvers.trunc_or_nil(entry["count"]),
+            quantity: Resolvers.trunc_or_nil(entry["quantity"]),
             barter_id: barter_id,
             item_id: Map.get(items_map, entry["item"]["id"]),
             inserted_at: now,
@@ -1985,7 +1956,7 @@ defmodule EftBuddy.Items.Sync do
           }
 
           if with_attributes do
-            Map.put(row, :attributes, encode_attributes(entry["attributes"]))
+            Map.put(row, :attributes, Resolvers.encode_attributes(entry["attributes"]))
           else
             row
           end
@@ -2002,9 +1973,9 @@ defmodule EftBuddy.Items.Sync do
   defp sync_crafts do
     Reporter.with_run("CraftsSync", fn ->
       with {:ok, raw} <- EftBuddy.TarkovApi.crafts(),
-           {:ok, items_map} <- {:ok, fetch_item_map(Repo)},
-           {:ok, station_level_map} <- {:ok, fetch_station_level_map(Repo)},
-           {:ok, tasks_map} <- {:ok, fetch_task_map(Repo, EftBuddy.GameMode.default())} do
+           {:ok, items_map} <- {:ok, Resolvers.item_map(Repo)},
+           {:ok, station_level_map} <- {:ok, Resolvers.station_level_map(Repo)},
+           {:ok, tasks_map} <- {:ok, Resolvers.task_map(Repo, EftBuddy.GameMode.default())} do
         crafts = sanitize_crafts(raw, items_map, station_level_map)
 
         if crafts == [] do
@@ -2026,7 +1997,7 @@ defmodule EftBuddy.Items.Sync do
                 )
               end)
 
-              craft_id_map = fetch_craft_id_map(Repo)
+              craft_id_map = Resolvers.craft_id_map(Repo)
 
               child_required_rows =
                 build_craft_child_rows(
@@ -2091,8 +2062,8 @@ defmodule EftBuddy.Items.Sync do
              sl_id when is_binary(sl_id) <- Map.get(station_level_map, {slug, level}),
              refs when is_list(refs) <- c["requiredItems"],
              rewards when is_list(rewards) <- c["rewardItems"],
-             true <- all_items_resolvable?(refs, items_map),
-             true <- all_items_resolvable?(rewards, items_map) do
+             true <- Resolvers.all_items_resolvable?(refs, items_map),
+             true <- Resolvers.all_items_resolvable?(rewards, items_map) do
           true
         else
           _ -> false
@@ -2113,7 +2084,7 @@ defmodule EftBuddy.Items.Sync do
         external_id: c["id"],
         duration: c["duration"] || 0,
         station_level_id: Map.get(station_level_map, {slug, level}),
-        task_unlock_id: resolve_task_unlock(c["taskUnlock"], tasks_map),
+        task_unlock_id: Resolvers.resolve_task_unlock(c["taskUnlock"], tasks_map),
         inserted_at: now,
         updated_at: now
       }
@@ -2130,8 +2101,8 @@ defmodule EftBuddy.Items.Sync do
         Enum.map(c[key] || [], fn entry ->
           row = %{
             id: Ecto.UUID.generate(),
-            count: trunc_or_nil(entry["count"]),
-            quantity: trunc_or_nil(entry["quantity"]),
+            count: Resolvers.trunc_or_nil(entry["count"]),
+            quantity: Resolvers.trunc_or_nil(entry["quantity"]),
             craft_id: craft_id,
             item_id: Map.get(items_map, entry["item"]["id"]),
             inserted_at: now,
@@ -2139,7 +2110,7 @@ defmodule EftBuddy.Items.Sync do
           }
 
           if with_attributes do
-            Map.put(row, :attributes, encode_attributes(entry["attributes"]))
+            Map.put(row, :attributes, Resolvers.encode_attributes(entry["attributes"]))
           else
             row
           end
@@ -2275,83 +2246,4 @@ defmodule EftBuddy.Items.Sync do
         :ok
     end
   end
-
-  defp fetch_trader_map(repo) do
-    from(t in Trader, select: {t.normalized_name, t.id})
-    |> repo.all()
-    |> Map.new()
-  end
-
-  defp fetch_task_map(repo, game_mode) do
-    from(t in TaskRow, where: t.game_mode == ^game_mode, select: {t.external_id, t.id})
-    |> repo.all()
-    |> Map.new()
-  end
-
-  # Map of `{station_slug, level} → station_level_id`. Used to
-  # resolve crafts onto the existing hideout schema without
-  # duplicating station/level columns.
-  defp fetch_station_level_map(repo) do
-    from(l in StationLevel,
-      join: s in Station,
-      on: s.id == l.station_id,
-      select: {{s.normalized_name, l.level}, l.id}
-    )
-    |> repo.all()
-    |> Map.new()
-  end
-
-  # Scoped to `game_mode` on purpose. The two modes' barter external_id
-  # sets are disjoint, so a full-table map would still resolve every
-  # child lookup — BUT it's also handed to `replace_children/4`, whose
-  # delete step wipes the children of *every* parent id in the map. An
-  # unscoped map therefore made the second mode's sync delete the first
-  # mode's barter reward/required rows (leaving, e.g., every `regular`
-  # barter childless after the `pve` pass), which surfaced as an empty
-  # Barter tab / "no barter data" in that mode. Restricting the map to
-  # the mode being synced keeps each pass from touching the other's rows.
-  defp fetch_barter_id_map(repo, game_mode) do
-    from(b in Barter, where: b.game_mode == ^game_mode, select: {b.external_id, b.id})
-    |> repo.all()
-    |> Map.new()
-  end
-
-  defp fetch_craft_id_map(repo) do
-    from(c in Craft, select: {c.external_id, c.id})
-    |> repo.all()
-    |> Map.new()
-  end
-
-  defp resolve_task_unlock(nil, _), do: nil
-  defp resolve_task_unlock(%{"id" => id}, tasks_map), do: Map.get(tasks_map, id)
-  defp resolve_task_unlock(_, _), do: nil
-
-  # The API returns `count`/`quantity` as Float (the GraphQL schema
-  # types them as Float!). Our columns are integers because for
-  # barters/crafts these are always whole numbers in practice, so
-  # truncate. Defensive: anything non-numeric becomes nil and is
-  # filtered out by the caller.
-  defp trunc_or_nil(nil), do: nil
-  defp trunc_or_nil(n) when is_integer(n) and n > 0, do: n
-  defp trunc_or_nil(n) when is_float(n) and n > 0.0, do: trunc(n)
-  defp trunc_or_nil(_), do: nil
-
-  # Tarkov.dev returns attributes as `[%{"name" => ..., "value" => ...}]`.
-  # We collapse to a flat map for storage; if duplicate names ever
-  # appear the last wins, which is acceptable since this is rare
-  # metadata used for display only.
-  defp encode_attributes(nil), do: %{}
-
-  defp encode_attributes(list) when is_list(list) do
-    list
-    |> Enum.reduce(%{}, fn
-      %{"name" => name, "value" => value}, acc when is_binary(name) ->
-        Map.put(acc, name, value)
-
-      _, acc ->
-        acc
-    end)
-  end
-
-  defp encode_attributes(_), do: %{}
 end
