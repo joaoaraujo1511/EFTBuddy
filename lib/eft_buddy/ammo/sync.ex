@@ -28,7 +28,20 @@ defmodule EftBuddy.Ammo.Sync do
   subject to the `cleanup_safe?/3` partial-snapshot guard.
   """
 
-  use GenServer
+  # This module's slot in the daily cycle. The wipe-scale syncs are spaced so
+  # they never overlap each other, and so none collides with the wiki chain.
+  #
+  # The order of the slots preserves `EftBuddy.Sync.Bootstrap`'s FK ordering
+  # within a cycle, so a fresh upstream row is normally written before whatever
+  # references it. Nothing DEPENDS on that: each of these syncs is idempotent and
+  # re-links its FKs on the next run, so the worst case out of order is a null
+  # `item_id` for one cycle rather than a broken row.
+  use EftBuddy.Sync.Scheduler,
+    label: "AmmoSync",
+    interval: 24 * 60 * 60 * 1_000,
+    stagger: 40 * 60 * 1_000,
+    bootstrap: :ran,
+    config_key: :ammo
 
   require Logger
   import Ecto.Query
@@ -39,150 +52,8 @@ defmodule EftBuddy.Ammo.Sync do
   alias EftBuddy.Repo
   alias EftBuddy.Sync.Reporter
 
-  @lock_id {__MODULE__, :running}
-
-  # ── Schedule ───────────────────────────────────────────
-
-  @default_interval 24 * 60 * 60 * 1_000
-
-  # This module's slot in the daily cycle. The five wipe-scale syncs are spaced
-  # so they never overlap each other, and so none collides with the wiki chain,
-  # which occupies +0 / +1 min / +8 min from the same reference point.
-  #
-  # The order of the slots preserves `EftBuddy.Sync.Bootstrap`'s FK ordering
-  # within a cycle (maps +20 → hideout +30 → ammo +40 → armor +50 → tasks +60),
-  # so a fresh upstream row is normally written before whatever references it.
-  # Nothing DEPENDS on that: each of these syncs is idempotent and re-links its
-  # FKs on the next run, so the worst case out of order is a null `item_id` for
-  # one cycle rather than a broken row.
-  @stagger 40 * 60 * 1_000
-
-  # Delay to the first SCHEDULED run, measured from `Sync.Bootstrap` casting
-  # `:bootstrap_complete`.
-  #
-  # A FULL INTERVAL, not zero — and this is the one place this module differs
-  # from the wiki scrapers whose shape it otherwise copies. Bootstrap *releases*
-  # `Chapters.Sync` (which has never run at that point), so an offset of 0 there
-  # means "start now". Bootstrap *runs* this module itself, synchronously, as
-  # part of the cold-start sequence — so by the time the cast arrives this sync
-  # has already happened, and arming at 0 would immediately re-sync the whole
-  # snapshot for nothing.
-  @bootstrap_offset @default_interval + @stagger
-
-  # Fallback for when the bootstrap signal never arrives: Bootstrap crashed
-  # before notifying, or exited early. In that case this sync has NOT run and
-  # the table may be empty, so the fallback is short rather than a full day.
-  @fallback_delay 15 * 60 * 1_000 + @stagger
-
-  @doc false
-  # Public so `EftBuddy.Sync.Freshness` can assert its staleness budget covers
-  # this cadence rather than trusting a comment to keep the two in step.
-  def interval_ms, do: @default_interval
-
-  @doc false
-  # Cluster-wide singleton, same pattern as the other syncers: only one node
-  # registers the GenServer and the rest `:ignore` their start_link.
-  def start_link(opts \\ []) do
-    case GenServer.start_link(__MODULE__, opts, name: {:global, __MODULE__}) do
-      {:ok, pid} ->
-        {:ok, pid}
-
-      {:error, {:already_started, _pid}} ->
-        Logger.info("[#{prefix()}] Another node already runs the ammo sync; staying idle here.")
-        :ignore
-    end
-  end
-
-  @doc "Trigger a sync asynchronously (e.g. from IEx)."
-  def sync_now, do: GenServer.cast({:global, __MODULE__}, :sync_now)
-
-  # ── Server ─────────────────────────────────────────────
-
-  @impl true
-  def init(opts) do
-    interval = Keyword.get(opts, :interval, @default_interval)
-    first = Keyword.get(opts, :first_run_delay, @fallback_delay)
-    timer = Process.send_after(self(), :sync, first + jitter(first))
-    {:ok, %{interval: interval, timer: timer}}
-  end
-
-  @impl true
-  def handle_info(:sync, %{interval: interval} = state) do
-    safe_run()
-    timer = Process.send_after(self(), :sync, interval + jitter(interval))
-    {:noreply, %{state | timer: timer}}
-  end
-
-  @impl true
-  def handle_cast(:bootstrap_complete, state) do
-    {:noreply, arm_first_run(state, @bootstrap_offset)}
-  end
-
-  def handle_cast(:sync_now, state) do
-    safe_run()
-    {:noreply, state}
-  end
-
-  defp arm_first_run(state, offset) do
-    if state.timer, do: Process.cancel_timer(state.timer)
-    timer = Process.send_after(self(), :sync, offset + jitter(offset))
-    %{state | timer: timer}
-  end
-
-  defp safe_run do
-    case run() do
-      {:ok, summary} ->
-        Logger.info("[#{prefix()}] done: #{inspect(summary)}")
-        {:ok, summary}
-
-      {:error, :already_running} ->
-        Logger.info("[#{prefix()}] skipped: another ammo sync is already running")
-        {:error, :already_running}
-
-      {:error, reason} ->
-        Logger.warning("[#{prefix()}] run ended early: #{inspect(reason)}")
-        {:error, reason}
-    end
-  rescue
-    e ->
-      Logger.error(
-        "[#{prefix()}] crash: #{Exception.message(e)}\n#{Exception.format_stacktrace(__STACKTRACE__)}"
-      )
-
-      {:error, {:crash, Exception.message(e)}}
-  end
-
-  # ±10%, so several nodes (or several restarts) never align on one instant.
-  defp jitter(ms) when is_integer(ms) and ms > 0, do: :rand.uniform(div(ms, 10) + 1)
-  defp jitter(_), do: 0
-
-  # ── Public API ─────────────────────────────────────────
-
-  @doc """
-  Run a full sync of ammo. Synchronous: blocks until done.
-
-  Returns `{:ok, counts}` on success or `{:error, reason}`. Returns
-  `{:error, :already_running}` if another ammo sync is in progress on any
-  node in the cluster.
-  """
-  def run do
-    nodes = [node() | Node.list()]
-
-    case :global.set_lock(@lock_id, nodes, 0) do
-      true ->
-        try do
-          do_run()
-        after
-          :global.del_lock(@lock_id, nodes)
-        end
-
-      false ->
-        Logger.warning("[#{prefix()}] Skipped: another sync is already running.")
-        {:error, :already_running}
-    end
-  end
-
-  defp do_run do
+  @impl EftBuddy.Sync.Scheduler
+  def do_run do
     Reporter.with_run("AmmoSync", fn ->
       case EftBuddy.TarkovApi.ammo() do
         {:ok, raw} ->
@@ -354,6 +225,4 @@ defmodule EftBuddy.Ammo.Sync do
   defp to_int(value, _default) when is_integer(value), do: value
   defp to_int(value, _default) when is_float(value), do: trunc(value)
   defp to_int(_value, default), do: default
-
-  defp prefix, do: Reporter.colorize_label("AmmoSync")
 end

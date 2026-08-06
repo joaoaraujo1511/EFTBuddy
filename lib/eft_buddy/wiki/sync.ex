@@ -39,7 +39,24 @@ defmodule EftBuddy.Wiki.Sync do
       prune (the slug is still in the processed set).
   """
 
-  use GenServer
+  # `bootstrap: :chained` — this one is not armed by Bootstrap at all.
+  # `EftBuddy.Events.Sync` casts `:events_complete` here when its run finishes
+  # and the scrape starts a short gap later, because this scrape reads the
+  # `event_quests` blacklist that one writes. Chaining on completion rather than
+  # using a fixed offset guarantees the blacklist is fully populated first (it
+  # fixed the cold-start race where event quests still showed as WIP) and keeps
+  # the two heaviest Fandom scrapes off the API at the same time.
+  #
+  # The `fallback` is generous so it never pre-empts a normal events run, which
+  # finishes comfortably within it. It exists for the case where the events sync
+  # never signals at all — cold start disabled, or its scrape failing — so the
+  # quest table cannot go stale forever.
+  use EftBuddy.Sync.Scheduler,
+    label: "WikiSync",
+    interval: 24 * 60 * 60 * 1_000,
+    bootstrap: :chained,
+    fallback: 45 * 60 * 1_000,
+    config_key: :wiki
 
   require Logger
   import Ecto.Query
@@ -53,31 +70,32 @@ defmodule EftBuddy.Wiki.Sync do
   @category "Category:Quests"
   @imageinfo_batch 50
 
-  @default_interval 24 * 60 * 60 * 1_000
-
-  @doc false
-  # Public so `EftBuddy.Sync.Freshness` can assert its staleness budget covers this
-  # cadence rather than trusting a comment to keep the two in step.
-  def interval_ms, do: @default_interval
-
-  # The quest scrape is the longest of the three and depends on the events
-  # scrape having finished — it reads the `event_quests` blacklist that scrape
-  # writes — so rather than a fixed offset it's chained: `EftBuddy.Events.Sync`
-  # casts `:events_complete` here when its run finishes, and this scrape starts
-  # a short gap later. That guarantees the blacklist is fully populated first
-  # (fixing the cold-start race where event quests still showed as WIP) AND
-  # that the two heaviest scrapes never hit the Fandom API at once.
+  # How long after `:events_complete` this scrape starts.
   @post_events_gap 1 * 60 * 1_000
-  # Fallback only: if the events sync never signals (cold start disabled, or
-  # its scrape keeps failing) run anyway after this delay so the quest table
-  # can't go stale forever. Generous so it never pre-empts a normal events
-  # run, which finishes comfortably within it.
-  @fallback_delay 45 * 60 * 1_000
+
   # When the tasks table isn't populated yet (cold start still running),
   # retry soon rather than waiting a whole day.
   @no_tasks_retry 5 * 60 * 1_000
 
-  @lock_id {__MODULE__, :running}
+  @impl EftBuddy.Sync.Scheduler
+  # A scrape that found no tasks to attach quests to ran too early — the cold
+  # start has not populated the table yet. Coming back in minutes rather than on
+  # the normal cadence is the difference between the quest tab being right after
+  # boot and being empty for a day.
+  def next_interval({:error, :no_tasks}, _interval), do: @no_tasks_retry
+  def next_interval({:error, :already_running}, _interval), do: Scheduler.contention_retry_ms()
+  def next_interval(_result, interval), do: interval
+
+  @impl EftBuddy.Sync.Scheduler
+  # The events sync finished its run and refreshed the `event_quests` blacklist
+  # this scrape honours: (re)arm the scrape a short gap later, cancelling the
+  # standing fallback/daily timer. If a scrape is somehow already running, the
+  # global lock makes the armed run a no-op.
+  def handle_extra_cast(:events_complete, state) do
+    {:noreply, arm_first_run(state, @post_events_gap)}
+  end
+
+  def handle_extra_cast(_msg, state), do: {:noreply, state}
 
   @replace_on_conflict [
     :name,
@@ -90,101 +108,8 @@ defmodule EftBuddy.Wiki.Sync do
     :updated_at
   ]
 
-  # ── Client ─────────────────────────────────────────────
-
-  # Cluster-wide singleton, same pattern as `Items.Sync`: only one node
-  # registers the GenServer; the others :ignore start_link so their
-  # supervisor leaves the slot empty rather than every node firing its
-  # own daily scrape against the wiki.
-  def start_link(opts \\ []) do
-    case GenServer.start_link(__MODULE__, opts, name: {:global, __MODULE__}) do
-      {:ok, pid} ->
-        {:ok, pid}
-
-      {:error, {:already_started, _pid}} ->
-        Logger.info("[#{prefix()}] Another node already runs the wiki sync; staying idle here.")
-        :ignore
-    end
-  end
-
-  @doc """
-  Run the wiki scrape synchronously. Returns `{:ok, summary}`,
-  `{:error, :no_tasks}`, `{:error, :empty_enumeration}`,
-  `{:error, :already_running}`, or `{:error, reason}`.
-  """
-  def run, do: with_global_lock(&do_run/0)
-
-  @doc "Trigger a scrape asynchronously (e.g. from IEx)."
-  def sync_now, do: GenServer.cast({:global, __MODULE__}, :sync_now)
-
-  # ── Server ─────────────────────────────────────────────
-
-  @impl true
-  def init(opts) do
-    interval = Keyword.get(opts, :interval, @default_interval)
-    fallback = Keyword.get(opts, :fallback_delay, @fallback_delay)
-    timer = Process.send_after(self(), :sync, fallback + jitter(fallback))
-    {:ok, %{interval: interval, timer: timer}}
-  end
-
-  @impl true
-  def handle_info(:sync, %{interval: interval} = state) do
-    next =
-      case safe_run() do
-        {:error, :no_tasks} -> @no_tasks_retry
-        _ -> interval
-      end
-
-    timer = Process.send_after(self(), :sync, next + jitter(next))
-    {:noreply, %{state | timer: timer}}
-  end
-
-  # The events sync finished its run and refreshed the `event_quests`
-  # blacklist this scrape honours: (re)arm the scrape a short gap later,
-  # cancelling the standing fallback/daily timer. If a scrape is somehow
-  # already running, the global lock makes the armed run a no-op.
-  @impl true
-  def handle_cast(:events_complete, state) do
-    {:noreply, arm_first_run(state, @post_events_gap)}
-  end
-
-  def handle_cast(:sync_now, state) do
-    safe_run()
-    {:noreply, state}
-  end
-
-  defp arm_first_run(state, offset) do
-    if state.timer, do: Process.cancel_timer(state.timer)
-    timer = Process.send_after(self(), :sync, offset + jitter(offset))
-    %{state | timer: timer}
-  end
-
-  defp safe_run do
-    case run() do
-      {:ok, summary} ->
-        Logger.info("[#{prefix()}] done: #{inspect(summary)}")
-        {:ok, summary}
-
-      {:error, :already_running} ->
-        Logger.info("[#{prefix()}] skipped: another wiki sync is already running")
-        {:error, :already_running}
-
-      {:error, reason} ->
-        Logger.warning("[#{prefix()}] run ended early: #{inspect(reason)}")
-        {:error, reason}
-    end
-  rescue
-    e ->
-      Logger.error(
-        "[#{prefix()}] crash: #{Exception.message(e)}\n#{Exception.format_stacktrace(__STACKTRACE__)}"
-      )
-
-      {:error, {:crash, Exception.message(e)}}
-  end
-
-  # ── Pipeline ───────────────────────────────────────────
-
-  defp do_run do
+  @impl EftBuddy.Sync.Scheduler
+  def do_run do
     Reporter.with_run("WikiSync", &run_pipeline/0)
   end
 
@@ -510,33 +435,4 @@ defmodule EftBuddy.Wiki.Sync do
         []
     end
   end
-
-  # ── Cluster-wide lock (mirrors Items.Sync / Tasks.Sync) ─
-
-  defp with_global_lock(fun) do
-    nodes = [node() | Node.list()]
-
-    case :global.set_lock(@lock_id, nodes, 0) do
-      true ->
-        try do
-          fun.()
-        after
-          :global.del_lock(@lock_id, nodes)
-        end
-
-      false ->
-        {:error, :already_running}
-    end
-  end
-
-  # Colorized module tag for this sync's own log lines (done:/skipped:/
-  # crash:/etc.), so they match the coloring of the Reporter summary.
-  # Mirrors the Bootstrap orchestrator's `prefix/0`.
-  defp prefix, do: Reporter.colorize_label("WikiSync")
-
-  # Spread scheduled ticks so a multi-node rolling restart (or the daily
-  # re-run across the cluster) doesn't fire every timer at the same
-  # instant. Bounded to ~10% of the interval.
-  defp jitter(ms) when is_integer(ms) and ms > 0, do: :rand.uniform(div(ms, 10) + 1)
-  defp jitter(_), do: 0
 end

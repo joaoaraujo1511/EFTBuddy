@@ -21,7 +21,22 @@ defmodule EftBuddy.Tasks.Sync do
   `{:error, :already_running}` instead of double-writing.
   """
 
-  use GenServer
+  # Ticks twice as often as the other wipe-scale feeds. Quests are the only one
+  # of them that changes between wipes: tarkov.dev re-tags them during events
+  # (`"Easy Money - Part 1 [PVE ZONE]"` — see `EftBuddyWeb.TasksLive.Index`'s
+  # `task_dedup_slugs/1`), new quests arrive with content patches, and /tasks is
+  # the app's landing page.
+  #
+  # Last slot in the cycle, because `tasks.map_id` resolves against the maps
+  # table. On the off-cycle tick there is no preceding maps run; that is fine,
+  # since maps change on patches rather than daily and an unresolved `map_id` is
+  # re-linked next run rather than persisting as a broken row.
+  use EftBuddy.Sync.Scheduler,
+    label: "TasksSync",
+    interval: 12 * 60 * 60 * 1_000,
+    stagger: 60 * 60 * 1_000,
+    bootstrap: :ran,
+    config_key: :tasks
 
   require Logger
   import Ecto.Query
@@ -59,154 +74,12 @@ defmodule EftBuddy.Tasks.Sync do
   # cascade-delete the rich map sub-entities (bosses, extracts, …).
   alias EftBuddy.Maps.Map, as: GameMap
 
-  @lock_id {__MODULE__, :running}
+  # ── Pipeline ───────────────────────────────────────────
 
-  # ── Schedule ───────────────────────────────────────────
-  #
-  # See `EftBuddy.Ammo.Sync`'s schedule section for the shared reasoning. This
-  # module differs in one respect: it ticks TWICE as often as the other four.
-  #
-  # Quests are the only one of the five that changes between wipes. tarkov.dev
-  # re-tags them during events (`"Easy Money - Part 1 [PVE ZONE]"` — see
-  # `EftBuddyWeb.TasksLive.Index`'s `task_dedup_slugs/1`), new quests arrive
-  # with content patches, and /tasks is the app's landing page. Twelve hours
-  # bounds how long a renamed or newly added quest can be wrong.
-  @default_interval 12 * 60 * 60 * 1_000
-
-  # Last slot in the cycle: maps +20 → hideout +30 → ammo +40 → armor +50 →
-  # tasks +60. Tasks runs last because `tasks.map_id` resolves against the maps
-  # table, so this mirrors Bootstrap's FK ordering within a cycle.
-  #
-  # On the off-cycle tick (12h later) there is no preceding maps run. That is
-  # fine: maps change on patches, not daily, and an unresolved `map_id` is
-  # re-linked on the next run rather than persisting as a broken row.
-  @stagger 60 * 60 * 1_000
-
-  # A FULL INTERVAL from `:bootstrap_complete`, not zero: Bootstrap runs this
-  # sync itself as part of the cold start, so it has already happened by the
-  # time the cast arrives. (The wiki scrapers use 0 because Bootstrap only
-  # *releases* them.)
-  @bootstrap_offset @default_interval + @stagger
-
-  # Short fallback for when the bootstrap signal never arrives — in that case
-  # this sync has NOT run and the table may be empty.
-  @fallback_delay 15 * 60 * 1_000 + @stagger
-
-  @doc false
-  # Public so `EftBuddy.Sync.Freshness` can assert its staleness budget covers
-  # this cadence rather than trusting a comment to keep the two in step.
-  def interval_ms, do: @default_interval
-
-  @doc false
-  def start_link(opts \\ []) do
-    case GenServer.start_link(__MODULE__, opts, name: {:global, __MODULE__}) do
-      {:ok, pid} ->
-        {:ok, pid}
-
-      {:error, {:already_started, _pid}} ->
-        Logger.info("[#{prefix()}] Another node already runs the tasks sync; staying idle here.")
-        :ignore
-    end
-  end
-
-  @doc "Trigger a sync asynchronously (e.g. from IEx)."
-  def sync_now, do: GenServer.cast({:global, __MODULE__}, :sync_now)
-
-  # ── Server ─────────────────────────────────────────────
-
-  @impl true
-  def init(opts) do
-    interval = Keyword.get(opts, :interval, @default_interval)
-    first = Keyword.get(opts, :first_run_delay, @fallback_delay)
-    timer = Process.send_after(self(), :sync, first + jitter(first))
-    {:ok, %{interval: interval, timer: timer}}
-  end
-
-  @impl true
-  def handle_info(:sync, %{interval: interval} = state) do
-    safe_run()
-    timer = Process.send_after(self(), :sync, interval + jitter(interval))
-    {:noreply, %{state | timer: timer}}
-  end
-
-  @impl true
-  def handle_cast(:bootstrap_complete, state) do
-    {:noreply, arm_first_run(state, @bootstrap_offset)}
-  end
-
-  def handle_cast(:sync_now, state) do
-    safe_run()
-    {:noreply, state}
-  end
-
-  defp arm_first_run(state, offset) do
-    if state.timer, do: Process.cancel_timer(state.timer)
-    timer = Process.send_after(self(), :sync, offset + jitter(offset))
-    %{state | timer: timer}
-  end
-
-  defp safe_run do
-    case run() do
-      {:ok, summary} ->
-        Logger.info("[#{prefix()}] done: #{inspect(summary)}")
-        {:ok, summary}
-
-      {:error, :already_running} ->
-        Logger.info("[#{prefix()}] skipped: another tasks sync is already running")
-        {:error, :already_running}
-
-      {:error, reason} ->
-        Logger.warning("[#{prefix()}] run ended early: #{inspect(reason)}")
-        {:error, reason}
-    end
-  rescue
-    e ->
-      Logger.error(
-        "[#{prefix()}] crash: #{Exception.message(e)}\n#{Exception.format_stacktrace(__STACKTRACE__)}"
-      )
-
-      {:error, {:crash, Exception.message(e)}}
-  end
-
-  # ±10%, so several nodes (or several restarts) never align on one instant.
-  defp jitter(ms) when is_integer(ms) and ms > 0, do: :rand.uniform(div(ms, 10) + 1)
-  defp jitter(_), do: 0
-
-  # ── Public API ─────────────────────────────────────────
-
-  @doc """
-  Run a full sync of tasks. Synchronous: blocks until done.
-
-  Returns `{:ok, counts}` on success or `{:error, reason}`.
-  Returns `{:error, :already_running}` if another sync is in
-  progress on any node in the cluster.
-  """
-  def run do
-    case acquire_lock() do
-      true ->
-        try do
-          do_run()
-        after
-          release_lock()
-        end
-
-      false ->
-        Logger.warning("[#{prefix()}] Skipped: another sync is already running.")
-        {:error, :already_running}
-    end
-  end
-
-  # `:global.set_lock/3` is cluster-wide and re-entrant per-pid; we
-  # only ever hold it for the duration of a single `run/0` call.
-  defp acquire_lock do
-    :global.set_lock(@lock_id, [node() | Node.list()], 0)
-  end
-
-  defp release_lock do
-    :global.del_lock(@lock_id, [node() | Node.list()])
-  end
-
-  defp do_run do
+  @impl EftBuddy.Sync.Scheduler
+  # Returns `{:ok, counts}` or `{:error, reason}`. `run/0` (from
+  # `EftBuddy.Sync.Scheduler`) wraps this in the cluster-wide lock.
+  def do_run do
     results =
       Enum.map(EftBuddy.GameMode.all(), fn game_mode ->
         {game_mode, run_for_mode(game_mode)}
@@ -1281,5 +1154,4 @@ defmodule EftBuddy.Tasks.Sync do
   # Colorized module tag for this sync's own log lines (skipped:/error:/
   # crash:/etc.), so they match the coloring of the Reporter summary.
   # Mirrors the Bootstrap orchestrator's `prefix/0`.
-  defp prefix, do: Reporter.colorize_label("TasksSync")
 end
