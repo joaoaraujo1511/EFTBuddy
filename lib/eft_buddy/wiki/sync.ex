@@ -104,6 +104,7 @@ defmodule EftBuddy.Wiki.Sync do
     :given_by,
     :karma_kind,
     :karma_value,
+    :banner_url,
     :content,
     :updated_at
   ]
@@ -247,6 +248,11 @@ defmodule EftBuddy.Wiki.Sync do
       given_by: manifest.given_by,
       karma_kind: karma_kind,
       karma_value: karma_value,
+      # Promoted out of `content` so the Tasks list can render it as a row
+      # thumbnail. `Projection.project/1` still reads the same file from the
+      # manifest for the detail panel; this is the same value, reachable without
+      # projecting every page at mount.
+      banner_url: banner_url(content),
       content: content
     }
 
@@ -259,6 +265,17 @@ defmodule EftBuddy.Wiki.Sync do
     |> case do
       {:ok, _row} -> :ok
       {:error, changeset} -> {:error, changeset.errors}
+    end
+  end
+
+  # The banner's URL, read off the same string-keyed manifest the projection
+  # reads. Deliberately reuses `EftBuddy.Wiki.Projection`'s extraction rather
+  # than re-finding the `banner: true` file here — two copies of "which file is
+  # the banner" is how the column and the panel end up disagreeing.
+  defp banner_url(content) do
+    case Projection.project(content) do
+      %{banner: %{url: url}} when is_binary(url) -> url
+      _ -> nil
     end
   end
 

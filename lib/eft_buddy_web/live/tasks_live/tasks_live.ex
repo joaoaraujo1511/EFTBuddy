@@ -1027,13 +1027,18 @@ defmodule EftBuddyWeb.TasksLive.Index do
       wip?: true,
       source: :wiki,
       has_wiki?: true,
-      # No row thumbnail for WIP quests: their banner lives inside the
-      # wiki manifest's JSONB, and `Wiki.all_quests/0` deliberately
-      # doesn't read it (it would mean projecting every wiki page at
-      # mount just for a thumbnail). WIP rows render the empty
-      # placeholder and still show the banner in their detail panel,
-      # which is where the manifest gets loaded anyway.
-      banner_url: nil,
+      # Same row thumbnail every other quest gets. This was hardcoded nil,
+      # because the banner lived only inside the wiki manifest's JSONB and
+      # `Wiki.all_quests/0` deliberately does not read it — projecting every
+      # wiki page at mount just for a thumbnail is the cost that read is shaped
+      # to avoid. The consequence was that the two sources disagreed about where
+      # a banner belongs: API-backed quests showed one on the collapsed row,
+      # wiki-only ones showed an empty placeholder there and their banner inside
+      # the expandable panel instead.
+      #
+      # Promoting the URL to a column on `wiki_quests` makes it one more field on
+      # a query that already runs, so both sources now render it in the same place.
+      banner_url: q.banner_url,
       expanded?: false,
       details: nil
     }
