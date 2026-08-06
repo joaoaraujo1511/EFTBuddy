@@ -1281,8 +1281,15 @@ defmodule EftBuddy.Items do
           # Unwind. A half-written set left in the table is memory spent on
           # entries the build has just decided it should not have spent — and
           # every reader falls back to the lazy path for a missing key, so
-          # dropping them costs latency and nothing else. The sentinel is not
-          # written, so coverage reports the set cold rather than claiming it.
+          # dropping them costs latency and nothing else.
+          #
+          # The `{:skip, _}` this returns is what withholds the coverage sentinel.
+          # It used to return `{:ok, 0}`, and `Cache.Warmer.record_outcome/4`
+          # stamps a sentinel for ANY `{:ok, _}` — so the unwind marked the set
+          # warm over entries it had just deleted, `skip?/1` suppressed every
+          # repair tick until that sentinel expired, and `coverage/0` reported the
+          # spec `:live` with nothing behind it. The comment here claimed the
+          # opposite for as long as the bug existed.
           Cache.drop(written)
 
           Logger.error("""
@@ -1307,7 +1314,7 @@ defmodule EftBuddy.Items do
       end)
       |> case do
         {:error, :over_budget} ->
-          {:ok, 0}
+          {:skip, :over_budget}
 
         {n, _written, start_bytes} ->
           :telemetry.execute(

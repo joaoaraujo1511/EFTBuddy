@@ -349,8 +349,13 @@ defmodule EftBuddy.Items.DetailsEqualityTest do
       # still set, so an OOM mid-build is a crashloop rather than a one-off.
       #
       # Dropping the partial set costs nothing but latency — every missing key
-      # falls through to the lazy path — and withholding the sentinel means
-      # coverage reports the set cold instead of claiming it is warm.
+      # falls through to the lazy path — and returning `{:skip, _}` rather than
+      # `{:ok, 0}` is what withholds the coverage sentinel, so the set is reported
+      # cold instead of claimed warm.
+      #
+      # That return value is the whole contract, and this test cannot see the half
+      # that matters: the sentinel is written one layer up, by
+      # `Cache.Warmer.record_outcome/4`. `EftBuddy.Cache.WarmerTest` covers it.
       seed()
       original = Application.get_env(:eft_buddy, :item_details_max_bytes)
       Application.put_env(:eft_buddy, :item_details_max_bytes, 1)
@@ -360,7 +365,7 @@ defmodule EftBuddy.Items.DetailsEqualityTest do
 
       log =
         ExUnit.CaptureLog.capture_log(fn ->
-          assert {:ok, 0} = Items.warm_item_details(:pvp)
+          assert {:skip, :over_budget} = Items.warm_item_details(:pvp)
         end)
 
       assert log =~ "exceeded its memory budget"
