@@ -160,48 +160,79 @@ defmodule EftBuddy.Items.Dataset do
   """
   def refresh_catalog do
     if enabled?() do
-      build(fn ->
-        rows = Items.catalog_rows()
-
-        :ets.delete_all_objects(@rows)
-        :ets.delete_all_objects(@filter)
-
-        :ets.insert(@rows, Enum.map(rows, fn item -> {item.id, item} end))
-
-        # The projection the filters read. Names are folded here rather than per
-        # request, so a keystroke does not re-downcase 5,198 names and short
-        # names on every debounce tick.
+      build("catalogue", fn ->
+        # EVERY QUERY FIRST — all fourteen of them — then the swap. Same reasoning
+        # as `refresh_prices/0` above, and the same failure with a longer fuse: a
+        # raise after the deletes used to leave `@rows` and `@filter` empty with
+        # `catalog_built_at` still inside its TWELVE-hour bound, so `ready?/1`
+        # stayed true and `rows/1` resolved every id to nothing. That renders as
+        # "no results" rather than blank prices, and it would persist far longer.
         #
-        # `flea` is shaped as the map `EftBuddy.Items.effective_flea_level/2`
-        # already pattern-matches on, so the lock threshold stays ONE definition
-        # shared with the SQL path rather than a second one that can drift.
-        :ets.insert(
-          @filter,
-          Enum.map(rows, fn item ->
-            {item.id, fold(item.name), fold(item.short_name), category_name(item),
-             item.normalized_name,
-             %{
-               min_level_for_flea: item.min_level_for_flea,
-               category: %{min_level_for_flea_market: category_flea_level(item)}
-             }}
-          end)
-        )
+        # The cost is holding the order lists and scope sets alongside `rows`
+        # rather than inserting each as it is built. `rows` is already the bulk of
+        # it and was already held across the deletes, so the delta is a few MB.
+        rows = Items.catalog_rows()
+        orders = Map.new(@sorts, fn sort -> {sort, Items.ordered_ids(sort)} end)
 
-        for sort <- @sorts do
-          :ets.insert(@meta, {{:order, sort}, Items.ordered_ids(sort)})
+        scopes =
+          Map.new(
+            for scope <- @scopes, mode <- @ui_modes do
+              {{scope, db_mode(mode)}, scope |> Items.scope_ids(mode) |> MapSet.new()}
+            end
+          )
+
+        if rows == [] and table_size(@rows) > 0 do
+          Logger.error(
+            "[Dataset] refusing to replace #{table_size(@rows)} catalogue rows with an " <>
+              "empty result; keeping the previous catalogue"
+          )
+        else
+          swap_catalog(rows, orders, scopes)
         end
-
-        for scope <- @scopes, mode <- @ui_modes do
-          ids = scope |> Items.scope_ids(mode) |> MapSet.new()
-          :ets.insert(@meta, {{:scope, scope, db_mode(mode)}, ids})
-        end
-
-        :ets.insert(@meta, {:catalog_built_at, now_ms()})
-        Logger.info("[Dataset] catalogue rebuilt: #{length(rows)} items")
       end)
     end
 
     :ok
+  end
+
+  defp swap_catalog(rows, orders, scopes) do
+    # Stamp dropped before the deletes and rewritten after the last insert, so a
+    # raise in between leaves the catalogue not-ready rather than ready-and-empty.
+    :ets.delete(@meta, :catalog_built_at)
+    :ets.delete_all_objects(@rows)
+    :ets.delete_all_objects(@filter)
+
+    :ets.insert(@rows, Enum.map(rows, fn item -> {item.id, item} end))
+
+    # The projection the filters read. Names are folded here rather than per
+    # request, so a keystroke does not re-downcase 5,198 names and short
+    # names on every debounce tick.
+    #
+    # `flea` is shaped as the map `EftBuddy.Items.effective_flea_level/2`
+    # already pattern-matches on, so the lock threshold stays ONE definition
+    # shared with the SQL path rather than a second one that can drift.
+    :ets.insert(
+      @filter,
+      Enum.map(rows, fn item ->
+        {item.id, fold(item.name), fold(item.short_name), category_name(item),
+         item.normalized_name,
+         %{
+           min_level_for_flea: item.min_level_for_flea,
+           category: %{min_level_for_flea_market: category_flea_level(item)}
+         }}
+      end)
+    )
+
+    for {sort, ids} <- orders do
+      :ets.insert(@meta, {{:order, sort}, ids})
+    end
+
+    for {{scope, db}, ids} <- scopes do
+      :ets.insert(@meta, {{:scope, scope, db}, ids})
+    end
+
+    :ets.insert(@meta, {:catalog_built_at, now_ms()})
+    Logger.info("[Dataset] catalogue rebuilt: #{length(rows)} items")
   end
 
   @doc """
@@ -213,19 +244,28 @@ defmodule EftBuddy.Items.Dataset do
   """
   def refresh_prices do
     if enabled?() do
-      build(fn ->
-        :ets.delete_all_objects(@prices)
-
+      build("price", fn ->
         for mode <- @ui_modes do
           db = db_mode(mode)
 
-          :ets.insert(
-            @prices,
-            Enum.map(Items.price_rows(mode), fn p -> {{p.item_id, db}, p} end)
-          )
+          # BOTH QUERIES RUN BEFORE ANYTHING IS DESTROYED, and that ordering is
+          # the entire fix for a real incident: the Flea Market page served every
+          # item with no price at all.
+          #
+          # This used to empty `@prices` for both modes first and query second. A
+          # dropped database connection — the hosted pooler does this in short
+          # windows — then raised out of `Items.price_rows/1` with the table
+          # already empty, `build/2`'s `after` cleared `:building`, and
+          # `prices_built_at` still held the PREVIOUS run's timestamp, comfortably
+          # inside the 60-minute bound. So `ready?/1` answered TRUE over nothing:
+          # `{:flea_order, db}` still listed every id, `materialize/2` found no
+          # price row for any of them, and `overlay_price(item, nil)` nilled every
+          # price field. Correct names, correct icons, "-" for every price, until
+          # the next ten-minute tick healed it.
+          rows = Items.price_rows(mode)
+          order = Items.flea_ordered_ids(mode)
 
-          :ets.insert(@meta, {{:flea_order, db}, Items.flea_ordered_ids(mode)})
-          :ets.insert(@meta, {{:prices_built_at, db}, now_ms()})
+          replace_price_layer(db, rows, order)
         end
 
         Logger.info("[Dataset] price layer rebuilt")
@@ -234,6 +274,43 @@ defmodule EftBuddy.Items.Dataset do
 
     :ok
   end
+
+  # Swap one mode's price layer, leaving every other mode alone.
+  #
+  # Per-mode rather than a single `delete_all_objects/1` up front, because the
+  # global version meant a PVE query failing after PVP had already been refilled
+  # blanked prices for BOTH audiences. The failure should be as small as the thing
+  # that failed.
+  defp replace_price_layer(db, rows, order) do
+    case {rows, price_count(db)} do
+      # A successful query returning zero rows is indistinguishable from a healthy
+      # cold start by row count alone, so the comparison is against what this mode
+      # ALREADY had. Same shape as the upstream guard in `Sync.Helpers`: refuse to
+      # replace real data with an empty snapshot, and say so.
+      {[], n} when n > 0 ->
+        Logger.error(
+          "[Dataset] refusing to replace #{n} #{db} price rows with an empty result; " <>
+            "keeping the previous layer"
+        )
+
+      {rows, _} ->
+        # From here this mode's layer is being destroyed, so it is not fresh until
+        # the last write lands. Dropping the stamp FIRST and re-stamping only at
+        # the end means a raise anywhere below leaves `fresh?/2` false for this
+        # mode — reads fall back to SQL, which is correct and merely slower —
+        # instead of leaving a stale stamp standing over a half-built layer.
+        :ets.delete(@meta, {:prices_built_at, db})
+        :ets.match_delete(@prices, {{:_, db}, :_})
+
+        :ets.insert(@prices, Enum.map(rows, fn p -> {{p.item_id, db}, p} end))
+        :ets.insert(@meta, {{:flea_order, db}, order})
+        :ets.insert(@meta, {{:prices_built_at, db}, now_ms()})
+    end
+  end
+
+  # Rows currently held for one mode. `select_count/2` so the values never cross
+  # into this process; runs twice per ten-minute tick and on no read path.
+  defp price_count(db), do: :ets.select_count(@prices, [{{{:_, db}, :_}, [], [true]}])
 
   @doc """
   One item with the active mode's prices overlaid, straight from memory.
@@ -283,11 +360,31 @@ defmodule EftBuddy.Items.Dataset do
   # saves holding two copies of a 38MB catalogue; `try/after` guarantees the flag
   # clears even if the build raises, since a stuck flag would mean permanent
   # fallback.
-  defp build(fun) do
+  #
+  # THE `after` IS NOT A ROLLBACK, and reading it as one is what produced the
+  # blank-price incident. It restores the flag and nothing else. Leaving a layer
+  # consistent when a build dies partway is each refresh's own job, which is why
+  # they query before they mutate and clear their freshness stamp before they
+  # touch data — see `replace_price_layer/3` and `swap_catalog/3`.
+  defp build(what, fun) do
     :ets.insert(@meta, {:building, true})
 
     try do
       fun.()
+    rescue
+      e ->
+        # Logged here because this is the only place that knows a build failed AND
+        # which one. Re-raised deliberately rather than swallowed: the caller is a
+        # warm spec, and `Cache.Warmer.do_warm/2`'s own rescue turns this into
+        # `outcome: :error` on the coverage row. Swallowing it would report the
+        # spec `:ok` and leave the failure with no trace anywhere.
+        Logger.error("""
+        [Dataset] #{what} refresh failed: #{Exception.message(e)}. Any layer it did \
+        not finish is marked not-ready, so reads fall back to SQL until the next \
+        refresh succeeds.\
+        """)
+
+        reraise e, __STACKTRACE__
     after
       :ets.insert(@meta, {:building, false})
     end

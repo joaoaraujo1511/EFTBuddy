@@ -21,9 +21,18 @@ defmodule EftBuddy.Sync.CleanupGuardWiringTest do
   """
   use ExUnit.Case, async: true
 
-  # Anything that removes rows. `Repo.delete_all/1`, `repo.delete_all/1` and
-  # `Ecto.Adapters.SQL.query` with a DELETE all reduce to one of these names.
-  @destructive [:delete_all, :delete, :truncate]
+  # Anything that destroys existing rows.
+  #
+  # `delete_all` / `delete` / `truncate` are the obvious half: `Repo.delete_all/1`,
+  # `repo.delete_all/1` and an `Ecto.Adapters.SQL.query` DELETE all reduce to one
+  # of these names.
+  #
+  # `insert_all` and `update_all` are here because of `prices_safe?/3`, which
+  # guards an UPSERT. On the price path a write is destructive in the same way a
+  # delete is — `on_conflict: {:replace, […]}` puts a nil straight over a live
+  # price — so a refusal branch that writes anyway is the same bug as one that
+  # deletes anyway, and would be just as invisible.
+  @destructive [:delete_all, :delete, :truncate, :insert_all, :update_all]
 
   defp sync_sources do
     Path.wildcard("lib/eft_buddy/**/sync.ex")
@@ -49,10 +58,14 @@ defmodule EftBuddy.Sync.CleanupGuardWiringTest do
     branches
   end
 
+  # Both guards, because both answer `:ok | {:skip, reason}` and both have call
+  # sites whose refusal branch must not go on to write.
+  @guards [:cleanup_safe?, :prices_safe?]
+
   defp guard_call?(ast) do
     {_ast, found?} =
       Macro.prewalk(ast, false, fn
-        {:cleanup_safe?, _meta, _args} = node, _acc -> {node, true}
+        {name, _meta, _args} = node, _acc when name in @guards -> {node, true}
         node, acc -> {node, acc}
       end)
 
@@ -89,26 +102,26 @@ defmodule EftBuddy.Sync.CleanupGuardWiringTest do
            "expected to find the sync modules under lib/eft_buddy/**/sync.ex"
   end
 
-  test "every cleanup_safe? call site's refusal branch deletes nothing" do
+  test "every guard call site's refusal branch destroys nothing" do
     branches =
       for path <- sync_sources(), branch <- refusal_branches(path), do: {path, branch}
 
-    # NINE sites: eight that already existed (armor, ammo, hideout, maps, tasks, and
-    # three in items) plus the quest-item prune, which had no guard at all until it
-    # was brought under one. The audit said nine pre-existing; the AST says eight, and
-    # the AST is what ships — worth knowing if that document is ever used as a
-    # checklist.
+    # ELEVEN sites. Nine prunes guarded by `cleanup_safe?/3`: eight that already
+    # existed (armor, ammo, hideout, maps, tasks, and three in items) plus the
+    # quest-item prune, which had no guard at all until it was brought under one.
+    # Then two writes guarded by `prices_safe?/3` — the `item_prices` flea upsert
+    # and the legacy items-table price mirror, both in items.
     #
     # The floor is what makes this test non-vacuous: an AST walker that silently
     # matched nothing would otherwise pass forever.
-    assert length(branches) >= 9,
-           "expected to find the guard's call sites; found #{length(branches)}"
+    assert length(branches) >= 11,
+           "expected to find the guards' call sites; found #{length(branches)}"
 
     for {path, branch} <- branches do
       assert destructive_calls(branch) == [],
-             "#{path}: a `{:skip, _}` branch of `cleanup_safe?/3` performs a delete. " <>
-               "Refusing the prune and then deleting anyway is worse than having no " <>
-               "guard — it leaves silently-empty data that the UI renders as fact."
+             "#{path}: a `{:skip, _}` branch of a sync guard destroys data anyway. " <>
+               "Refusing and then writing is worse than having no guard — it leaves " <>
+               "silently-wrong data that the UI renders as fact."
     end
   end
 

@@ -82,6 +82,46 @@ defmodule EftBuddy.Sync.HelpersTest do
     end
   end
 
+  describe "prices_safe?/3 (null-stripped-snapshot guard)" do
+    test "cold start (nothing currently priced) always proceeds" do
+      # A fresh node has no priced rows to protect, and blocking here would mean
+      # the price layer could never populate at all.
+      assert Helpers.prices_safe?(0, 0) == :ok
+      assert Helpers.prices_safe?(0, 5_000) == :ok
+    end
+
+    test "a snapshot carrying as many prices as we hold proceeds" do
+      assert Helpers.prices_safe?(5_000, 5_000) == :ok
+      assert Helpers.prices_safe?(5_000, 5_200) == :ok
+      # exactly at the default 90% floor is allowed
+      assert Helpers.prices_safe?(5_000, 4_500) == :ok
+    end
+
+    test "a document that lost most of its prices is refused" do
+      assert {:skip, reason} = Helpers.prices_safe?(5_000, 4_499)
+      assert reason =~ "null-stripped"
+    end
+
+    test "a full-size document with EVERY price nulled is refused" do
+      # The failure this guard exists for, and the one a row-count check cannot
+      # see: the response still lists all ~5,200 items, so nothing about its SIZE
+      # is anomalous. Only the count of *priced* rows moves — to zero.
+      assert {:skip, _} = Helpers.prices_safe?(5_000, 0)
+    end
+
+    test "an empty document is refused rather than silently writing nothing" do
+      # Deliberately a change of behaviour. An empty response used to produce zero
+      # rows and a run that reported `ok` with `upserted: 0` — a real upstream
+      # failure that reached nobody. It is the same input as the case above.
+      assert {:skip, _} = Helpers.prices_safe?(5_000, 0)
+    end
+
+    test "the keep ratio is the same knob cleanup_safe?/3 uses" do
+      assert Helpers.prices_safe?(100, 50, 0.5) == :ok
+      assert {:skip, _} = Helpers.prices_safe?(100, 49, 0.5)
+    end
+  end
+
   describe "retry_transient?/2" do
     setup do
       %{request: %Req.Request{}}

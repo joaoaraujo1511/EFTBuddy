@@ -72,6 +72,13 @@ defmodule EftBuddy.Cache do
   @table :eft_buddy_cache
   @sync_event [:eft_buddy, :sync, :stop]
 
+  # Monotonic per-source invalidation counter, one row per source name.
+  #
+  # A SEPARATE table from `@table` on purpose: these must survive `clear/0`, must
+  # not appear in `entries/0`, and must not be walked by `invalidate_source/1`.
+  # They are metadata ABOUT the cache rather than cached values.
+  @generations :eft_buddy_cache_generations
+
   # Counters, not an ETS row, and deliberately so: these are incremented on every
   # single read, and `:ets.update_counter` on one hot key serialises writers on
   # that row. `:counters` with `:write_concurrency` gives each scheduler its own
@@ -349,6 +356,44 @@ defmodule EftBuddy.Cache do
   def default_ttl_ms, do: Application.get_env(:eft_buddy, :cache_ttl_ms, @default_ttl_ms)
 
   @doc """
+  The TTL an entry owned by `sources` should carry: the MINIMUM staleness budget
+  across them, floored at `default_ttl_ms/0`.
+
+  The minimum because the strictest owner is the first ingredient that can go
+  wrong — `ammo.rounds` is fed by five feeds, one of which is the two-hourly
+  price budget, so the entry expires on that schedule. Floored so this can only
+  ever extend an entry's life.
+
+  Lives here rather than in `EftBuddy.Cache.Warmer`, despite the warmer being its
+  first caller, because it is not warming-specific: a lazily-read entry and a
+  warm-written entry under the SAME KEY must expire on the same schedule. When
+  they do not, the coverage sentinel outlives the set it claims and the repair
+  tick refuses to rebuild something that is already gone.
+
+  That is not hypothetical — it is what a hand-picked constant did. Item detail
+  entries carried a flat 8h chosen against a then-6h ItemsSync cadence, while
+  their sentinel took the derived per-source value. The two agreed only because
+  invalidation fired before either could expire, and nothing in the code said so,
+  so the first cadence change would have left every detail panel cold for the
+  tail of every cycle. Deriving both from one function removes the class rather
+  than moving the number.
+
+  The budgets come from `EftBuddy.Sync.Freshness`, which is already the single
+  source of truth for feed cadence and is drift-tested against the real
+  intervals — so a feed whose interval changes cannot leave a stale TTL behind.
+  """
+  def ttl_for_sources(sources) when is_list(sources) do
+    sources
+    |> Enum.map(&EftBuddy.Sync.Freshness.budget_seconds/1)
+    |> Enum.reject(&is_nil/1)
+    |> case do
+      [] -> default_ttl_ms()
+      budgets -> budgets |> Enum.min() |> :timer.seconds()
+    end
+    |> max(default_ttl_ms())
+  end
+
+  @doc """
   Marks the calling process as the warmer, so every read it makes is attributed
   to the warm counters rather than to visitors, and every write it makes is
   tagged `:warm` and becomes exempt from cap eviction.
@@ -382,6 +427,15 @@ defmodule EftBuddy.Cache do
   completely silent.
   """
   def invalidate_source(source) when is_binary(source) do
+    # Bumped BEFORE the scan and regardless of how many entries are dropped.
+    #
+    # The generation records that the source's DATA changed, not that entries were
+    # evicted, and the case it exists for is a bulk build whose first chunk has not
+    # landed yet: `dropped` is legitimately 0 there, and the build is nonetheless
+    # about to write a set derived from data that has since moved. Gating on
+    # `dropped > 0` would miss exactly that.
+    bump_generation(source)
+
     dropped =
       if table_exists?() do
         # Still a full scan — match specs cannot express "this list contains
@@ -426,7 +480,38 @@ defmodule EftBuddy.Cache do
     end
   end
 
-  @doc "Drops everything. Used by tests and available from a remote console."
+  @doc """
+  How many times `source` has invalidated since boot.
+
+  Exists so a long-running bulk build can tell whether the data underneath it
+  changed while it ran. `stats().invalidations` cannot answer that: it is global,
+  it counts ENTRIES rather than events, and the ten-minute price feed moves it
+  during essentially every multi-minute build — so a build gated on it would never
+  record coverage at all, and the repair tick would rebuild the largest sets in
+  the registry every five minutes forever.
+  """
+  def generation(source) when is_binary(source) do
+    case :ets.lookup(@generations, source) do
+      [{^source, n}] -> n
+      [] -> 0
+    end
+  rescue
+    ArgumentError -> 0
+  end
+
+  @doc "Generations for several sources at once, as `%{source => n}`."
+  def generations(sources) when is_list(sources),
+    do: Map.new(sources, &{&1, generation(&1)})
+
+  @doc """
+  Drops everything. Used by tests and available from a remote console.
+
+  Deliberately leaves the generation counters alone: monotonicity is the whole
+  point of them, and a reset can only ever cause a CONSERVATIVE mismatch — a
+  build that compares 7 against 0 withholds its sentinel and rebuilds, which
+  costs work and never correctness. The same reasoning covers a supervisor
+  restart of this GenServer.
+  """
   def clear do
     if table_exists?(), do: :ets.delete_all_objects(@table)
     :ok
@@ -709,6 +794,14 @@ defmodule EftBuddy.Cache do
 
   defp now_ms, do: System.monotonic_time(:millisecond)
 
+  # `update_counter/4` with a default, so the first invalidation for a source
+  # creates its row rather than needing an existence check first.
+  defp bump_generation(source) do
+    :ets.update_counter(@generations, source, {2, 1}, {source, 0})
+  rescue
+    ArgumentError -> 0
+  end
+
   defp bump(slot, by \\ 1) do
     case :persistent_term.get(@stats_key, nil) do
       nil -> :ok
@@ -736,6 +829,8 @@ defmodule EftBuddy.Cache do
       read_concurrency: true,
       write_concurrency: true
     ])
+
+    :ets.new(@generations, [:set, :named_table, :public, write_concurrency: true])
 
     :telemetry.attach(
       {__MODULE__, :invalidate},

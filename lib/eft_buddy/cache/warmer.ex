@@ -86,7 +86,6 @@ defmodule EftBuddy.Cache.Warmer do
   require Logger
 
   alias EftBuddy.Cache
-  alias EftBuddy.Sync.Freshness
 
   @sync_event [:eft_buddy, :sync, :stop]
   # Distinct from `{EftBuddy.Cache, :invalidate}`. See the moduledoc.
@@ -760,12 +759,22 @@ defmodule EftBuddy.Cache.Warmer do
   defp skip?(%{kind: :bulk, label: label}), do: Cache.live?(sentinel_key(label))
   defp skip?(_spec), do: false
 
-  defp do_warm(%{kind: kind, label: label, mfa: {mod, fun, args}} = spec, server) do
+  defp do_warm(
+         %{kind: kind, label: label, sources: sources, mfa: {mod, fun, args}} = spec,
+         server
+       ) do
     started = System.monotonic_time(:millisecond)
+
+    # Snapshotted HERE rather than inside each builder. This wrapper is the only
+    # place that already sees every spec, so one check covers all five `:bulk`
+    # sets; threading a generation through five unrelated context functions would
+    # be five chances to forget.
+    generation = Cache.generations(sources)
+
     result = apply(mod, fun, args)
     duration = System.monotonic_time(:millisecond) - started
 
-    {outcome, entries} = record_outcome(kind, spec, result)
+    {outcome, entries} = record_outcome(kind, spec, result, generation)
     emit_warm(server, label, outcome, duration, entries)
 
     :ok
@@ -780,25 +789,78 @@ defmodule EftBuddy.Cache.Warmer do
       :error
   end
 
-  # A `:bulk` builder returns `{:ok, count}` and writes its own entries; the
-  # sentinel records that the set is complete. It shares the set's sources and
-  # TTL deliberately, so `invalidate_source/1` drops it in the same scan that
-  # drops the set — a sentinel outliving its entries would suppress the rebuild
-  # that is supposed to follow an invalidation.
-  defp record_outcome(:bulk, %{label: label, sources: sources}, {:ok, count}) do
-    Cache.put(sentinel_key(label), %{count: count}, sources)
-    {:ok, count}
+  # ── The `:bulk` return contract ────────────────────────
+  #
+  # A `:bulk` MFA returns `{:ok, count}` (it built the set) or `{:skip, reason}`
+  # (it declined to). Anything else is a contract violation and NEVER produces a
+  # sentinel — the sentinel is the claim "this set is complete", and only a
+  # builder that completed one may make it.
+
+  # Built, and nothing it depends on moved while it ran. The sentinel shares the
+  # set's sources and TTL deliberately, so `invalidate_source/1` drops it in the
+  # same scan that drops the set — a sentinel outliving its entries would suppress
+  # the rebuild that is supposed to follow an invalidation.
+  defp record_outcome(:bulk, %{label: label, sources: sources}, {:ok, count}, generation) do
+    if Cache.generations(sources) == generation do
+      Cache.put(sentinel_key(label), %{count: count}, sources)
+      {:ok, count}
+    else
+      # A sync this set depends on finished while the build was running.
+      # `invalidate_source/1` dropped whatever had been written so far and the
+      # build then finished writing its remaining chunks, so what is in the table
+      # is part old, part new and part missing. Stamping a fresh sentinel over that
+      # would both claim coverage and SUPPRESS the re-warm the same invalidation
+      # queued, leaving the set torn until the sentinel's own TTL hours later.
+      #
+      # The re-warm is genuinely queued: the sync stop that invalidated also cast
+      # `{:warm_sources, …}`, and `handle_info(:flush, %{batch: batch})` keeps
+      # `pending` intact while a batch is running.
+      Logger.info(
+        "[Cache.Warmer] #{label} finished after one of its sources was invalidated " <>
+          "mid-build; withholding the coverage sentinel so the queued re-warm runs."
+      )
+
+      {:raced, count}
+    end
   end
 
-  defp record_outcome(:entry, %{keys: [_ | _] = keys}, _result) do
+  # The builder DECLINED. `EftBuddy.Items.warm_item_details/1` unwinding over its
+  # memory budget is the live case: it drops every key it wrote and has nothing to
+  # claim. It used to return `{:ok, 0}`, which took the clause above and stamped a
+  # sentinel over a set the build had just deleted — `skip?/1` then suppressed
+  # every repair tick until that sentinel expired ~26 hours later, and
+  # `coverage/0` reported the spec `:live` with nothing behind it.
+  defp record_outcome(:bulk, %{label: label}, {:skip, reason}, _generation) do
+    Logger.warning("[Cache.Warmer] #{label} declined to build: #{inspect(reason)}")
+    {:declined, 0}
+  end
+
+  defp record_outcome(:entry, %{keys: [_ | _] = keys}, _result, _generation) do
     # Re-probe. A spec that ran and STILL leaves its keys cold means the keys it
     # declares are not the keys its MFA writes — a warm that costs a query,
     # populates something nothing reads, and would otherwise re-run on every
     # single tick forever, silently.
+    #
+    # No generation check here: this already self-corrects. An invalidation that
+    # dropped what the warm just wrote shows up as `:no_entry`, and the next tick
+    # rebuilds.
     if Enum.all?(keys, &Cache.live?/1), do: {:ok, length(keys)}, else: {:no_entry, 0}
   end
 
-  defp record_outcome(_kind, _spec, _result), do: {:ok, 0}
+  # A `:bulk` builder that honoured neither shape. Reported rather than swallowed
+  # by the catch-all below, which would call it `:ok` with zero entries — the same
+  # misleading shape this contract exists to remove, one layer up.
+  defp record_outcome(:bulk, %{label: label}, other, _generation) do
+    Logger.error("""
+    [Cache.Warmer] #{label} returned #{inspect(other)}; a :bulk spec must return \
+    {:ok, count} or {:skip, reason}. No coverage sentinel written, so the set is \
+    reported cold and will be retried.\
+    """)
+
+    {:invalid, 0}
+  end
+
+  defp record_outcome(_kind, _spec, _result, _generation), do: {:ok, 0}
 
   defp emit_warm(server, label, outcome, duration_ms, entries) do
     send(
@@ -831,16 +893,13 @@ defmodule EftBuddy.Cache.Warmer do
   source of truth for feed cadence and is drift-tested against the real
   intervals — so a feed whose interval changes cannot leave a stale TTL behind.
   """
-  def warm_ttl_ms(sources) do
-    sources
-    |> Enum.map(&Freshness.budget_seconds/1)
-    |> Enum.reject(&is_nil/1)
-    |> case do
-      [] -> Cache.default_ttl_ms()
-      budgets -> budgets |> Enum.min() |> :timer.seconds()
-    end
-    |> max(Cache.default_ttl_ms())
-  end
+  # Delegates to `EftBuddy.Cache.ttl_for_sources/1`, which is where the derivation
+  # moved once a CONTEXT module needed it too. `EftBuddy.Items` writes detail
+  # entries on both the lazy read path and the bulk warm path, and the two must
+  # agree — but a context module reaching into the cache *warmer* for a TTL would
+  # be the wrong dependency. The name stays because it is the one the specs and
+  # the tests use.
+  def warm_ttl_ms(sources), do: Cache.ttl_for_sources(sources)
 
   # The part of a coverage row that needs only the registry and ETS.
   defp liveness(spec) do

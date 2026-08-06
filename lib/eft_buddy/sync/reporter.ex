@@ -155,8 +155,16 @@ defmodule EftBuddy.Sync.Reporter do
   @doc """
   Last recorded run status for every sync label, as a map of
 
-      %{label => %{outcome: :ok | :error | :done, at: DateTime.t(),
-                   duration_ms: non_neg_integer()}}
+      %{label => %{outcome: :ok | :error | :skipped | :done,
+                   at: DateTime.t(),
+                   last_ok_at: DateTime.t() | nil,
+                   duration_ms: non_neg_integer(),
+                   refusals: non_neg_integer(),
+                   consecutive_skips: non_neg_integer()}}
+
+  `at` is when the label last ran; `last_ok_at` is when it last ran *successfully*
+  and is `nil` for a label that has never succeeded since boot. `EftBuddy.Sync.Freshness`
+  ages on the latter — see `record_status/4`.
 
   Empty before any sync has run. Backs the `/health` readiness check.
   """
@@ -531,6 +539,20 @@ defmodule EftBuddy.Sync.Reporter do
   defp outcome({:ok, _}), do: :ok
   defp outcome({:error, _}), do: :error
   defp outcome(:ok), do: :ok
+
+  # A run that DECLINED to do its work — `sync_barters/1` returning
+  # `{:skip, "no resolvable barters…"}` because the traders it needs are not in
+  # the database yet. It is not an error (nothing went wrong) and it is
+  # emphatically not a success (nothing was written), and it used to fall
+  # through to `:done` below, where `EftBuddy.Sync.Freshness` — which only ever
+  # looked for `:error` — read it as healthy. A feed that skipped every single
+  # run therefore reported green forever.
+  #
+  # That is survivable while every skippable step runs inside one sequential
+  # pipeline that guarantees its own ordering. Once the feeds have independent
+  # timers it is not: a syncer whose dependency has not run yet skips, and
+  # nothing says so.
+  defp outcome({:skip, _}), do: :skipped
   defp outcome(_), do: :done
 
   # ── Logging ────────────────────────────────────────────
@@ -581,18 +603,41 @@ defmodule EftBuddy.Sync.Reporter do
     )
 
     if :ets.whereis(@status_table) != :undefined do
+      now = DateTime.utc_now()
+
+      # Read-modify-write, which is safe here because each label has exactly one
+      # writer: every syncer is a `{:global, __MODULE__}` singleton and holds its
+      # lock for the duration of the run. A lost update would at worst delay a
+      # staleness verdict by one cycle.
+      prev =
+        case :ets.lookup(@status_table, label) do
+          [{^label, s}] -> s
+          [] -> %{}
+        end
+
       :ets.insert(
         @status_table,
         {label,
          %{
            outcome: outcome,
-           at: DateTime.utc_now(),
+           at: now,
            duration_ms: elapsed_ms,
            # Carried in the record, not just the log line, so
            # `EftBuddy.Sync.Freshness` can fail readiness on it. A run that refused a
            # prune completed "successfully" while knowingly serving a snapshot it
            # distrusted — `outcome` alone cannot express that.
-           refusals: counters.refusals
+           refusals: counters.refusals,
+           # `at` is when this feed last RAN; this is when it last WORKED, and the
+           # two diverge exactly when it matters. Freshness ages a family on this,
+           # so a feed that runs on schedule and skips (or errors) every time now
+           # goes stale on its budget instead of looking permanently current — its
+           # `at` was being refreshed by runs that wrote nothing.
+           last_ok_at: if(outcome == :ok, do: now, else: Map.get(prev, :last_ok_at)),
+           # Not read by anything today. It is here because "skipped once on a cold
+           # start" and "has skipped forty times in a row" are the same record
+           # otherwise, and the second is the shape worth seeing on a dashboard.
+           consecutive_skips:
+             if(outcome == :skipped, do: Map.get(prev, :consecutive_skips, 0) + 1, else: 0)
          }}
       )
     end

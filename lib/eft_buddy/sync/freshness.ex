@@ -18,6 +18,23 @@ defmodule EftBuddy.Sync.Freshness do
   old each feed is*, which is what this module does over
   `EftBuddy.Sync.Reporter.status/0`.
 
+  ## Age means "since it last worked", not "since it last ran"
+
+  The distinction only matters in the case that matters. A feed can tick exactly on
+  schedule and write nothing every time — `EftBuddy.Items.Sync`'s barter step
+  returns `{:skip, "no resolvable barters…"}` when the traders it needs are not in
+  the database yet — and if age were measured from the last *run*, every one of
+  those ticks would refresh it. The feed would report current forever while serving
+  data that never arrived.
+
+  So this ages on `last_ok_at`. A feed that only skips, or only errors, goes stale
+  on its own budget like any stopped feed, and no new state or threshold is needed
+  to express it. That also covers the case a single sequential pipeline used to
+  hide: once feeds have independent timers, one of them starting before its
+  dependency has populated is an ordinary occurrence, and the difference between
+  "skipped once on a cold start" and "has skipped every run for a day" has to be
+  visible.
+
   ## Why a fresh boot is not "degraded"
 
   A probe that reports unhealthy for the first minutes of every deploy trains its
@@ -207,8 +224,32 @@ defmodule EftBuddy.Sync.Freshness do
         %{state: state, budget_seconds: budget, age_seconds: nil, refusals: 0, labels: []}
 
       runs ->
-        ages = for {_label, s} <- runs, do: DateTime.diff(now, s.at)
-        oldest = Enum.max(ages)
+        # Aged from the last SUCCESSFUL run, not the last run. A feed that ticks
+        # on schedule and declines every time — `{:skip, "no resolvable barters"}`
+        # because its dependency has not populated yet — refreshes `at` on every
+        # tick and would look permanently current while writing nothing. Ageing on
+        # success instead means the family goes stale on its own budget, and it
+        # covers errors and any future non-`:ok` terminal state without a new
+        # threshold to tune.
+        #
+        # The `s.outcome == :ok` arm is a fallback for records written before
+        # `last_ok_at` existed, in the same spirit as the `Map.get/3` on
+        # `:refusals` below. It is load-bearing across a deploy: the status table
+        # survives in ETS while the code changes underneath it.
+        succeeded_at = fn s -> Map.get(s, :last_ok_at) || if(s.outcome == :ok, do: s.at) end
+
+        ages =
+          for {_label, s} <- runs,
+              at = succeeded_at.(s),
+              not is_nil(at),
+              do: DateTime.diff(now, at)
+
+        # No label in this family has ever succeeded — it has only skipped, or
+        # only errored. Judged against uptime for the same reason the
+        # never-reported branch above is: otherwise every deploy would report
+        # every feed degraded for its first cycle.
+        never_succeeded? = ages == []
+        oldest = if never_succeeded?, do: nil, else: Enum.max(ages)
         failed? = Enum.any?(runs, fn {_label, s} -> s.outcome == :error end)
 
         # A run that refused a destructive prune reports `outcome: :ok` — it did
@@ -227,6 +268,8 @@ defmodule EftBuddy.Sync.Freshness do
             # design will not run again. Ageing it out would make the probe report
             # degraded on a schedule rather than on a fault.
             budget == @boot_only -> :ok
+            never_succeeded? and uptime > budget -> :stale
+            never_succeeded? -> :booting
             oldest > budget -> :stale
             true -> :ok
           end
@@ -234,6 +277,10 @@ defmodule EftBuddy.Sync.Freshness do
         %{
           state: state,
           budget_seconds: budget,
+          # Seconds since the last SUCCESSFUL run. `nil` when there has not been
+          # one, which is the same thing the never-reported branch reports and for
+          # the same reason: "no successful run to measure from" and "zero seconds
+          # since one" are opposite diagnoses and must not render identically.
           age_seconds: oldest,
           refusals: refusals,
           labels: runs |> Enum.map(&elem(&1, 0)) |> Enum.sort()

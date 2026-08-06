@@ -135,6 +135,64 @@ defmodule EftBuddy.Cache.WarmerTest do
   @doc false
   def probe_raise(_key), do: raise("deliberate warm failure")
 
+  # ── `:bulk` contract probes ────────────────────────────
+  #
+  # These stand in for the real builders (`warm_item_details/1`, `warm_details/0`,
+  # …) so the contract can be exercised without a database.
+
+  @doc false
+  def bulk_builds(counter) do
+    :counters.add(counter, 1, 1)
+    Cache.put_many([{{:warm_test, :entry}, :v}], ["HideoutSync"])
+    {:ok, 1}
+  end
+
+  @doc false
+  def bulk_declines(counter) do
+    :counters.add(counter, 1, 1)
+    {:skip, :over_budget}
+  end
+
+  @doc false
+  # Legitimately found nothing to write, as opposed to declining to write.
+  def bulk_builds_nothing(counter) do
+    :counters.add(counter, 1, 1)
+    {:ok, 0}
+  end
+
+  @doc false
+  def bulk_returns_garbage(_counter), do: :ok
+
+  @doc false
+  # Exactly the shipped ordering hole: a sync this set depends on completes
+  # partway through the build, dropping everything written so far, and the build
+  # then finishes writing the rest.
+  def bulk_races(counter, source) do
+    :counters.add(counter, 1, 1)
+    Cache.put_many([{{:warm_test, :chunk1}, :v}], ["HideoutSync"])
+    Cache.invalidate_source(source)
+    Cache.put_many([{{:warm_test, :chunk2}, :v}], ["HideoutSync"])
+    {:ok, 2}
+  end
+
+  defp bulk_spec_installed(fun, args \\ nil) do
+    counter = :counters.new(1, [])
+
+    Application.put_env(:eft_buddy, :cache_warm_specs, [
+      %{
+        label: "probe.bulk",
+        sources: ["HideoutSync"],
+        kind: :bulk,
+        cost: :light,
+        periodic: true,
+        keys: [],
+        mfa: {__MODULE__, fun, if(args, do: [counter | args], else: [counter])}
+      }
+    ])
+
+    {counter, Warmer.sentinel_key("probe.bulk")}
+  end
+
   describe "warming on sync completion" do
     test "a finished sync rebuilds the entries that syncer owns" do
       Application.put_env(:eft_buddy, :cache_warm_specs, [
@@ -266,6 +324,138 @@ defmodule EftBuddy.Cache.WarmerTest do
     end
   end
 
+  describe "the :bulk coverage sentinel" do
+    test "a completed build writes the sentinel, and the tick then skips it" do
+      # The positive control. Without it, the two tests below could pass because
+      # sentinels never work at all rather than because they are being withheld
+      # for the right reasons.
+      {counter, sentinel} = bulk_spec_installed(:bulk_builds)
+
+      emit_sync_stop("HideoutSync")
+      eventually(fn -> assert :counters.get(counter, 1) == 1 end)
+      eventually(fn -> assert Cache.live?(sentinel) end)
+
+      send(Process.whereis(Warmer), :repair)
+      settle()
+
+      assert :counters.get(counter, 1) == 1, "a live sentinel is what makes ticking free"
+    end
+
+    test "a build reporting ZERO entries still claims coverage" do
+      # The discriminating half of the contract, and the reason the memory-budget
+      # unwind had to stop returning `{:ok, 0}`.
+      #
+      # `{:ok, 0}` is a legitimate answer — a builder can correctly find nothing to
+      # write — so it must stamp a sentinel, or every empty set would be rebuilt on
+      # every tick forever. Which means `{:ok, 0}` cannot also mean "I declined and
+      # deleted what I wrote". Those are opposite states sharing one return value,
+      # and the sentinel is the thing that could not tell them apart.
+      {_counter, sentinel} = bulk_spec_installed(:bulk_builds_nothing)
+
+      emit_sync_stop("HideoutSync")
+
+      eventually(fn -> assert Cache.live?(sentinel) end)
+    end
+
+    test "a builder that DECLINES leaves no sentinel and is retried" do
+      # `warm_item_details/1` returns `{:skip, :over_budget}` after dropping every
+      # key it wrote. It used to return `{:ok, 0}` and take the clause above, which
+      # stamped a sentinel over a set that had just been deleted — `coverage/0`
+      # then reported the spec `:live` with nothing behind it and `skip?/1`
+      # suppressed every repair tick until that sentinel's own TTL, ~26h later.
+      {counter, sentinel} = bulk_spec_installed(:bulk_declines)
+
+      emit_sync_stop("HideoutSync")
+      eventually(fn -> assert :counters.get(counter, 1) == 1 end)
+
+      refute Cache.live?(sentinel), "a build that declined has nothing to claim"
+      assert "probe.bulk" in Warmer.coverage_summary().cold
+
+      send(Process.whereis(Warmer), :repair)
+      eventually(fn -> assert :counters.get(counter, 1) == 2 end)
+    end
+
+    test "a source invalidated MID-BUILD withholds the sentinel" do
+      # The ordering hole. Invalidation drops what has been written so far, the
+      # build finishes writing the rest, and the warmer used to stamp a fresh
+      # sentinel over a set that is now part old, part new and part missing —
+      # suppressing the very re-warm that invalidation queued.
+      {_counter, sentinel} = bulk_spec_installed(:bulk_races, ["HideoutSync"])
+
+      emit_sync_stop("HideoutSync")
+      settle()
+
+      refute Cache.live?(sentinel),
+             "the set is torn; claiming coverage would suppress the queued rebuild"
+    end
+
+    test "an UNRELATED source invalidating mid-build does not withhold it" do
+      # The false-positive control, and the reason generations are per-source
+      # rather than the global `stats().invalidations` counter. That counter moves
+      # on nearly every ten-minute price tick, so a multi-minute build gated on it
+      # would never record coverage at all — turning the five-minute repair tick
+      # into an unconditional rebuild of the largest sets in the registry, which is
+      # worse than the bug it fixes.
+      {_counter, sentinel} = bulk_spec_installed(:bulk_races, ["PricesSync"])
+
+      emit_sync_stop("HideoutSync")
+
+      eventually(fn ->
+        assert Cache.live?(sentinel),
+               "PricesSync owns none of this set; its invalidation is irrelevant here"
+      end)
+    end
+
+    test "a builder returning neither shape writes no sentinel and says so" do
+      {counter, sentinel} = bulk_spec_installed(:bulk_returns_garbage)
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          emit_sync_stop("HideoutSync")
+          eventually(fn -> assert :counters.get(counter, 1) == 0 end)
+          settle()
+        end)
+
+      refute Cache.live?(sentinel)
+      assert log =~ "must return {:ok, count} or {:skip, reason}"
+    end
+  end
+
+  describe "invalidation generations" do
+    test "a source's generation advances even when nothing was dropped" do
+      # The case this exists for is a bulk build whose first chunk has not landed
+      # yet: `dropped` is legitimately 0 and the build is still about to write a
+      # set derived from data that has since moved. Gating the bump on
+      # `dropped > 0` would miss exactly that.
+      before = Cache.generation("NothingOwnsThisSync")
+
+      assert Cache.invalidate_source("NothingOwnsThisSync") == 0
+      assert Cache.generation("NothingOwnsThisSync") == before + 1
+    end
+
+    test "generations survive clear/0" do
+      # Monotonicity is the point. A reset could only ever cause a CONSERVATIVE
+      # mismatch — a build comparing 7 against 0 withholds and rebuilds — but
+      # surviving means no spurious rebuild after an operator clears the cache.
+      Cache.invalidate_source("ProbeSync")
+      n = Cache.generation("ProbeSync")
+      assert n > 0
+
+      Cache.clear()
+
+      assert Cache.generation("ProbeSync") == n
+    end
+
+    test "an unknown source reads as zero rather than raising" do
+      assert Cache.generation("NeverSeenSync") == 0
+
+      assert Cache.generations(["NeverSeenSync", "AlsoNever"]) == %{
+               "NeverSeenSync" => 0,
+               "AlsoNever" => 0
+             }
+    end
+  end
+
   describe "the repair tick" do
     test "an entry that expired between syncs is rebuilt without waiting for one" do
       # THE regression test for the failure that shipped: warming fired only on
@@ -368,6 +558,25 @@ defmodule EftBuddy.Cache.WarmerTest do
     test "an unknown source falls back to the cache default rather than to zero" do
       assert Warmer.warm_ttl_ms(["NoSuchSync"]) == Cache.default_ttl_ms()
       assert Warmer.warm_ttl_ms([]) == Cache.default_ttl_ms()
+    end
+
+    test "a bulk set's entries and its coverage sentinel are derived from one number" do
+      # The drift this removes. Item detail entries carried a hand-picked 8h while
+      # their sentinel took the derived per-source value. The two agreed only
+      # because ItemsSync ran every 6h and invalidated both before either could
+      # expire — nothing in the code said so, so the first cadence change would
+      # have left every detail panel cold for the tail of each cycle with coverage
+      # reporting the spec :live.
+      assert EftBuddy.Items.detail_ttl_ms() ==
+               Warmer.warm_ttl_ms(EftBuddy.Items.detail_sources())
+    end
+
+    test "the derivation is reachable without going through the warmer" do
+      # `EftBuddy.Items` needs this on its LAZY read path, which has nothing to do
+      # with warming. Keeping the logic in the warmer would have meant a context
+      # module depending on the cache warmer to answer "how long does my own entry
+      # live", which is the wrong direction and the reason it moved to `Cache`.
+      assert Cache.ttl_for_sources(["HideoutSync"]) == Warmer.warm_ttl_ms(["HideoutSync"])
     end
   end
 

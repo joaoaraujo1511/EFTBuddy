@@ -15,12 +15,32 @@ defmodule EftBuddy.Sync.FreshnessTest do
   @now ~U[2026-07-30 12:00:00Z]
 
   defp run(label, ago_seconds, outcome \\ :ok, refusals \\ 0) do
+    at = DateTime.add(@now, -ago_seconds)
+
     {label,
      %{
        outcome: outcome,
-       at: DateTime.add(@now, -ago_seconds),
+       at: at,
        duration_ms: 10,
-       refusals: refusals
+       refusals: refusals,
+       # A successful run is its own last success. A non-`:ok` run leaves this
+       # `nil`, which is what a feed that has never worked actually looks like —
+       # use `ran_then_stopped_working/4` for the more interesting case.
+       last_ok_at: if(outcome == :ok, do: at)
+     }}
+  end
+
+  # A label that ran `ran_ago` seconds ago with `outcome`, but last SUCCEEDED
+  # `succeeded_ago` seconds ago. The shape the ageing change exists for: `at`
+  # keeps advancing on every tick while the data stands still.
+  defp ran_then_stopped_working(label, ran_ago, succeeded_ago, outcome \\ :skipped) do
+    {label,
+     %{
+       outcome: outcome,
+       at: DateTime.add(@now, -ran_ago),
+       duration_ms: 10,
+       refusals: 0,
+       last_ok_at: DateTime.add(@now, -succeeded_ago)
      }}
   end
 
@@ -145,9 +165,87 @@ defmodule EftBuddy.Sync.FreshnessTest do
       # Records written before `refusals` existed must not crash the probe or read as
       # suspicious — an absent field means "we did not measure", and the safe reading
       # of that is zero.
+      #
+      # Now load-bearing for a SECOND field: this record predates `last_ok_at` too,
+      # and the fallback that reads `at` when `outcome` is `:ok` is what keeps it
+      # ageing correctly. That matters across a deploy specifically — the status
+      # table lives in ETS and survives while the code changes underneath it, so
+      # for one cycle after shipping, every record in it looks exactly like this.
       legacy = %{"AmmoSync" => %{outcome: :ok, at: @now, duration_ms: 5}}
 
-      assert evaluate(Map.merge(all_fresh(), legacy)).syncs["AmmoSync"].state == :ok
+      family = evaluate(Map.merge(all_fresh(), legacy)).syncs["AmmoSync"]
+
+      assert family.state == :ok
+      assert family.age_seconds == 0, "an :ok record with no last_ok_at ages from `at`"
+    end
+
+    test "a legacy record that did NOT succeed cannot borrow `at` as a success" do
+      # The other half of the fallback. `at` may only stand in for `last_ok_at` when
+      # the outcome says the run worked — otherwise a pre-upgrade failed run would
+      # read as a recent success and mask exactly what this probe exists to catch.
+      legacy = %{"AmmoSync" => %{outcome: :done, at: @now, duration_ms: 5}}
+
+      family = evaluate(Map.merge(all_fresh(), legacy), 100_000_000).syncs["AmmoSync"]
+
+      assert family.state == :stale
+      assert family.age_seconds == nil
+    end
+  end
+
+  describe "a feed that runs but never works" do
+    test "a family ticking on schedule while skipping every run goes stale on its budget" do
+      # THE FAILURE THIS AGEING CHANGE EXISTS FOR, and the one a split into
+      # independent timers makes reachable. `sync_barters/1` returns
+      # `{:skip, "no resolvable barters…"}` when the traders it needs are not in the
+      # database yet. `Reporter.outcome/1` used to map that to `:done` and this
+      # module only ever looked for `:error`, so the run counted as a tick, `at`
+      # advanced, and the family reported current forever while nothing was written.
+      %{budget_seconds: budget} = evaluate(%{}, 30).syncs["BartersSync"]
+
+      status =
+        all_fresh()
+        |> Map.merge(Map.new([ran_then_stopped_working("BartersSync", 5, budget + 60)]))
+
+      result = evaluate(status)
+
+      assert result.syncs["BartersSync"].state == :stale,
+             "a run five seconds ago that wrote nothing must not read as fresh"
+
+      assert result.syncs["BartersSync"].age_seconds == budget + 60
+      assert result.status == :degraded
+    end
+
+    test "a recent skip does NOT degrade a family that succeeded inside its budget" do
+      # The false-positive control. Skipping once on a cold start, or once while a
+      # dependency catches up, is ordinary — it is only a problem when it is ALL the
+      # feed does. Without this, the change above would trade a silent failure for a
+      # probe that goes red on every transient.
+      status =
+        all_fresh()
+        |> Map.merge(Map.new([ran_then_stopped_working("BartersSync", 5, 60)]))
+
+      assert evaluate(status).syncs["BartersSync"].state == :ok
+      assert evaluate(status).status == :ok
+    end
+
+    test "a family that has NEVER succeeded is :booting while young and :stale once past budget" do
+      # It has run, so the never-reported branch does not apply, but there is no
+      # successful run to measure from. Judged against uptime for the same reason a
+      # fresh boot is not degraded — otherwise every deploy reports red for a cycle.
+      status = Map.new([run("MapsSync", 5, :skipped)])
+      %{budget_seconds: budget} = evaluate(%{}, 30).syncs["MapsSync"]
+
+      young = evaluate(status, 30).syncs["MapsSync"]
+      assert young.state == :booting
+      assert young.age_seconds == nil, "there is no successful run to measure an age from"
+
+      assert evaluate(status, budget + 1).syncs["MapsSync"].state == :stale
+    end
+
+    test "an error still outranks staleness, so the verdict names the cause" do
+      status = Map.new([run("MapsSync", 5, :error)])
+
+      assert evaluate(status, 100_000_000).syncs["MapsSync"].state == :failed
     end
   end
 
