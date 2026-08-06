@@ -211,7 +211,6 @@ defmodule EftBuddy.Items.Sync do
   # hand, because the registry is what casts `:bootstrap_complete` and a cast
   # with no matching clause takes the GenServer down.
 
-  @doc false
   # This module's slot, matching the other feeds' staggers.
   @stagger 10 * 60 * 1_000
 
@@ -1292,10 +1291,19 @@ defmodule EftBuddy.Items.Sync do
           :image_8x_link,
           :background_color,
           :min_level_for_flea,
-          :last_low_price,
           :category_id,
           :updated_at
         ]
+
+        # `:last_low_price` deliberately absent, for the same reason it left
+        # `upsert_item_prices/4`'s list: the ten-minute price tick owns this
+        # column and this pass would overwrite a fresh value with a stale one.
+        #
+        # The other three 24h columns are still here. They are the legacy mirror
+        # on the `items` table that the flea read path no longer consults, and
+        # `refresh_prices/2` change-detects against exactly these — so removing
+        # them would leave that comparison reading columns nothing ever writes.
+        # Worth revisiting when the mirror goes.
 
         # Chunk to keep parameter count under Postgres' 65535 limit.
         # ~22 fields per row → 5000 rows ≈ 110k params, so chunk smaller.
@@ -1350,7 +1358,13 @@ defmodule EftBuddy.Items.Sync do
   # that happen in the live data, and if it does we can tighten
   # the rule with a category-name filter on the contained item.
   defp set_contains_item_id(repo, items, item_map) do
-    repo.update_all(Item, set: [contains_item_id: nil])
+    # Scoped to the rows this pass owns. A blanket reset takes row locks on every
+    # item in the table including the quest items, which belong to a different
+    # feed — harmless while both ran inside one sequential pipeline, and an
+    # unnecessary lock conflict the moment they are separate processes. Quest
+    # items are containers of nothing, so there was never anything here to clear.
+    from(i in Item, where: i.is_quest_item == false)
+    |> repo.update_all(set: [contains_item_id: nil])
 
     pairs =
       items
@@ -1534,7 +1548,11 @@ defmodule EftBuddy.Items.Sync do
   # the volatile flea columns). Items the entity sync hasn't created
   # yet are skipped (no dangling FK). On conflict every price column is
   # replaced.
-  defp upsert_item_prices(repo, items, item_map, game_mode) do
+  @doc false
+  # Public only so the column-ownership rule can be tested — the failure it
+  # guards (a stale snapshot overwriting a fresh price) is invisible from the
+  # outside. Treat it as private.
+  def upsert_item_prices(repo, items, item_map, game_mode) do
     now = now_naive()
 
     rows =
@@ -1561,14 +1579,20 @@ defmodule EftBuddy.Items.Sync do
         end
       end)
 
-    replace = [
-      :base_price,
-      :last_low_price,
-      :avg_24h_price,
-      :low_24h_price,
-      :high_24h_price,
-      :updated_at
-    ]
+    # ONLY `base_price` on conflict. The four volatile flea columns stay in the
+    # row — so a brand-new item still arrives with spot prices from this pass —
+    # but they are not replaced on an existing one.
+    #
+    # This pass runs on the structural cadence and carries a snapshot that can be
+    # hours old, while `refresh_item_prices_flea/3` rewrites the same four
+    # columns every ten minutes. Replacing them here overwrote a ten-minute-old
+    # price with a stale one on every structural run, and the wrong value then
+    # stood until the next price tick. Splitting these two passes into separate
+    # processes would have turned that from a predictable window into a race.
+    #
+    # `base_price` is the opposite: it is the vendor economy, this pass owns it,
+    # and the price tick deliberately leaves it alone.
+    replace = [:base_price, :updated_at]
 
     total =
       rows
