@@ -203,6 +203,34 @@ defmodule EftBuddy.Items.Sync do
   @doc false
   def price_interval_ms, do: @default_price_interval
 
+  # ── The `EftBuddy.Sync.Registry` contract ──────────────
+  #
+  # This module has not adopted `EftBuddy.Sync.Scheduler` yet — it is still one
+  # GenServer running several feeds' work on two timers, and it splits into
+  # separate modules next. Until then it implements the registry's surface by
+  # hand, because the registry is what casts `:bootstrap_complete` and a cast
+  # with no matching clause takes the GenServer down.
+
+  @doc false
+  # This module's slot, matching the other feeds' staggers.
+  @stagger 10 * 60 * 1_000
+
+  @doc false
+  def label, do: "ItemsSync"
+
+  @doc false
+  # The structural cadence, which is what `ItemsSync`'s staleness budget covers.
+  # The price tick has its own budget under its own label.
+  def interval_ms, do: @default_full_interval
+
+  @doc false
+  def stagger_ms, do: @stagger
+
+  @doc false
+  # Bootstrap runs this feed itself during the cold start, so the first recurring
+  # run is a full interval away.
+  def bootstrap_mode, do: :ran
+
   # ── Server callbacks ───────────────────────────────────
 
   @impl true
@@ -221,10 +249,16 @@ defmodule EftBuddy.Items.Sync do
     # cold start, so we don't need a short initial delay here. Jitter is
     # applied so a multi-node deploy with rolling restarts doesn't see
     # every node fire at the same instant.
-    Process.send_after(self(), :full_sync, full_interval + jitter(full_interval))
+    #
+    # This is a FALLBACK, not the normal path: `:bootstrap_complete` re-arms the
+    # full tick from the end of the cold start. Until this module joined
+    # `EftBuddy.Sync.Registry.notifiable/0` it never received that cast, so its
+    # cadence drifted from boot rather than anchoring to the sequence — silently,
+    # because a feed that runs on the wrong schedule still runs.
+    full_timer = Process.send_after(self(), :full_sync, full_interval + jitter(full_interval))
     Process.send_after(self(), :price_sync, price_interval + jitter(price_interval))
 
-    {:ok, %{full_interval: full_interval, price_interval: price_interval}}
+    {:ok, %{full_interval: full_interval, price_interval: price_interval, full_timer: full_timer}}
   end
 
   @impl true
@@ -233,11 +267,29 @@ defmodule EftBuddy.Items.Sync do
     {:noreply, state}
   end
 
+  # Bootstrap finished the cold-start sequence, which already ran this feed's
+  # work. Re-arm the FULL tick a whole interval plus this module's stagger from
+  # now, cancelling the boot-time timer — arming at zero would immediately
+  # re-sync a snapshot written moments ago.
+  #
+  # The price tick is deliberately left alone: it is ten minutes, so anchoring it
+  # would buy nothing and it has its own freshness budget.
+  def handle_cast(:bootstrap_complete, %{full_interval: interval} = state) do
+    if state[:full_timer], do: Process.cancel_timer(state.full_timer)
+
+    delay = interval + @stagger
+    timer = Process.send_after(self(), :full_sync, delay + jitter(delay))
+
+    {:noreply, %{state | full_timer: timer}}
+  end
+
+  def handle_cast(_msg, state), do: {:noreply, state}
+
   @impl true
   def handle_info(:full_sync, %{full_interval: interval} = state) do
     safe_run("Periodic full", &run/0)
-    Process.send_after(self(), :full_sync, interval + jitter(interval))
-    {:noreply, state}
+    timer = Process.send_after(self(), :full_sync, interval + jitter(interval))
+    {:noreply, %{state | full_timer: timer}}
   end
 
   @impl true

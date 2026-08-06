@@ -1,70 +1,62 @@
 defmodule EftBuddy.Sync.Bootstrap do
   @moduledoc """
-  One-shot, supervised orchestrator that runs the cold-start sync
-  sequence on application boot, in strict dependency order:
+  One-shot, supervised orchestrator that runs the cold-start sync sequence on
+  application boot.
 
-      1. `EftBuddy.Items.Sync.run_items/0`
-         items + categories + vendors + prices
+  **The sequence itself lives in `EftBuddy.Sync.Registry.cold_start_steps/0`**,
+  not here. This moduledoc used to enumerate it, and the enumeration went stale:
+  it described five steps in an order that had not been current since Ammo and
+  Armor were added, and a reader trusting it would have had the FK reasoning
+  right and the steps wrong. What is worth writing by hand is *why* the order is
+  what it is — that does not change when a feed is inserted.
 
-      2. `EftBuddy.Maps.Sync.run/0`
-         maps + bosses + extracts + transits + locks + hazards +
-         access keys + spawns + stationary weapons + loot
-         containers. Item-gated extracts, lock keys and access
-         keys resolve their FKs against the items from step 1.
-         Runs before Tasks so `tasks.map_id` resolves against the
-         full (rich) map set, and so the Maps sync (not the Tasks
-         sync) owns the `maps` table lifecycle.
+  ## Why the order is the order
 
-      3. `EftBuddy.Hideout.Sync.run/0`
-         stations + levels + traders + skills (item-requirement
-         FKs resolve against the items written in step 1)
+  It is the foreign-key graph.
 
-      4. `EftBuddy.Tasks.Sync.run/0`
-         tasks + objectives + unlocks (FKs resolve against the
-         items from step 1 and the maps from step 2). Also seeds
-         the task-only traders — Ref, Fence, Lightkeeper — which
-         never appear in the hideout data but *are* referenced by
-         barters in step 5.
+  Items are the root: categories, vendors and prices come with them, and almost
+  everything below resolves an id against the `items` table. Maps run before
+  Tasks so `tasks.map_id` resolves against the full rich map set rather than the
+  bare fallback rows Tasks would otherwise write, which also leaves the `maps`
+  table's lifecycle owned by the Maps sync. Hideout and Tasks between them seed
+  the complete trader set — Tasks contributes Ref, Fence and Lightkeeper, which
+  never appear in hideout data but *are* referenced by barters. Barters and
+  crafts come last because their parents need items, station levels, the full
+  trader set, and the tasks each one resolves its `task_unlock` against.
 
-      5. `EftBuddy.Items.Sync.run_barters_and_crafts/0`
-         barters + crafts. Their parent FKs need the items from
-         step 1, the station_levels from step 3, and the full
-         trader set from steps 3–4 (without Ref et al., every Ref
-         barter is dropped by `sanitize_barters/3`). Running this
-         after Tasks also lets each barter/craft resolve its
-         `task_unlock` against the tasks written in step 4.
+  Most steps degrade rather than fail when an earlier one did: they drop the
+  item-keyed slice they cannot resolve, write the rest, and re-link next run. The
+  exception is marked `requires:` in the registry — a step whose every parent FK
+  resolves against a previous step would fetch its whole set from the API only to
+  sanitise all of it away, so it is skipped up front instead of hammering an
+  already-struggling upstream.
 
-  Bootstrap is what runs the five wipe-scale syncs *first*, in the FK
-  order above. It is not what keeps them running: each of them is
-  also a GenServer with its own timer, and devs can re-run any on
-  demand from IEx:
+  Bootstrap runs these feeds *first*; it is not what keeps them running. Each is
+  a GenServer with its own timer, and any can be re-run on demand from IEx:
 
       EftBuddy.Maps.Sync.run()
-      EftBuddy.Hideout.Sync.run()
-      EftBuddy.Tasks.Sync.run()
 
-  When the sequence completes, Bootstrap casts `:bootstrap_complete`
-  to every scheduler (`notify_schedulers/0`). The message means two
-  different things depending on who receives it:
+  ## The completion cast
 
-    * `EftBuddy.Chapters.Sync` and `EftBuddy.Events.Sync` have NOT
-      run yet — Bootstrap merely releases them — so they arm their
-      first run at a small offset from that moment (chapters
-      immediately, events +1 min). `EftBuddy.Wiki.Sync` is not kicked
-      here: it chains off the events sync's completion, since it
-      needs that run's `event_quests` blacklist. So the three never
-      scrape the Fandom wiki concurrently.
+  When the sequence finishes, Bootstrap casts `:bootstrap_complete` to every feed
+  `EftBuddy.Sync.Registry.notifiable/0` names. One message, two meanings, which
+  is why each module declares a `bootstrap_mode/0`:
 
-    * `Maps`, `Hideout`, `Ammo`, `Armor` and `Tasks` HAVE just run,
-      here in `do_run/0`. They therefore arm their first *recurring*
-      run a full interval plus their own stagger away (maps +20 min,
-      hideout +30, ammo +40, armor +50, tasks +60), which spaces them
-      across the day and preserves this module's FK ordering within
-      each cycle. Tasks ticks every 12h, the rest daily.
+    * `:released` — the feed has NOT run. Bootstrap is letting it start, so it
+      arms at its stagger. The Fandom scrapes are these, spaced so they never hit
+      the wiki concurrently.
 
-  Each also keeps a shorter fallback timer in case the cast never
-  arrives — for the five that fallback is the recovery path when
-  Bootstrap itself failed, since it means they have never run at all.
+    * `:ran` — the feed HAS just run, here in `do_run/0`. It arms its first
+      *recurring* run a full interval plus its stagger away, which spaces the
+      feeds across the cycle and preserves the FK ordering within each one.
+
+  `EftBuddy.Wiki.Sync` is `:chained` and receives nothing here: it is armed by
+  `EftBuddy.Events.Sync` completing, because it reads that run's `event_quests`
+  blacklist.
+
+  Every feed also keeps a shorter fallback timer for the case where the cast
+  never arrives — which, for a `:ran` feed, means Bootstrap failed and it has
+  never run at all.
 
   ## Why this exists
 
@@ -205,45 +197,26 @@ defmodule EftBuddy.Sync.Bootstrap do
     started_at = System.monotonic_time()
     Logger.info("[#{prefix()}] Cold-start sync sequence starting…")
 
-    # Each step below now populates BOTH game modes where they diverge:
-    # `run_items/0` also syncs the per-mode `item_prices` + vendor prices
-    # for regular and pve; `Tasks.Sync.run/0` syncs the regular and pve
-    # quest graphs; `run_barters_and_crafts/0` syncs barters for both
-    # modes (crafts are identical across modes, so they stay single-set).
-    # Maps, hideout and item entities are identical across modes and need
-    # no per-mode handling. The FK ordering is unchanged.
-    # Items is the FK root for everything below. Maps, Hideout and Tasks
-    # only *drop* the item-keyed slices they can't resolve (and otherwise
-    # write useful rows), so they run regardless of whether Items
-    # succeeded. Barters & crafts are different: every parent FK resolves
-    # against the items from step 1, so with no items the step fetches the
-    # full barter/craft set from the API only to sanitise all of it away —
-    # see the "no resolvable barters/crafts" self-skip. When Items failed
-    # we skip that step up front rather than hammering an already-struggling
-    # upstream for data we can't use; the recurring Items scheduler will
-    # populate barters/crafts on a later tick once items are back.
-    items_result = step("Items (items + prices)", &EftBuddy.Items.Sync.run_items/0)
-    step("Maps", &EftBuddy.Maps.Sync.run/0)
-    # Ammo ballistics link back to items (ammo.item_id) for name / icon /
-    # availability, so this runs after Items. Like Maps it only drops the
-    # item-keyed link it can't resolve (leaving item_id null) and otherwise
-    # writes useful ballistics rows, so it runs regardless of step 1's
-    # outcome.
-    step("Ammo", &EftBuddy.Ammo.Sync.run/0)
-    # Armor plates also link back to items (armor_plates.item_id) for
-    # name / icon / price, so this runs after Items alongside Ammo.
-    step("Armor", &EftBuddy.Armor.Sync.run/0)
-    step("Hideout", &EftBuddy.Hideout.Sync.run/0)
-    step("Tasks", &EftBuddy.Tasks.Sync.run/0)
-
-    if step_succeeded?(items_result) do
-      step("Items (barters & crafts)", &EftBuddy.Items.Sync.run_barters_and_crafts/0)
-    else
-      Logger.warning(
-        "[#{prefix()}] Items (barters & crafts): skipped — upstream dependency " <>
-          "'Items (items + prices)' failed, so every barter/craft FK would be unresolvable"
-      )
-    end
+    # The sequence and its ordering live in `EftBuddy.Sync.Registry`, not here.
+    # It used to be a hardcoded list in this function and another hardcoded list
+    # in `notify_schedulers/0`, and the two had already diverged.
+    #
+    # The order is the FK graph rather than a preference. Items is the root.
+    # Everything after it either resolves against items or seeds something that
+    # does, and each step only DROPS the item-keyed slices it cannot resolve
+    # (writing useful rows regardless), so a failed Items step degrades the
+    # sequence rather than invalidating it.
+    #
+    # `requires_items` marks the exception: a step whose every parent FK resolves
+    # against items would fetch its whole set from the API only to sanitise all
+    # of it away — see the "no resolvable barters/crafts" self-skip. Skipping it
+    # up front avoids hammering an already-struggling upstream for data that
+    # cannot be used; the feed's own timer populates it once items are back.
+    #
+    # Each step populates BOTH game modes where they diverge: per-mode
+    # `item_prices` and vendor prices, the regular and pve quest graphs, barters
+    # for both modes. Maps, hideout and item entities are identical across modes.
+    run_cold_start_steps()
 
     elapsed_ms =
       System.convert_time_unit(System.monotonic_time() - started_at, :native, :millisecond)
@@ -265,33 +238,53 @@ defmodule EftBuddy.Sync.Bootstrap do
     :ok
   end
 
+  # Run each registered cold-start step in order, carrying forward the outcomes
+  # of the steps that later ones depend on.
+  defp run_cold_start_steps do
+    Enum.reduce(EftBuddy.Sync.Registry.cold_start_steps(), %{}, fn step_spec, outcomes ->
+      required = Map.get(step_spec, :requires)
+
+      if required && not step_succeeded?(Map.get(outcomes, required)) do
+        Logger.warning(
+          "[#{prefix()}] #{step_spec.label}: skipped — upstream dependency #{required} " <>
+            "failed, so every FK this step resolves would be unresolvable"
+        )
+
+        outcomes
+      else
+        result = step(step_spec.label, step_spec.run)
+
+        case Map.get(step_spec, :key) do
+          nil -> outcomes
+          key -> Map.put(outcomes, key, result)
+        end
+      end
+    end)
+  end
+
   # Cast to the cluster-wide singletons; if one isn't registered (e.g. cold
   # start disabled), the cast is a harmless no-op.
   #
-  # Two groups, and they mean OPPOSITE things by the same message:
+  # The recipients come from `EftBuddy.Sync.Registry.notifiable/0` rather than a
+  # list maintained here. That list had gone out of step: `EftBuddy.Items.Sync`
+  # was missing from it, so it never received the cast and armed its first run
+  # from `init/1` instead of from the end of the cold start — drifting from boot
+  # forever, with nothing logged and nothing failing.
   #
-  #   * The wiki scrapers have NOT run yet — Bootstrap only releases them — so
-  #     they arm their first run at a small offset (chapters immediately, events
-  #     +1 min). `EftBuddy.Wiki.Sync` is deliberately absent: it chains off
-  #     `EftBuddy.Events.Sync` completion, because it needs that run's
-  #     `event_quests` blacklist.
+  # One message, two meanings, which is why `bootstrap_mode/0` names them:
   #
-  #   * The five wipe-scale syncs HAVE just run, right here in `do_run/0`. They
-  #     arm their first recurring run a full interval plus their stagger away,
-  #     so this cast schedules them rather than triggering them. Each module's
-  #     `@bootstrap_offset` says so at the definition.
+  #   * `:released` — the feed has NOT run. Bootstrap is letting it start, so it
+  #     arms at its stagger. The Fandom scrapes are these.
+  #
+  #   * `:ran` — the feed HAS just run, right here in `do_run/0`. It arms its
+  #     first RECURRING run a full interval plus stagger away, so the cast
+  #     schedules it rather than triggering it.
+  #
+  # `:chained` feeds are absent by construction: `EftBuddy.Wiki.Sync` is armed by
+  # `EftBuddy.Events.Sync` completing, because it reads that run's `event_quests`
+  # blacklist.
   defp notify_schedulers do
-    scrapers = [EftBuddy.Chapters.Sync, EftBuddy.Events.Sync]
-
-    periodic = [
-      EftBuddy.Maps.Sync,
-      EftBuddy.Hideout.Sync,
-      EftBuddy.Ammo.Sync,
-      EftBuddy.Armor.Sync,
-      EftBuddy.Tasks.Sync
-    ]
-
-    for mod <- scrapers ++ periodic do
+    for mod <- EftBuddy.Sync.Registry.notifiable() do
       GenServer.cast({:global, mod}, :bootstrap_complete)
     end
   end
