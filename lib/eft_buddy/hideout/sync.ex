@@ -28,7 +28,14 @@ defmodule EftBuddy.Hideout.Sync do
   `{:error, :already_running}` instead of double-writing.
   """
 
-  use GenServer
+  # Slot in the daily cycle, ahead of the feeds whose FKs resolve against the
+  # stations and traders this writes. See `EftBuddy.Sync.Scheduler`.
+  use EftBuddy.Sync.Scheduler,
+    label: "HideoutSync",
+    interval: 24 * 60 * 60 * 1_000,
+    stagger: 30 * 60 * 1_000,
+    bootstrap: :ran,
+    config_key: :hideout
 
   require Logger
   import Ecto.Query
@@ -49,157 +56,12 @@ defmodule EftBuddy.Hideout.Sync do
     TraderRequirement
   }
 
-  @lock_id {__MODULE__, :running}
-
-  # ── Schedule ───────────────────────────────────────────
-  #
-  # See `EftBuddy.Ammo.Sync`'s schedule section for the full reasoning; the
-  # modules are deliberately identical here apart from the slot.
-
-  @default_interval 24 * 60 * 60 * 1_000
-
-  # Slot in the daily cycle: maps +20 → hideout +30 → ammo +40 → armor +50 →
-  # tasks +60, which keeps Bootstrap's FK ordering inside a cycle and avoids the
-  # wiki chain's +0 / +1 min / +8 min.
-  @stagger 30 * 60 * 1_000
-
-  # A FULL INTERVAL from `:bootstrap_complete`, not zero: Bootstrap runs this
-  # sync itself as part of the cold start, so it has already happened by the
-  # time the cast arrives. (The wiki scrapers use 0 because Bootstrap only
-  # *releases* them.)
-  @bootstrap_offset @default_interval + @stagger
-
-  # Short fallback for when the bootstrap signal never arrives — in that case
-  # this sync has NOT run and the table may be empty.
-  @fallback_delay 15 * 60 * 1_000 + @stagger
-
-  @doc false
-  # Public so `EftBuddy.Sync.Freshness` can assert its staleness budget covers
-  # this cadence rather than trusting a comment to keep the two in step.
-  def interval_ms, do: @default_interval
-
-  @doc false
-  def start_link(opts \\ []) do
-    case GenServer.start_link(__MODULE__, opts, name: {:global, __MODULE__}) do
-      {:ok, pid} ->
-        {:ok, pid}
-
-      {:error, {:already_started, _pid}} ->
-        Logger.info(
-          "[#{prefix()}] Another node already runs the hideout sync; staying idle here."
-        )
-
-        :ignore
-    end
-  end
-
-  @doc "Trigger a sync asynchronously (e.g. from IEx)."
-  def sync_now, do: GenServer.cast({:global, __MODULE__}, :sync_now)
-
-  # ── Server ─────────────────────────────────────────────
-
-  @impl true
-  def init(opts) do
-    interval = Keyword.get(opts, :interval, @default_interval)
-    first = Keyword.get(opts, :first_run_delay, @fallback_delay)
-    timer = Process.send_after(self(), :sync, first + jitter(first))
-    {:ok, %{interval: interval, timer: timer}}
-  end
-
-  @impl true
-  def handle_info(:sync, %{interval: interval} = state) do
-    safe_run()
-    timer = Process.send_after(self(), :sync, interval + jitter(interval))
-    {:noreply, %{state | timer: timer}}
-  end
-
-  @impl true
-  def handle_cast(:bootstrap_complete, state) do
-    {:noreply, arm_first_run(state, @bootstrap_offset)}
-  end
-
-  def handle_cast(:sync_now, state) do
-    safe_run()
-    {:noreply, state}
-  end
-
-  defp arm_first_run(state, offset) do
-    if state.timer, do: Process.cancel_timer(state.timer)
-    timer = Process.send_after(self(), :sync, offset + jitter(offset))
-    %{state | timer: timer}
-  end
-
-  defp safe_run do
-    case run() do
-      {:ok, summary} ->
-        Logger.info("[#{prefix()}] done: #{inspect(summary)}")
-        {:ok, summary}
-
-      {:error, :already_running} ->
-        Logger.info("[#{prefix()}] skipped: another hideout sync is already running")
-        {:error, :already_running}
-
-      {:error, reason} ->
-        Logger.warning("[#{prefix()}] run ended early: #{inspect(reason)}")
-        {:error, reason}
-    end
-  rescue
-    e ->
-      Logger.error(
-        "[#{prefix()}] crash: #{Exception.message(e)}\n#{Exception.format_stacktrace(__STACKTRACE__)}"
-      )
-
-      {:error, {:crash, Exception.message(e)}}
-  end
-
-  # ±10%, so several nodes (or several restarts) never align on one instant.
-  defp jitter(ms) when is_integer(ms) and ms > 0, do: :rand.uniform(div(ms, 10) + 1)
-  defp jitter(_), do: 0
-
-  # ── Public API ─────────────────────────────────────────
-
-  @doc """
-  Run a full sync of hideout stations / levels / requirements.
-  Synchronous: blocks until done.
-
-  Returns `{:ok, %{stations: count, levels: count}}` on success or
-  `{:error, reason}`. Returns `{:error, :already_running}` if
-  another sync is in progress on any node in the cluster.
-
-  Invoked once at boot by `EftBuddy.Sync.Bootstrap` and otherwise
-  only when a dev calls it directly from IEx. There is no
-  recurring schedule — hideout data only changes on patches /
-  wipes, so a manual re-run on demand is sufficient.
-  """
-  def run do
-    case acquire_lock() do
-      true ->
-        try do
-          do_run()
-        after
-          release_lock()
-        end
-
-      false ->
-        Logger.warning("[#{prefix()}] Skipped: another sync is already running.")
-        {:error, :already_running}
-    end
-  end
-
-  # `:global.set_lock/3` is cluster-wide and re-entrant per-pid; we
-  # only ever hold it for the duration of a single `run/0` call.
-  # Same shape as `EftBuddy.Tasks.Sync`.
-  defp acquire_lock do
-    :global.set_lock(@lock_id, [node() | Node.list()], 0)
-  end
-
-  defp release_lock do
-    :global.del_lock(@lock_id, [node() | Node.list()])
-  end
-
   # ── Pipeline ───────────────────────────────────────────
 
-  defp do_run do
+  @impl EftBuddy.Sync.Scheduler
+  # Returns `{:ok, %{stations: count, levels: count}}` or `{:error, reason}`.
+  # `run/0` (from `EftBuddy.Sync.Scheduler`) wraps this in the cluster-wide lock.
+  def do_run do
     Reporter.with_run("HideoutSync", fn ->
       case fetch_stations() do
         {:ok, raw_stations} ->
@@ -839,5 +701,4 @@ defmodule EftBuddy.Hideout.Sync do
   # Colorized module tag for this sync's own log lines (skipped:/error:/
   # crash:/etc.), so they match the coloring of the Reporter summary.
   # Mirrors the Bootstrap orchestrator's `prefix/0`.
-  defp prefix, do: Reporter.colorize_label("HideoutSync")
 end

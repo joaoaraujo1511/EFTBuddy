@@ -42,7 +42,17 @@ defmodule EftBuddy.Chapters.Sync do
   the prune (its slug is still in the processed set).
   """
 
-  use GenServer
+  # First of the three Fandom scrapes. Bootstrap only RELEASES this one — it has
+  # never run at that point — so `bootstrap: :released` with a zero stagger means
+  # "start as soon as the cold start finishes". The storyline has no DB
+  # dependency and is the smallest set, so it leads, ahead of the heavier events
+  # and quest scrapes, and the three never hit the Fandom API at once.
+  use EftBuddy.Sync.Scheduler,
+    label: "ChaptersSync",
+    interval: 24 * 60 * 60 * 1_000,
+    stagger: 0,
+    bootstrap: :released,
+    config_key: :chapters
 
   require Logger
   import Ecto.Query
@@ -62,119 +72,13 @@ defmodule EftBuddy.Chapters.Sync do
   # tab, NOT as a chapter in the timeline.
   @extra_pages ["Endings"]
 
-  @default_interval 24 * 60 * 60 * 1_000
-
-  @doc false
-  # Public so `EftBuddy.Sync.Freshness` can assert its staleness budget covers this
-  # cadence rather than trusting a comment to keep the two in step.
-  def interval_ms, do: @default_interval
-
-  # Chapters scrape first. The moment the cold-start `EftBuddy.Sync.Bootstrap`
-  # finishes it casts `:bootstrap_complete` here (see that callback) and the
-  # storyline — no DB dependency, smallest set — starts immediately, ahead of
-  # the heavier events (+1 min) and quest (+8 min) scrapes so the three never
-  # hit the Fandom API at once. This offset is measured from Bootstrap
-  # completion, not from boot.
-  @bootstrap_offset 0
-  # Fallback only: if the bootstrap signal never arrives (cold start disabled
-  # or Bootstrap crashed) run anyway after this delay so the table can't go
-  # stale forever. In normal operation the cast pre-empts it long before it
-  # fires.
-  @fallback_delay @bootstrap_offset + 15 * 60 * 1_000
-
-  @lock_id {__MODULE__, :running}
-
   @replace_on_conflict [:chapter_name, :content, :updated_at]
 
-  # ── Client ─────────────────────────────────────────────
-
-  # Cluster-wide singleton (same pattern as `Items.Sync` / `Wiki.Sync`):
-  # only one node registers the GenServer; the others :ignore start_link.
-  def start_link(opts \\ []) do
-    case GenServer.start_link(__MODULE__, opts, name: {:global, __MODULE__}) do
-      {:ok, pid} ->
-        {:ok, pid}
-
-      {:error, {:already_started, _pid}} ->
-        Logger.info(
-          "[#{prefix()}] Another node already runs the chapter sync; staying idle here."
-        )
-
-        :ignore
-    end
-  end
-
-  @doc """
-  Run the chapter scrape synchronously. Returns `{:ok, summary}`,
-  `{:error, :empty_enumeration}`, `{:error, :already_running}`, or
-  `{:error, reason}`.
-  """
-  def run, do: with_global_lock(&do_run/0)
-
-  @doc "Trigger a scrape asynchronously (e.g. from IEx)."
-  def sync_now, do: GenServer.cast({:global, __MODULE__}, :sync_now)
-
-  # ── Server ─────────────────────────────────────────────
-
-  @impl true
-  def init(opts) do
-    interval = Keyword.get(opts, :interval, @default_interval)
-    fallback = Keyword.get(opts, :fallback_delay, @fallback_delay)
-    timer = Process.send_after(self(), :sync, fallback + jitter(fallback))
-    {:ok, %{interval: interval, timer: timer}}
-  end
-
-  @impl true
-  def handle_info(:sync, %{interval: interval} = state) do
-    safe_run()
-    timer = Process.send_after(self(), :sync, interval + jitter(interval))
-    {:noreply, %{state | timer: timer}}
-  end
-
-  # Bootstrap finished the cold-start sequence: (re)arm the first scrape at
-  # this sync's offset from now, cancelling the boot-time fallback timer.
-  @impl true
-  def handle_cast(:bootstrap_complete, state) do
-    {:noreply, arm_first_run(state, @bootstrap_offset)}
-  end
-
-  def handle_cast(:sync_now, state) do
-    safe_run()
-    {:noreply, state}
-  end
-
-  defp arm_first_run(state, offset) do
-    if state.timer, do: Process.cancel_timer(state.timer)
-    timer = Process.send_after(self(), :sync, offset + jitter(offset))
-    %{state | timer: timer}
-  end
-
-  defp safe_run do
-    case run() do
-      {:ok, summary} ->
-        Logger.info("[#{prefix()}] done: #{inspect(summary)}")
-        {:ok, summary}
-
-      {:error, :already_running} ->
-        Logger.info("[#{prefix()}] skipped: another chapter sync is already running")
-        {:error, :already_running}
-
-      {:error, reason} ->
-        Logger.warning("[#{prefix()}] run ended early: #{inspect(reason)}")
-        {:error, reason}
-    end
-  rescue
-    e ->
-      Logger.error(
-        "[#{prefix()}] crash: #{Exception.message(e)}\n#{Exception.format_stacktrace(__STACKTRACE__)}"
-      )
-
-      {:error, {:crash, Exception.message(e)}}
-  end
-
-  # ── Pipeline ───────────────────────────────────────────
-
-  defp do_run do
+  @impl EftBuddy.Sync.Scheduler
+  # Returns `{:ok, summary}`, `{:error, :empty_enumeration}` or
+  # `{:error, reason}`. `run/0` (from `EftBuddy.Sync.Scheduler`) wraps this in the
+  # cluster-wide lock.
+  def do_run do
     titles = DumpScript.enumerate_category_members(Dump.category(), http_opts())
 
     if titles == [] do
@@ -535,30 +439,4 @@ defmodule EftBuddy.Chapters.Sync do
   defp strip_file_prefix(other), do: other
 
   # ── Cluster-wide lock (mirrors Wiki.Sync / Items.Sync) ─
-
-  defp with_global_lock(fun) do
-    nodes = [node() | Node.list()]
-
-    case :global.set_lock(@lock_id, nodes, 0) do
-      true ->
-        try do
-          fun.()
-        after
-          :global.del_lock(@lock_id, nodes)
-        end
-
-      false ->
-        {:error, :already_running}
-    end
-  end
-
-  # Colorized module tag for this sync's own log lines (done:/skipped:/
-  # crash:/etc.), so they match the coloring of the Reporter summary.
-  # Mirrors the Bootstrap orchestrator's `prefix/0`.
-  defp prefix, do: Reporter.colorize_label("ChaptersSync")
-
-  # Spread scheduled ticks (initial + daily) so a multi-node cluster
-  # doesn't fire every timer at the same instant. Bounded to ~10%.
-  defp jitter(ms) when is_integer(ms) and ms > 0, do: :rand.uniform(div(ms, 10) + 1)
-  defp jitter(_), do: 0
 end

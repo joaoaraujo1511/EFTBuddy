@@ -163,6 +163,49 @@ defmodule EftBuddy.Items.SyncPriceGuardTest do
     end
   end
 
+  describe "which pass owns which column" do
+    test "a structural pass cannot overwrite a fresher flea price", %{items: items} do
+      # The two passes write the same four `item_prices` columns from snapshots
+      # taken hours apart. The structural one used to replace them on conflict,
+      # so every full run put a stale price over a ten-minute-old one and the
+      # wrong value stood until the next price tick. Splitting the passes into
+      # separate processes turns that predictable window into a race, so the
+      # overlap is removed rather than locked around.
+      write(document(items, fn _ -> 4_242 end))
+      assert priced_count() == 20
+
+      # Now the structural pass, carrying an older snapshot of the same items.
+      raw =
+        Enum.map(items, fn item ->
+          %{
+            "id" => item.external_id,
+            "basePrice" => 111,
+            "lastLowPrice" => 1,
+            "avg24hPrice" => 1,
+            "low24hPrice" => 1,
+            "high24hPrice" => 1
+          }
+        end)
+
+      item_map = Map.new(items, &{&1.external_id, &1.id})
+      Sync.upsert_item_prices(Repo, raw, item_map, "regular")
+
+      prices =
+        Repo.all(
+          from(p in ItemPrice,
+            where: p.game_mode == "regular",
+            select: {p.last_low_price, p.base_price}
+          )
+        )
+
+      assert Enum.all?(prices, fn {last_low, _} -> last_low == 4_242 end),
+             "the structural pass overwrote the fresher flea price"
+
+      assert Enum.all?(prices, fn {_, base} -> base == 111 end),
+             "but it still owns base_price, which the price tick never touches"
+    end
+  end
+
   describe "per-mode isolation" do
     test "a bad PVE document does not block a good PVP one", %{items: items} do
       for item <- items do

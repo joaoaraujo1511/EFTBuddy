@@ -39,7 +39,15 @@ defmodule EftBuddy.Maps.Sync do
   `data.maps` is a list and only surface the errors as a warning count.
   """
 
-  use GenServer
+  # First slot in the daily cycle. Maps leads because `tasks.map_id` resolves
+  # against it, so this ordering mirrors Bootstrap's FK sequence inside each
+  # cycle. See `EftBuddy.Sync.Scheduler` for what the options mean.
+  use EftBuddy.Sync.Scheduler,
+    label: "MapsSync",
+    interval: 24 * 60 * 60 * 1_000,
+    stagger: 20 * 60 * 1_000,
+    bootstrap: :ran,
+    config_key: :maps
 
   require Logger
   import Ecto.Query
@@ -73,143 +81,9 @@ defmodule EftBuddy.Maps.Sync do
   # best-effort each run; a failure just leaves `svg_path` nil.
   @maps_json_url "https://raw.githubusercontent.com/the-hideout/tarkov-dev/main/src/data/maps.json"
   @http_timeout 60_000
-  @lock_id {__MODULE__, :running}
 
-  # ── Schedule ───────────────────────────────────────────
-  #
-  # See `EftBuddy.Ammo.Sync`'s schedule section for the full reasoning; the
-  # modules are deliberately identical here apart from the slot.
-
-  @default_interval 24 * 60 * 60 * 1_000
-
-  # First slot in the daily cycle: maps +20 → hideout +30 → ammo +40 → armor
-  # +50 → tasks +60. Maps leads because `tasks.map_id` resolves against it, so
-  # this ordering mirrors Bootstrap's FK sequence inside each cycle.
-  @stagger 20 * 60 * 1_000
-
-  # A FULL INTERVAL from `:bootstrap_complete`, not zero: Bootstrap runs this
-  # sync itself as part of the cold start, so it has already happened by the
-  # time the cast arrives. (The wiki scrapers use 0 because Bootstrap only
-  # *releases* them.)
-  @bootstrap_offset @default_interval + @stagger
-
-  # Short fallback for when the bootstrap signal never arrives — in that case
-  # this sync has NOT run and the table may be empty.
-  @fallback_delay 15 * 60 * 1_000 + @stagger
-
-  @doc false
-  # Public so `EftBuddy.Sync.Freshness` can assert its staleness budget covers
-  # this cadence rather than trusting a comment to keep the two in step.
-  def interval_ms, do: @default_interval
-
-  @doc false
-  def start_link(opts \\ []) do
-    case GenServer.start_link(__MODULE__, opts, name: {:global, __MODULE__}) do
-      {:ok, pid} ->
-        {:ok, pid}
-
-      {:error, {:already_started, _pid}} ->
-        Logger.info("[#{prefix()}] Another node already runs the maps sync; staying idle here.")
-        :ignore
-    end
-  end
-
-  @doc "Trigger a sync asynchronously (e.g. from IEx)."
-  def sync_now, do: GenServer.cast({:global, __MODULE__}, :sync_now)
-
-  # ── Server ─────────────────────────────────────────────
-
-  @impl true
-  def init(opts) do
-    interval = Keyword.get(opts, :interval, @default_interval)
-    first = Keyword.get(opts, :first_run_delay, @fallback_delay)
-    timer = Process.send_after(self(), :sync, first + jitter(first))
-    {:ok, %{interval: interval, timer: timer}}
-  end
-
-  @impl true
-  def handle_info(:sync, %{interval: interval} = state) do
-    safe_run()
-    timer = Process.send_after(self(), :sync, interval + jitter(interval))
-    {:noreply, %{state | timer: timer}}
-  end
-
-  @impl true
-  def handle_cast(:bootstrap_complete, state) do
-    {:noreply, arm_first_run(state, @bootstrap_offset)}
-  end
-
-  def handle_cast(:sync_now, state) do
-    safe_run()
-    {:noreply, state}
-  end
-
-  defp arm_first_run(state, offset) do
-    if state.timer, do: Process.cancel_timer(state.timer)
-    timer = Process.send_after(self(), :sync, offset + jitter(offset))
-    %{state | timer: timer}
-  end
-
-  defp safe_run do
-    case run() do
-      {:ok, summary} ->
-        Logger.info("[#{prefix()}] done: #{inspect(summary)}")
-        {:ok, summary}
-
-      {:error, :already_running} ->
-        Logger.info("[#{prefix()}] skipped: another maps sync is already running")
-        {:error, :already_running}
-
-      {:error, reason} ->
-        Logger.warning("[#{prefix()}] run ended early: #{inspect(reason)}")
-        {:error, reason}
-    end
-  rescue
-    e ->
-      Logger.error(
-        "[#{prefix()}] crash: #{Exception.message(e)}\n#{Exception.format_stacktrace(__STACKTRACE__)}"
-      )
-
-      {:error, {:crash, Exception.message(e)}}
-  end
-
-  # ±10%, so several nodes (or several restarts) never align on one instant.
-  defp jitter(ms) when is_integer(ms) and ms > 0, do: :rand.uniform(div(ms, 10) + 1)
-  defp jitter(_), do: 0
-
-  # ── Public API ─────────────────────────────────────────
-
-  @doc """
-  Run a full sync of maps. Synchronous: blocks until done.
-
-  Returns `{:ok, counts}` on success or `{:error, reason}`.
-  Returns `{:error, :already_running}` if another maps sync is in
-  progress on any node in the cluster.
-  """
-  def run do
-    case acquire_lock() do
-      true ->
-        try do
-          do_run()
-        after
-          release_lock()
-        end
-
-      false ->
-        Logger.warning("[#{prefix()}] Skipped: another sync is already running.")
-        {:error, :already_running}
-    end
-  end
-
-  defp acquire_lock do
-    :global.set_lock(@lock_id, [node() | Node.list()], 0)
-  end
-
-  defp release_lock do
-    :global.del_lock(@lock_id, [node() | Node.list()])
-  end
-
-  defp do_run do
+  @impl EftBuddy.Sync.Scheduler
+  def do_run do
     Reporter.with_run("MapsSync", fn ->
       case fetch_maps() do
         {:ok, raw_maps} ->
@@ -1396,6 +1270,4 @@ defmodule EftBuddy.Maps.Sync do
       |> repo.delete_all()
     end)
   end
-
-  defp prefix, do: Reporter.colorize_label("MapsSync")
 end
