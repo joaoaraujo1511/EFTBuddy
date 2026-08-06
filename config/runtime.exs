@@ -301,6 +301,27 @@ if config_env() == :prod do
          :item_details_precompute_enabled,
          System.get_env("ITEM_DETAILS", "0") in ~w(1 true yes)
 
+  # Ceiling on how much the detail precompute may add to the cache table, in
+  # MEGABYTES — the unit an operator reads off `free -m`, converted here so the
+  # app keeps a single bytes-valued key.
+  #
+  # This existed as an instruction before it existed as a setting: the
+  # over-budget error message told the operator to set ITEM_DETAILS_MAX_MB, and
+  # nothing anywhere read it.
+  #
+  # An OVERRIDE with no default of its own, like MAX_OPERATOR_SESSIONS above and
+  # unlike CACHE_MAX_ENTRIES. `EftBuddy.Items.details_max_bytes/0` owns the
+  # default; repeating 250 here would give it a second home, and the only place
+  # the two could be seen to disagree is the very log line that prints the
+  # effective ceiling.
+  #
+  # A non-integer raises at boot, deliberately. A typo'd ceiling that silently
+  # fell back to the default on a box without the headroom is the OOM crashloop
+  # this budget exists to prevent.
+  if max_mb = System.get_env("ITEM_DETAILS_MAX_MB") do
+    config :eft_buddy, :item_details_max_bytes, String.to_integer(max_mb) * 1_048_576
+  end
+
   # The operator dashboard, OFF unless ADMIN_DASHBOARD_PORT is set. Absent, the
   # `:admin_dashboard` key is never written, `EftBuddy.Application` never adds the
   # endpoint to the supervision tree, and nothing binds the port. Fail-closed by

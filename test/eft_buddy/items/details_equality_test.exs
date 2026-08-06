@@ -372,6 +372,20 @@ defmodule EftBuddy.Items.DetailsEqualityTest do
              )
     end
 
+    test "the env var the over-budget message names is one runtime.exs actually reads" do
+      # The message above told an operator to set ITEM_DETAILS_MAX_MB. Nothing in
+      # the app read it — the string appeared exactly once in the repo, inside that
+      # message — so following the instruction changed nothing and the next build
+      # hit the same ceiling.
+      #
+      # Grepping config from a test is blunt, but `runtime.exs` is only evaluated
+      # for :prod and cannot be exercised here, and the alternative is shipping
+      # another instruction nobody can act on. `cleanup_guard_wiring_test.exs`
+      # reads source files for the same reason.
+      assert File.read!("config/runtime.exs") =~ "ITEM_DETAILS_MAX_MB",
+             "the over-budget log names this env var; runtime.exs must read it"
+    end
+
     test "a build inside its budget writes normally" do
       seed()
       Cache.clear()
