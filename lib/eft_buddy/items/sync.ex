@@ -409,20 +409,41 @@ defmodule EftBuddy.Items.Sync do
         end
       end)
 
-    updated =
-      rows
-      |> Enum.chunk_every(2_000)
-      |> Enum.reduce(0, fn chunk, acc ->
-        {count, _} =
-          repo.insert_all(Item, chunk,
-            on_conflict: {:replace, @price_replace_fields},
-            conflict_target: :external_id
-          )
+    # Guarded too, even though the flea read path no longer consults these
+    # columns. `prices_changed?/2` treats `nil != 123` as a change, so a
+    # null-stripped document writes the nulls here exactly as it would to
+    # `item_prices` — and leaving a known catalogue-nulling write unguarded
+    # because "nothing reads it today" is how it gets read again.
+    #
+    # The counts are free here: `existing` already selected `last_low_price`.
+    current_priced = Enum.count(existing, fn {_ext, cur} -> cur.last_low_price != nil end)
+    incoming_priced = Enum.count(incoming, &(&1["lastLowPrice"] != nil))
 
-        acc + count
-      end)
+    case prices_safe?(current_priced, incoming_priced) do
+      {:skip, reason} ->
+        Logger.error(
+          "[#{Reporter.colorize_label("PricesSync")}] Refusing the legacy items-table " <>
+            "price mirror: #{reason}. Keeping existing prices."
+        )
 
-    {:ok, %{checked: length(incoming), updated: updated}}
+        {:ok, %{checked: length(incoming), updated: 0, refused: true}}
+
+      :ok ->
+        updated =
+          rows
+          |> Enum.chunk_every(2_000)
+          |> Enum.reduce(0, fn chunk, acc ->
+            {count, _} =
+              repo.insert_all(Item, chunk,
+                on_conflict: {:replace, @price_replace_fields},
+                conflict_target: :external_id
+              )
+
+            acc + count
+          end)
+
+        {:ok, %{checked: length(incoming), updated: updated}}
+    end
   end
 
   defp prices_changed?(current, new_prices) do
@@ -454,7 +475,16 @@ defmodule EftBuddy.Items.Sync do
   # On conflict we replace the flea columns + `historical_prices` +
   # `updated_at`, leaving `base_price` (owned by the 6-hourly full pass)
   # untouched. Returns `%{checked: n, upserted: m}`.
-  defp refresh_item_prices_flea(repo, raw, game_mode) do
+  #
+  # Guarded by `prices_safe?/2`, because that replace list makes this write
+  # destructive: a nil `lastLowPrice` goes over a live price as a NULL, so a
+  # full-size document with its price fields stripped wipes the catalogue without
+  # changing the row count. See the guard's own docstring.
+  @doc false
+  # Public only so the guard can be unit-tested — this path had no test coverage
+  # at all. Treat it as private; `cleanup_stale/2` above is public for the same
+  # reason.
+  def refresh_item_prices_flea(repo, raw, game_mode) do
     item_map = fetch_item_map(repo)
     history_map = fetch_history_map(repo, game_mode)
     now = now_naive()
@@ -496,20 +526,48 @@ defmodule EftBuddy.Items.Sync do
       :updated_at
     ]
 
-    upserted =
-      rows
-      |> Enum.chunk_every(2_000)
-      |> Enum.reduce(0, fn chunk, acc ->
-        {count, _} =
-          repo.insert_all(ItemPrice, chunk,
-            on_conflict: {:replace, replace},
-            conflict_target: [:item_id, :game_mode]
-          )
+    incoming_priced = Enum.count(rows, &(&1.last_low_price != nil))
 
-        acc + count
-      end)
+    current_priced =
+      repo.aggregate(
+        from(p in ItemPrice, where: p.game_mode == ^game_mode and not is_nil(p.last_low_price)),
+        :count,
+        :id
+      )
 
-    %{checked: length(raw), upserted: upserted}
+    case prices_safe?(current_priced, incoming_priced) do
+      {:skip, reason} ->
+        # The WHOLE mode's write is abandoned, not just the nil rows. Writing only
+        # the priced ones would mean a legitimate delisting never lands — prices
+        # would freeze at their last value forever with no signal — and it would
+        # make the failure partial, so some prices update and some do not and
+        # nobody can tell which. Refusing leaves the previous complete snapshot
+        # intact at a cost of one ten-minute tick of staleness, and shouts.
+        #
+        # Per mode, so a bad PVE document cannot block a good PVP one.
+        Logger.error(
+          "[#{Reporter.colorize_label("PricesSync")}] Refusing #{game_mode} price write: " <>
+            "#{reason}. Keeping existing prices."
+        )
+
+        %{checked: length(raw), upserted: 0, refused: true}
+
+      :ok ->
+        upserted =
+          rows
+          |> Enum.chunk_every(2_000)
+          |> Enum.reduce(0, fn chunk, acc ->
+            {count, _} =
+              repo.insert_all(ItemPrice, chunk,
+                on_conflict: {:replace, replace},
+                conflict_target: [:item_id, :game_mode]
+              )
+
+            acc + count
+          end)
+
+        %{checked: length(raw), upserted: upserted}
+    end
   end
 
   # Map of `item_id => historical_prices` for one mode, so the price tick

@@ -94,7 +94,71 @@ defmodule EftBuddy.Sync.Helpers do
     end
   end
 
+  @doc """
+  Decide whether a price snapshot is safe to write.
+
+  `cleanup_safe?/3` guards DELETES. This guards an UPSERT, because on the price
+  path an upsert is destructive in exactly the same way and `cleanup_safe?/3`
+  cannot see it. `refresh_item_prices_flea/3` writes with
+  `on_conflict: {:replace, [:last_low_price, …]}`, so a nil `lastLowPrice` in the
+  response goes straight over a live price as a NULL. An upstream document that
+  still lists all ~5,200 items with its price fields stripped therefore nulls the
+  whole catalogue in one pass — **with no change in row count at all** for a size
+  guard to notice.
+
+  The signal is not "a nil price". Items that were never listed on the flea market
+  legitimately have none, and the catalogue always carries plenty. The signal is a
+  mass TRANSITION from priced to unpriced, so the comparison is between how many
+  rows carry a price now and how many the incoming snapshot carries.
+
+  A cold start (`current == 0`) always returns `:ok`, exactly as `cleanup_safe?/3`
+  does — the first population must never be blocked.
+
+  Note that an EMPTY document trips this rather than silently writing nothing,
+  which is a deliberate change of behaviour: a price feed returning zero priced
+  items is a real upstream failure and should reach `/health/sync` instead of
+  vanishing into a run that reports `ok` with `upserted: 0`.
+
+  Returns `:ok` to proceed, or `{:skip, reason}` to refuse.
+  """
+  @spec prices_safe?(non_neg_integer(), non_neg_integer(), float()) ::
+          :ok | {:skip, String.t()}
+  def prices_safe?(current, incoming, ratio \\ cleanup_min_keep_ratio())
+      when is_integer(current) and is_integer(incoming) and current >= 0 and incoming >= 0 do
+    cond do
+      current == 0 ->
+        :ok
+
+      incoming >= current * ratio ->
+        :ok
+
+      true ->
+        # Reuses `:cleanup_refused` rather than minting a `:prices_refused` event.
+        # The whole surfacing chain downstream of this — `count_refusal/0` →
+        # `refusals` → `REFUSED-PRUNES=n` on the summary line → `:guard_tripped` in
+        # `EftBuddy.Sync.Freshness` → 503 from `/health/sync` — is keyed on the
+        # counter, not the event name, and a second event would need new metric
+        # declarations and a new path through `Reporter` to express the same fact.
+        # `guard:` distinguishes the two in metadata for anyone charting them.
+        :telemetry.execute(
+          [:eft_buddy, :sync, :cleanup_refused],
+          %{current_count: current, snapshot_count: incoming},
+          %{label: EftBuddy.Sync.Reporter.current_label(), ratio: ratio, guard: :prices}
+        )
+
+        EftBuddy.Sync.Reporter.count_refusal()
+
+        {:skip,
+         "snapshot carries #{incoming} priced items against #{current} currently " <>
+           "priced (< #{round(ratio * 100)}%) — treating as a null-stripped upstream response"}
+    end
+  end
+
   @doc false
+  # One ratio, shared by both guards. Prices move constantly but the COUNT of
+  # priced items does not — that set is the flea-eligible catalogue, and it is as
+  # monotone as the catalogue itself. A second knob would be a second number to
+  # keep in step for no demonstrated need.
   def cleanup_min_keep_ratio do
     Application.get_env(:eft_buddy, :sync_cleanup_min_keep_ratio, 0.9)
   end
