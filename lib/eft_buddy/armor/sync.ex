@@ -25,8 +25,8 @@ defmodule EftBuddy.Armor.Sync do
   # mean.
   use EftBuddy.Sync.Scheduler,
     label: "ArmorSync",
-    interval: 24 * 60 * 60 * 1_000,
-    stagger: 50 * 60 * 1_000,
+    interval: 12 * 60 * 60 * 1_000,
+    stagger: 255 * 60 * 1_000,
     bootstrap: :ran,
     config_key: :armor
 

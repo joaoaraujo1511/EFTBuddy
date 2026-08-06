@@ -44,8 +44,8 @@ defmodule EftBuddy.Maps.Sync do
   # cycle. See `EftBuddy.Sync.Scheduler` for what the options mean.
   use EftBuddy.Sync.Scheduler,
     label: "MapsSync",
-    interval: 24 * 60 * 60 * 1_000,
-    stagger: 20 * 60 * 1_000,
+    interval: 12 * 60 * 60 * 1_000,
+    stagger: 200 * 60 * 1_000,
     bootstrap: :ran,
     config_key: :maps
 

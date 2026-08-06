@@ -64,7 +64,7 @@ defmodule EftBuddy.Items.Sync do
   #     ONLY the volatile flea-market price columns on items whose prices
   #     actually changed (change detection). No structural writes, no
   #     price-row/barter/craft churn, no cleanup.
-  @default_full_interval 6 * 60 * 60 * 1_000
+  @default_full_interval 12 * 60 * 60 * 1_000
 
   # 10 minutes, against an upstream that refreshes roughly every 15.
   #
@@ -210,7 +210,7 @@ defmodule EftBuddy.Items.Sync do
   # with no matching clause takes the GenServer down.
 
   # This module's slot, matching the other feeds' staggers.
-  @stagger 10 * 60 * 1_000
+  @stagger 120 * 60 * 1_000
 
   @doc false
   def label, do: "ItemsSync"
@@ -1477,7 +1477,7 @@ defmodule EftBuddy.Items.Sync do
   # this snapshot too so a PVE-only vendor (none today, but cheap
   # insurance) still resolves.
   defp sync_prices_for_mode(game_mode) do
-    Reporter.with_run("PricesSync:#{game_mode}", fn ->
+    Reporter.with_run("EconomySync:#{game_mode}", fn ->
       case EftBuddy.TarkovApi.items(game_mode) do
         {:ok, raw} ->
           items = sanitize_price_items(raw)

@@ -38,8 +38,8 @@ defmodule EftBuddy.Ammo.Sync do
   # `item_id` for one cycle rather than a broken row.
   use EftBuddy.Sync.Scheduler,
     label: "AmmoSync",
-    interval: 24 * 60 * 60 * 1_000,
-    stagger: 40 * 60 * 1_000,
+    interval: 12 * 60 * 60 * 1_000,
+    stagger: 230 * 60 * 1_000,
     bootstrap: :ran,
     config_key: :ammo
 

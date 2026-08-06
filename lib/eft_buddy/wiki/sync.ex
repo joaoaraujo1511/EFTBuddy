@@ -4,11 +4,35 @@ defmodule EftBuddy.Wiki.Sync do
   into `wiki_quests`. Replaces the old offline `dump_wiki_quests.exs`
   script + committed JSON manifests + boot-time ETS load.
 
-  Scheduled like the other syncers: a background run a short while after
-  boot (so the Tasks sync has populated the `tasks` table first), then
-  daily. Can also be triggered synchronously from IEx:
+  Runs every six hours, and can also be triggered synchronously from IEx:
 
       EftBuddy.Wiki.Sync.run()
+
+  ## Chained AND self-timed, which is new
+
+  This scrape reads the `event_quests` blacklist `EftBuddy.Events.Sync` writes,
+  so it is armed by that sync completing rather than by a fixed offset. That was
+  the whole schedule while both ran daily.
+
+  It now runs at 6h while events runs at 12h, so "a minute after every events
+  run" can no longer deliver the cadence. It keeps a real 6h timer, and the
+  `:events_complete` cast re-arms it — `arm_first_run/2` cancels and reschedules,
+  so a chained run simply replaces the pending self-timed one.
+
+  The consequence is that roughly half the runs use a blacklist up to twelve
+  hours old. That is acceptable: the blacklist is a set of event-quest slugs,
+  and it changes when an event starts or ends, not continuously. A quest that
+  slips through for one cycle shows as WIP on the Tasks tab and is corrected on
+  the next.
+
+  ## On the 6h cadence
+
+  This is the heaviest scrape in the app — it enumerates `Category:Quests`, then
+  fetches every quest page's lead section and its remaining sections — and it
+  points four times the traffic at a third party that already rate-limits with
+  503s. Conditional fetching (compare each page's `revid` before pulling
+  sections) is the mitigation, and should be treated as required rather than
+  optional if the Fandom error rate rises.
 
   Pipeline (all the pure parts are reused from the dump pipeline so this
   module is only the impure glue):
@@ -53,7 +77,8 @@ defmodule EftBuddy.Wiki.Sync do
   # quest table cannot go stale forever.
   use EftBuddy.Sync.Scheduler,
     label: "WikiSync",
-    interval: 24 * 60 * 60 * 1_000,
+    interval: 6 * 60 * 60 * 1_000,
+    stagger: 90 * 60 * 1_000,
     bootstrap: :chained,
     fallback: 45 * 60 * 1_000,
     config_key: :wiki

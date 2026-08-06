@@ -92,39 +92,59 @@ defmodule EftBuddy.Sync.Freshness do
   @boot_only :boot_only
   @boot_grace 60 * 60
 
+  # The three cadences the feeds run on, each just over 2x its interval so a
+  # single slipped tick is never an incident. `freshness_test.exs` enforces the
+  # 2x rule against each feed's real `interval_ms/0`.
+  @six_hourly 14 * 60 * 60
+  @twelve_hourly 26 * 60 * 60
+
   @budgets [
-    # Ticks every ~15 minutes; 2h is 8 missed ticks. Tighter than everything else
+    # Ticks every 10 minutes; 2h is 12 missed ticks. Tighter than everything else
     # because prices are the only genuinely volatile data in the app.
     {"PricesSync", 2 * 60 * 60, {EftBuddy.Items.Sync, :price_interval_ms}},
 
-    # Items keeps its own recurring tick, and the three sub-steps that run inside the
-    # same pipeline inherit its cadence.
-    {"ItemsSync", @daily_feed, {EftBuddy.Items.Sync, :full_interval_ms}},
-    {"BartersSync", @daily_feed, {EftBuddy.Items.Sync, :full_interval_ms}},
-    {"CraftsSync", @daily_feed, {EftBuddy.Items.Sync, :full_interval_ms}},
-    {"FleaSettingsSync", @daily_feed, {EftBuddy.Items.Sync, :full_interval_ms}},
-    {"QuestItemsSync", @daily_feed, {EftBuddy.Items.Sync, :full_interval_ms}},
+    # Quest-shaped feeds, 6h. Quests are the only content that changes between
+    # wipes — tarkov.dev re-tags them during events and new ones arrive with
+    # patches — so they refresh twice as often as the structural data.
+    {"TasksSync", @six_hourly, {EftBuddy.Tasks.Sync, :interval_ms}},
+    {"WikiSync", @six_hourly, {EftBuddy.Wiki.Sync, :interval_ms}},
+
+    # Structural tarkov.dev feeds, 12h.
+    #
+    # `EconomySync` is the per-mode vendor-economy pass — `item_prices.base_price`,
+    # `sell_for`, `buy_for`. It used to label itself `PricesSync:<mode>`, which
+    # `matches?/2` folded into the PricesSync family above, so a pass running on
+    # the structural cadence was judged against the ten-minute feed's 2h budget.
+    # `evaluate_family/5` ages a family on its OLDEST label, so that family read
+    # `:stale` for roughly four of every six hours and `/health/sync` answered 503
+    # for most of every cycle — before this change, and for 10 of every 12 after
+    # it. A distinct label is the whole fix.
+    {"ItemsSync", @twelve_hourly, {EftBuddy.Items.Sync, :full_interval_ms}},
+    {"EconomySync", @twelve_hourly, {EftBuddy.Items.Sync, :full_interval_ms}},
+
+    # These four still run inside `Items.Sync`'s full pipeline and inherit its
+    # cadence, which is why they share its owner. They get their own labels,
+    # budgets and timers when they are split into modules of their own; until
+    # then a shared owner is the honest description.
+    {"BartersSync", @twelve_hourly, {EftBuddy.Items.Sync, :full_interval_ms}},
+    {"CraftsSync", @twelve_hourly, {EftBuddy.Items.Sync, :full_interval_ms}},
+    {"FleaSettingsSync", @twelve_hourly, {EftBuddy.Items.Sync, :full_interval_ms}},
+    {"QuestItemsSync", @twelve_hourly, {EftBuddy.Items.Sync, :full_interval_ms}},
 
     # The wipe-scale feeds. These WERE `@boot_only` — they had no timer at all,
     # so they could not be judged on age and were exempted. They now each own a
     # recurring GenServer timer (`EftBuddy.Sync.Bootstrap` runs them once at
     # boot, their own schedule thereafter), so the exemption no longer applies
     # and they get real budgets like everything else.
-    #
-    # Tasks ticks twice as often as the rest because quests are the only one of
-    # the five that changes between wipes — see `EftBuddy.Tasks.Sync`. 26h is
-    # just over 2x its 12h cadence; the other four take `@daily_feed`, which is
-    # just over 2x their 24h. `freshness_test.exs` enforces the 2x rule.
-    {"MapsSync", @daily_feed, {EftBuddy.Maps.Sync, :interval_ms}},
-    {"AmmoSync", @daily_feed, {EftBuddy.Ammo.Sync, :interval_ms}},
-    {"ArmorSync", @daily_feed, {EftBuddy.Armor.Sync, :interval_ms}},
-    {"HideoutSync", @daily_feed, {EftBuddy.Hideout.Sync, :interval_ms}},
-    {"TasksSync", 26 * 60 * 60, {EftBuddy.Tasks.Sync, :interval_ms}},
+    {"MapsSync", @twelve_hourly, {EftBuddy.Maps.Sync, :interval_ms}},
+    {"AmmoSync", @twelve_hourly, {EftBuddy.Ammo.Sync, :interval_ms}},
+    {"ArmorSync", @twelve_hourly, {EftBuddy.Armor.Sync, :interval_ms}},
+    {"HideoutSync", @twelve_hourly, {EftBuddy.Hideout.Sync, :interval_ms}},
 
-    # Wiki scrapers: daily by their own timers.
-    {"ChaptersSync", @daily_feed, {EftBuddy.Chapters.Sync, :interval_ms}},
-    {"EventsSync", @daily_feed, {EftBuddy.Events.Sync, :interval_ms}},
-    {"WikiSync", @daily_feed, {EftBuddy.Wiki.Sync, :interval_ms}}
+    # Fandom scrapes. Events feeds the blacklist the quest scrape honours; the
+    # storyline changes only on major patches, so it stays daily.
+    {"EventsSync", @twelve_hourly, {EftBuddy.Events.Sync, :interval_ms}},
+    {"ChaptersSync", @daily_feed, {EftBuddy.Chapters.Sync, :interval_ms}}
   ]
 
   @type state :: :ok | :booting | :stale | :failed | :guard_tripped | :never_run

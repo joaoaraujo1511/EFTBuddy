@@ -33,8 +33,8 @@ defmodule EftBuddy.Tasks.Sync do
   # re-linked next run rather than persisting as a broken row.
   use EftBuddy.Sync.Scheduler,
     label: "TasksSync",
-    interval: 12 * 60 * 60 * 1_000,
-    stagger: 60 * 60 * 1_000,
+    interval: 6 * 60 * 60 * 1_000,
+    stagger: 50 * 60 * 1_000,
     bootstrap: :ran,
     config_key: :tasks
 

@@ -32,8 +32,8 @@ defmodule EftBuddy.Hideout.Sync do
   # stations and traders this writes. See `EftBuddy.Sync.Scheduler`.
   use EftBuddy.Sync.Scheduler,
     label: "HideoutSync",
-    interval: 24 * 60 * 60 * 1_000,
-    stagger: 30 * 60 * 1_000,
+    interval: 12 * 60 * 60 * 1_000,
+    stagger: 280 * 60 * 1_000,
     bootstrap: :ran,
     config_key: :hideout
 

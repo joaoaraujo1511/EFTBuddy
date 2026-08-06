@@ -54,8 +54,8 @@ defmodule EftBuddy.Events.Sync do
   # `after_run/1` below chains the quest scrape off this one's completion.
   use EftBuddy.Sync.Scheduler,
     label: "EventsSync",
-    interval: 24 * 60 * 60 * 1_000,
-    stagger: 1 * 60 * 1_000,
+    interval: 12 * 60 * 60 * 1_000,
+    stagger: 180 * 60 * 1_000,
     bootstrap: :released,
     config_key: :events
 
