@@ -1190,18 +1190,38 @@ defmodule EftBuddy.Items do
   @doc false
   def detail_key(item_id, mode), do: {__MODULE__, :item_details_rel, item_id, mode}
 
-  # Rebuilt by ItemsSync at six hours, so eight gives headroom without letting a
-  # broken warm sit unnoticed forever. Explicit because the 20-minute default
-  # would expire every one of these between syncs — the failure the warming
-  # rework exists to fix, and one that would land hardest here.
-  @detail_ttl_ms 8 * 60 * 60 * 1_000
+  @doc false
+  # ONE derivation, shared by the lazy read below, the bulk write in
+  # `warm_item_details/1`, and — because the warm registry gives a `:bulk` spec's
+  # sentinel `Cache.ttl_for_sources(spec.sources)` and that spec's sources ARE
+  # `@detail_sources` — the coverage sentinel too.
+  #
+  # This replaced a hand-picked 8h, justified as "rebuilt by ItemsSync at six
+  # hours, so eight gives headroom". That was true and it was still a trap: it
+  # held only because a 6h cadence invalidated the entries and the sentinel
+  # together before either could expire, and nothing in the code said so. Move
+  # ItemsSync to twelve hours and the entries expire at eight while the sentinel
+  # lives to twenty-six — `skip?/1` then refuses to rebuild a set that is already
+  # gone, and `coverage/0` reports it `:live`. The inverse is just as bad: a
+  # source budget below the entry TTL makes the sentinel expire first, and the
+  # five-minute repair tick rebuilds all ~10,898 entries unconditionally because
+  # `warm_item_details/1` does not probe.
+  #
+  # Deriving both ends from the same function makes the two agree by construction
+  # instead of by coincidence.
+  def detail_ttl_ms, do: Cache.ttl_for_sources(@detail_sources)
 
   defp relational_details(item_id, mode) do
     Cache.fetch(
       detail_key(item_id, mode),
       @detail_sources,
       fn -> relational_details_uncached(item_id, mode) end,
-      ttl_ms: @detail_ttl_ms
+      # Passed EXPLICITLY here and deliberately omitted at the bulk write. This
+      # runs in a web process, which has no `Cache.put_ttl_override/1` set, so
+      # leaving it off would fall back to the 20-minute default — the very thing
+      # the original constant existed to avoid. The warm path has the override and
+      # inherits the same number from it.
+      ttl_ms: detail_ttl_ms()
     )
   end
 
@@ -1268,10 +1288,14 @@ defmodule EftBuddy.Items do
       |> Enum.reduce_while({0, [], Cache.memory_bytes()}, fn chunk, {n, written, start_bytes} ->
         keys = Enum.map(chunk, fn {id, _} -> detail_key(id, mode) end)
 
+        # No `ttl_ms:` on purpose. This runs inside a warm task, which has already
+        # set `Cache.put_ttl_override/1` to `Cache.ttl_for_sources(spec.sources)` —
+        # the same value the coverage sentinel will be written with moments later.
+        # Inheriting it is what makes the set and its sentinel expire together by
+        # construction; passing a constant here is what let them drift apart.
         Cache.put_many(
           Enum.map(chunk, fn {id, details} -> {detail_key(id, mode), details} end),
-          @detail_sources,
-          ttl_ms: @detail_ttl_ms
+          @detail_sources
         )
 
         written = keys ++ written

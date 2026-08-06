@@ -391,6 +391,54 @@ defmodule EftBuddy.Items.DetailsEqualityTest do
              "the over-budget log names this env var; runtime.exs must read it"
     end
 
+    test "warm-written entries and the coverage sentinel expire together" do
+      # The constant-equality test in `warmer_test.exs` can pass while `put_many/3`
+      # still passes a different `ttl_ms:`, so this pins what was actually WRITTEN.
+      # That is the half that broke: the entries carried a hardcoded 8h while the
+      # sentinel took the derived per-source value, and a sentinel outliving its
+      # set is precisely what makes `skip?/1` refuse to rebuild something that is
+      # already gone.
+      seed()
+      Cache.clear()
+
+      # Stand in for a warm task: the warmer marks the process and installs the
+      # per-spec TTL override before calling the builder, and the bulk write now
+      # inherits it rather than passing a constant.
+      ttl = EftBuddy.Cache.Warmer.warm_ttl_ms(Items.detail_sources())
+      Cache.mark_warm_process()
+      Cache.put_ttl_override(ttl)
+
+      assert {:ok, n} = Items.warm_item_details(:pvp)
+      assert n > 0
+
+      sentinel_key = EftBuddy.Cache.Warmer.sentinel_key("items.details:pvp")
+      Cache.put(sentinel_key, %{count: n}, Items.detail_sources())
+
+      entries = Cache.entries()
+      entry = Enum.find(entries, &match?({EftBuddy.Items, :item_details_rel, _, _}, &1.key))
+      sentinel = Enum.find(entries, &(&1.key == sentinel_key))
+
+      assert_in_delta entry.expires_in_ms, sentinel.expires_in_ms, 2_000
+    end
+
+    test "a lazily-read entry gets the same TTL as a warm-written one" do
+      # The lazy path runs in a web process with no TTL override, so it has to pass
+      # the derived value explicitly. Omitting it there would silently fall back to
+      # the 20-minute default — the exact failure the original constant existed to
+      # prevent, reintroduced by the fix for a different one.
+      %{bolts: bolts} = seed()
+      Cache.clear()
+
+      Items.get_item_details(bolts.id, :pvp)
+
+      entry =
+        Cache.entries()
+        |> Enum.find(&match?({EftBuddy.Items, :item_details_rel, _, _}, &1.key))
+
+      assert_in_delta entry.expires_in_ms, Items.detail_ttl_ms(), 2_000
+      refute_in_delta entry.expires_in_ms, Cache.default_ttl_ms(), 2_000
+    end
+
     test "a build inside its budget writes normally" do
       seed()
       Cache.clear()

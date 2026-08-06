@@ -448,6 +448,7 @@ defmodule EftBuddy.Cache.WarmerTest do
 
     test "an unknown source reads as zero rather than raising" do
       assert Cache.generation("NeverSeenSync") == 0
+
       assert Cache.generations(["NeverSeenSync", "AlsoNever"]) == %{
                "NeverSeenSync" => 0,
                "AlsoNever" => 0
@@ -557,6 +558,25 @@ defmodule EftBuddy.Cache.WarmerTest do
     test "an unknown source falls back to the cache default rather than to zero" do
       assert Warmer.warm_ttl_ms(["NoSuchSync"]) == Cache.default_ttl_ms()
       assert Warmer.warm_ttl_ms([]) == Cache.default_ttl_ms()
+    end
+
+    test "a bulk set's entries and its coverage sentinel are derived from one number" do
+      # The drift this removes. Item detail entries carried a hand-picked 8h while
+      # their sentinel took the derived per-source value. The two agreed only
+      # because ItemsSync ran every 6h and invalidated both before either could
+      # expire — nothing in the code said so, so the first cadence change would
+      # have left every detail panel cold for the tail of each cycle with coverage
+      # reporting the spec :live.
+      assert EftBuddy.Items.detail_ttl_ms() ==
+               Warmer.warm_ttl_ms(EftBuddy.Items.detail_sources())
+    end
+
+    test "the derivation is reachable without going through the warmer" do
+      # `EftBuddy.Items` needs this on its LAZY read path, which has nothing to do
+      # with warming. Keeping the logic in the warmer would have meant a context
+      # module depending on the cache warmer to answer "how long does my own entry
+      # live", which is the wrong direction and the reason it moved to `Cache`.
+      assert Cache.ttl_for_sources(["HideoutSync"]) == Warmer.warm_ttl_ms(["HideoutSync"])
     end
   end
 

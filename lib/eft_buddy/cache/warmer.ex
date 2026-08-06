@@ -86,7 +86,6 @@ defmodule EftBuddy.Cache.Warmer do
   require Logger
 
   alias EftBuddy.Cache
-  alias EftBuddy.Sync.Freshness
 
   @sync_event [:eft_buddy, :sync, :stop]
   # Distinct from `{EftBuddy.Cache, :invalidate}`. See the moduledoc.
@@ -760,7 +759,10 @@ defmodule EftBuddy.Cache.Warmer do
   defp skip?(%{kind: :bulk, label: label}), do: Cache.live?(sentinel_key(label))
   defp skip?(_spec), do: false
 
-  defp do_warm(%{kind: kind, label: label, sources: sources, mfa: {mod, fun, args}} = spec, server) do
+  defp do_warm(
+         %{kind: kind, label: label, sources: sources, mfa: {mod, fun, args}} = spec,
+         server
+       ) do
     started = System.monotonic_time(:millisecond)
 
     # Snapshotted HERE rather than inside each builder. This wrapper is the only
@@ -891,16 +893,13 @@ defmodule EftBuddy.Cache.Warmer do
   source of truth for feed cadence and is drift-tested against the real
   intervals — so a feed whose interval changes cannot leave a stale TTL behind.
   """
-  def warm_ttl_ms(sources) do
-    sources
-    |> Enum.map(&Freshness.budget_seconds/1)
-    |> Enum.reject(&is_nil/1)
-    |> case do
-      [] -> Cache.default_ttl_ms()
-      budgets -> budgets |> Enum.min() |> :timer.seconds()
-    end
-    |> max(Cache.default_ttl_ms())
-  end
+  # Delegates to `EftBuddy.Cache.ttl_for_sources/1`, which is where the derivation
+  # moved once a CONTEXT module needed it too. `EftBuddy.Items` writes detail
+  # entries on both the lazy read path and the bulk warm path, and the two must
+  # agree — but a context module reaching into the cache *warmer* for a TTL would
+  # be the wrong dependency. The name stays because it is the one the specs and
+  # the tests use.
+  def warm_ttl_ms(sources), do: Cache.ttl_for_sources(sources)
 
   # The part of a coverage row that needs only the registry and ETS.
   defp liveness(spec) do

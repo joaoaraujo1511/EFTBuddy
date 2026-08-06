@@ -356,6 +356,44 @@ defmodule EftBuddy.Cache do
   def default_ttl_ms, do: Application.get_env(:eft_buddy, :cache_ttl_ms, @default_ttl_ms)
 
   @doc """
+  The TTL an entry owned by `sources` should carry: the MINIMUM staleness budget
+  across them, floored at `default_ttl_ms/0`.
+
+  The minimum because the strictest owner is the first ingredient that can go
+  wrong — `ammo.rounds` is fed by five feeds, one of which is the two-hourly
+  price budget, so the entry expires on that schedule. Floored so this can only
+  ever extend an entry's life.
+
+  Lives here rather than in `EftBuddy.Cache.Warmer`, despite the warmer being its
+  first caller, because it is not warming-specific: a lazily-read entry and a
+  warm-written entry under the SAME KEY must expire on the same schedule. When
+  they do not, the coverage sentinel outlives the set it claims and the repair
+  tick refuses to rebuild something that is already gone.
+
+  That is not hypothetical — it is what a hand-picked constant did. Item detail
+  entries carried a flat 8h chosen against a then-6h ItemsSync cadence, while
+  their sentinel took the derived per-source value. The two agreed only because
+  invalidation fired before either could expire, and nothing in the code said so,
+  so the first cadence change would have left every detail panel cold for the
+  tail of every cycle. Deriving both from one function removes the class rather
+  than moving the number.
+
+  The budgets come from `EftBuddy.Sync.Freshness`, which is already the single
+  source of truth for feed cadence and is drift-tested against the real
+  intervals — so a feed whose interval changes cannot leave a stale TTL behind.
+  """
+  def ttl_for_sources(sources) when is_list(sources) do
+    sources
+    |> Enum.map(&EftBuddy.Sync.Freshness.budget_seconds/1)
+    |> Enum.reject(&is_nil/1)
+    |> case do
+      [] -> default_ttl_ms()
+      budgets -> budgets |> Enum.min() |> :timer.seconds()
+    end
+    |> max(default_ttl_ms())
+  end
+
+  @doc """
   Marks the calling process as the warmer, so every read it makes is attributed
   to the warm counters rather than to visitors, and every write it makes is
   tagged `:warm` and becomes exempt from cap eviction.
