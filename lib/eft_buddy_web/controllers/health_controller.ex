@@ -18,6 +18,11 @@ defmodule EftBuddyWeb.HealthController do
   its budget, `503` when one has stopped, gone stale, or failed. See
   `EftBuddy.Sync.Freshness`.
 
+  `age_seconds` in the response is measured from each family's last **successful**
+  run, not its last run, and is `null` when it has not had one. A feed that ticks on
+  schedule while declining to write anything is therefore reported stale rather than
+  current — see the ageing section of `EftBuddy.Sync.Freshness`.
+
   This is the probe that exists because of the app's most dangerous property: there
   is no user-authored content, so a sync that stops or truncates does not produce an
   error — the pages keep rendering and quietly present stale or missing game data as
