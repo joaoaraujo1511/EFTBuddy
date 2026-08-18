@@ -50,7 +50,16 @@ dev_db_ssl =
             [cacertfile: String.to_charlist(String.trim(path))]
 
           _ ->
-            [cacerts: :public_key.cacerts_get()]
+            # `cacerts_get/0` RAISES on a machine with no OS trust store, and
+            # this expression must not raise — see the note above; `mix format`
+            # evaluates it too. An empty anchor list keeps `verify: :verify_peer`
+            # and fails at connect time with an error that names the database,
+            # which is the same shape as the no-DB_HOSTNAME branch below.
+            try do
+              [cacerts: :public_key.cacerts_get()]
+            rescue
+              _ -> []
+            end
         end
 
       [
