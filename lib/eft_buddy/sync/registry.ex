@@ -48,6 +48,10 @@ defmodule EftBuddy.Sync.Registry do
     * `:run` — a zero-arity function.
     * `:key` — optional tag, so a later step can depend on this one's outcome.
     * `:requires` — skip this step unless the step with that `:key` succeeded.
+    * `:notify` — the feed to cast `:bootstrap_complete` to the moment this step
+      succeeds. A module contributing several steps carries it on its LAST one,
+      which is why `EftBuddy.Items.Sync` is notified after barters and crafts
+      rather than after items.
 
   ## On the ordering
 
@@ -121,17 +125,19 @@ defmodule EftBuddy.Sync.Registry do
   @doc "The cold-start sequence, in dependency order."
   def cold_start_steps do
     [
+      # No `:notify` — `EftBuddy.Items.Sync` contributes two steps and is notified
+      # after the LATER one, since it has not finished its cold-start work here.
       %{label: "Items (items + prices)", key: :items, run: &EftBuddy.Items.Sync.run_items/0},
-      %{label: "Maps", run: &EftBuddy.Maps.Sync.run/0},
+      %{label: "Maps", run: &EftBuddy.Maps.Sync.run/0, notify: EftBuddy.Maps.Sync},
 
       # Ammo ballistics and armor plates link back to items for name / icon /
       # price. Like Maps they only drop the item-keyed link they cannot resolve —
       # leaving `item_id` null and re-linking next run — so they are not
       # `requires: :items`.
-      %{label: "Ammo", run: &EftBuddy.Ammo.Sync.run/0},
-      %{label: "Armor", run: &EftBuddy.Armor.Sync.run/0},
-      %{label: "Hideout", run: &EftBuddy.Hideout.Sync.run/0},
-      %{label: "Tasks", run: &EftBuddy.Tasks.Sync.run/0},
+      %{label: "Ammo", run: &EftBuddy.Ammo.Sync.run/0, notify: EftBuddy.Ammo.Sync},
+      %{label: "Armor", run: &EftBuddy.Armor.Sync.run/0, notify: EftBuddy.Armor.Sync},
+      %{label: "Hideout", run: &EftBuddy.Hideout.Sync.run/0, notify: EftBuddy.Hideout.Sync},
+      %{label: "Tasks", run: &EftBuddy.Tasks.Sync.run/0, notify: EftBuddy.Tasks.Sync},
 
       # The exception. Every parent FK here resolves against the items written by
       # the first step, so with no items this would fetch the whole barter/craft
@@ -139,7 +145,8 @@ defmodule EftBuddy.Sync.Registry do
       %{
         label: "Items (barters & crafts)",
         requires: :items,
-        run: &EftBuddy.Items.Sync.run_barters_and_crafts/0
+        run: &EftBuddy.Items.Sync.run_barters_and_crafts/0,
+        notify: EftBuddy.Items.Sync
       },
 
       # The Fandom scrapes, last: they are the slow ones, they hit a different
@@ -150,12 +157,16 @@ defmodule EftBuddy.Sync.Registry do
       # is empty each one guards itself: the quest scrape returns
       # `{:error, :no_tasks}` and re-arms in minutes rather than writing a table
       # of mis-keyed WIP quests.
-      %{label: "Chapters (wiki)", run: &EftBuddy.Chapters.Sync.run/0},
+      %{
+        label: "Chapters (wiki)",
+        run: &EftBuddy.Chapters.Sync.run/0,
+        notify: EftBuddy.Chapters.Sync
+      },
 
       # Before the quest scrape, which reads the `event_quests` blacklist this
       # step writes. Same reason the recurring cycle chains the two by cast.
-      %{label: "Events (wiki)", run: &EftBuddy.Events.Sync.run/0},
-      %{label: "Quests (wiki)", run: &EftBuddy.Wiki.Sync.run/0}
+      %{label: "Events (wiki)", run: &EftBuddy.Events.Sync.run/0, notify: EftBuddy.Events.Sync},
+      %{label: "Quests (wiki)", run: &EftBuddy.Wiki.Sync.run/0, notify: EftBuddy.Wiki.Sync}
     ]
   end
 end
