@@ -16,8 +16,13 @@ defmodule EftBuddy.Feedback do
 
   This is the ONLY way an anonymous visitor can write to the database, and
   `bug_reports` is the only table in the application that is not re-derivable
-  from tarkov.dev or the wiki. There is no CAPTCHA, no account and no WAF in
-  front of it.
+  from tarkov.dev or the wiki. There is no CAPTCHA and no account. Cloudflare
+  does front every request now, and its Bot Fight Mode drops the obvious
+  automation, but nothing challenges THIS path specifically — and a page-level
+  challenge would not see a submission anyway, because the form is a LiveView:
+  `save` arrives over the websocket, never as a POST a WAF rule could match.
+  The two limiters below are still the only thing between a determined
+  submitter and the pool.
 
   The near-term harm of a flood is not the disk — it is the connection pool.
   `POOL_SIZE` defaults to 10 and every page in the app shares it, so a handful

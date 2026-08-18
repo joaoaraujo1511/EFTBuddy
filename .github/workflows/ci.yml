@@ -146,7 +146,7 @@ jobs:
   # has to be proved separately:
   #
   #   * linux/arm64 — Oracle's Always Free tier, which is Ampere. Emulated, slow.
-  #   * linux/amd64 — the self-hosted x86_64 VM the app actually runs on today.
+  #   * linux/amd64 — x86_64 hosts. The app itself runs on arm64 (Raspberry Pi 5).
   #     Native on this runner, so it costs almost nothing to add, and it is the
   #     case that broke: the Dockerfile's old Debian pin had no amd64 manifest at
   #     all, which no arm64-only build could have caught.
@@ -204,4 +204,4 @@ jobs:
   # serves a request. Doing that properly needs real secrets and a reachable
   # Postgres over TLS, which is a bigger change than it looks — and getting it
   # wrong means putting production credentials into a public repository's CI.
-  # The first boot on the VM is the current test for this, deliberately.
+  # The first boot on the Pi is the current test for this, deliberately.

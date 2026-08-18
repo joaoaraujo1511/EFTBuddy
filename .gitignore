@@ -93,7 +93,7 @@ graphify-out/
 
 # Scratch handoff notes get written to the repo root while work is in progress,
 # and they are not meant to be committed. Four of them once rode a `git add -A`
-# onto public main, carrying the VM's address, the pooler host and an
+# onto public main, carrying the host's address, the database host and an
 # outstanding password-rotation note with them.
 #
 # Ignoring root markdown by default mirrors the .dockerignore rule that already
