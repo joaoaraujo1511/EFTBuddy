@@ -46,17 +46,21 @@ defmodule EftBuddy.Events.Sync do
       (without a manifest) so the quest still lists on the tab.
   """
 
-  # Second of the three Fandom scrapes. Bootstrap RELEASES this one — it has not
-  # run at that point — a minute after the chapter scrape, so the two never hit
-  # the Fandom API at once and the tasks table the best-effort event-quest
-  # matcher reads is already populated.
+  # Second of the three Fandom scrapes, run by Bootstrap inside the cold start
+  # after Tasks, so the tasks table the best-effort event-quest matcher reads is
+  # already populated on a fresh database. The stagger below is only this feed's
+  # slot in the recurring cycle — it is NOT a delay to the first run, which is
+  # what it silently became while this feed was `:released`.
   #
-  # `after_run/1` below chains the quest scrape off this one's completion.
+  # `after_run/1` below chains the quest scrape off this one's completion, which
+  # is how the two stay ordered on the recurring cycle. The cold start orders
+  # them directly instead: it calls `run/0`, which does not go through
+  # `after_run/1`.
   use EftBuddy.Sync.Scheduler,
     label: "EventsSync",
     interval: 12 * 60 * 60 * 1_000,
     stagger: 180 * 60 * 1_000,
-    bootstrap: :released,
+    bootstrap: :ran,
     config_key: :events
 
   require Logger

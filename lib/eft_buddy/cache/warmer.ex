@@ -121,13 +121,20 @@ defmodule EftBuddy.Cache.Warmer do
   # the difference between "usually warm" and "warm".
   @repair_divisor 4
 
-  # Bootstrap suspends warming while its seven sequential steps run. This is the
+  # Bootstrap suspends warming while its sequential steps run. This is the
   # backstop for a Bootstrap that dies without resuming. It should never fire —
   # `Bootstrap.run/0` resumes from an `after` block — but a warmer that a
   # crashing caller can switch off permanently is the same silent-failure shape
-  # as a detached telemetry handler, and gets the same treatment. A cold start
-  # that takes half an hour has failed regardless.
-  @max_suspend_ms :timer.minutes(30)
+  # as a detached telemetry handler, and gets the same treatment.
+  #
+  # An hour rather than the half it was. The cold start now also runs the three
+  # Fandom scrapes, and the quest one alone enumerates `Category:Quests` and
+  # fetches every page against an upstream that rate-limits with 503s. Half an
+  # hour stopped being "this has obviously failed" and became a duration a
+  # healthy cold start can reach — at which point this backstop would fire
+  # mid-sequence, log an error about a Bootstrap that is fine, and warm the cache
+  # against tables the remaining steps are still writing.
+  @max_suspend_ms :timer.minutes(60)
 
   # The sidebar's own representation (`EftBuddyWeb.OperatorState` holds `:pvp` /
   # `:pve`), NOT the DB strings. `EftBuddy.Items.scope_counts/1` and friends key

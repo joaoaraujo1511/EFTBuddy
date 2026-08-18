@@ -70,6 +70,14 @@ defmodule EftBuddy.Sync.RegistryTest do
 
         assert function_exported?(mod, :interval_ms, 0), "#{inspect(mod)} has no interval_ms/0"
         assert function_exported?(mod, :stagger_ms, 0), "#{inspect(mod)} has no stagger_ms/0"
+
+        # The runtime cadence, as distinct from the compile-time default above.
+        # A hand-rolled feed can implement most of this surface and miss this
+        # one, since nothing in the scheduling path calls it — only readers do,
+        # and they crash at render time rather than at boot.
+        assert function_exported?(mod, :effective_interval_ms, 0),
+               "#{inspect(mod)} has no effective_interval_ms/0"
+
         assert function_exported?(mod, :run, 0), "#{inspect(mod)} has no run/0"
         assert is_integer(mod.interval_ms()) and mod.interval_ms() > 0
       end
@@ -203,6 +211,50 @@ defmodule EftBuddy.Sync.RegistryTest do
       assert index_of(labels, "Items (items + prices)") < barters
       assert index_of(labels, "Hideout") < barters
       assert index_of(labels, "Tasks") < barters
+    end
+
+    test "every registered feed is actually run by the cold start" do
+      # THE INVARIANT THIS SUITE EXISTED TO CATCH ONE LAYER DOWN.
+      #
+      # A feed left out of the sequence does not fail and does not log. It waits
+      # for its own timer, which is armed from a stagger meant to place it in the
+      # recurring cycle — so "not in the cold start" silently reads as "first run
+      # hours after boot", and on a fresh database that is an empty table serving
+      # a loading state to users. The Fandom scrapes sat there for exactly that
+      # reason.
+      #
+      # Matched on the module the step's `:run` function belongs to, not on the
+      # label, so renaming a step cannot quietly drop the coverage.
+      covered =
+        Registry.cold_start_steps()
+        |> Enum.map(fn step -> Function.info(step.run)[:module] end)
+        |> MapSet.new()
+
+      for mod <- Registry.children() do
+        assert MapSet.member?(covered, mod),
+               "#{inspect(mod)} is registered but no cold-start step calls it; " <>
+                 "its first run would come from its own timer, hours after boot"
+      end
+    end
+
+    test "the wiki scrapes come after the tasks they key against" do
+      labels = Enum.map(Registry.cold_start_steps(), & &1.label)
+      tasks = index_of(labels, "Tasks")
+
+      # Both read the tasks table: the quest scrape refuses to write at all
+      # without it (`{:error, :no_tasks}`), and the event-quest matcher would
+      # leave every `task_id` null.
+      assert tasks < index_of(labels, "Events (wiki)")
+      assert tasks < index_of(labels, "Quests (wiki)")
+    end
+
+    test "the events scrape precedes the quest scrape whose blacklist it writes" do
+      # `EftBuddy.Wiki.Sync` drops event quests using the `event_quests` rows
+      # `EftBuddy.Events.Sync` writes. Reversed, the first cold start on a fresh
+      # database publishes every event quest as WIP.
+      labels = Enum.map(Registry.cold_start_steps(), & &1.label)
+
+      assert index_of(labels, "Events (wiki)") < index_of(labels, "Quests (wiki)")
     end
 
     test "every step is callable and every dependency is declared before its dependent" do

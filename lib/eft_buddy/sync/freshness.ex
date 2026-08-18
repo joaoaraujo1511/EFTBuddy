@@ -210,13 +210,19 @@ defmodule EftBuddy.Sync.Freshness do
         }
   def evaluate(opts \\ []) do
     status = Keyword.get_lazy(opts, :status, &Reporter.status/0)
+    # Injectable for the same reason `:status` is: this module's whole design is
+    # that the verdict is a pure function of its inputs, testable without waiting
+    # 36 hours for a budget to expire. Reading the global schedule table directly
+    # here would also make `freshness_test.exs` — which is `async: true` — share
+    # mutable state with every test that starts a feed.
+    schedule = Keyword.get_lazy(opts, :schedule, &Reporter.schedule/0)
     now = Keyword.get_lazy(opts, :now, &DateTime.utc_now/0)
     uptime = Keyword.get_lazy(opts, :uptime_seconds, &uptime_seconds/0)
     budgets = Keyword.get(opts, :budgets, @budgets)
 
     syncs =
       Map.new(budgets, fn {prefix, budget, _owner} ->
-        {prefix, evaluate_family(prefix, budget, status, now, uptime)}
+        {prefix, evaluate_family(prefix, budget, status, schedule, now, uptime)}
       end)
 
     overall = if Enum.any?(syncs, fn {_k, f} -> degraded?(f.state) end), do: :degraded, else: :ok
@@ -230,7 +236,7 @@ defmodule EftBuddy.Sync.Freshness do
 
   # ── Internals ──────────────────────────────────────────────────────
 
-  defp evaluate_family(prefix, budget, status, now, uptime) do
+  defp evaluate_family(prefix, budget, status, schedule, now, uptime) do
     runs = for {label, s} <- status, matches?(label, prefix), do: {label, s}
 
     case runs do
@@ -241,7 +247,18 @@ defmodule EftBuddy.Sync.Freshness do
         deadline = if budget == @boot_only, do: @boot_grace, else: budget
         state = if uptime > deadline, do: :never_run, else: :booting
 
-        %{state: state, budget_seconds: budget, age_seconds: nil, refusals: 0, labels: []}
+        %{
+          state: state,
+          budget_seconds: budget,
+          age_seconds: nil,
+          # The one case this number exists for. A family with no run record is
+          # either seconds from its first tick or hours from it, and until now
+          # those looked identical from outside — `:booting`, healthy, no further
+          # detail. See `EftBuddy.Sync.Reporter.record_next_run/2`.
+          next_run_seconds: next_run_seconds(prefix, schedule, now),
+          refusals: 0,
+          labels: []
+        }
 
       runs ->
         # Aged from the last SUCCESSFUL run, not the last run. A feed that ticks
@@ -302,9 +319,40 @@ defmodule EftBuddy.Sync.Freshness do
           # the same reason: "no successful run to measure from" and "zero seconds
           # since one" are opposite diagnoses and must not render identically.
           age_seconds: oldest,
+          # Reported, never judged. A twelve-hour feed that is eleven hours from
+          # its next tick is behaving exactly as designed, so there is no
+          # threshold to place here that would not eventually cry wolf. It earns
+          # its place by making the schedule readable: `age_seconds` and
+          # `next_run_seconds` together say where in its cycle a feed is, which
+          # is the difference between "quiet because it is waiting" and "quiet
+          # because it stopped".
+          next_run_seconds: next_run_seconds(prefix, schedule, now),
           refusals: refusals,
           labels: runs |> Enum.map(&elem(&1, 0)) |> Enum.sort()
         }
+    end
+  end
+
+  # Soonest planned tick across the family's labels, in seconds from now.
+  #
+  # Soonest rather than oldest, which is the opposite of how `age_seconds` folds a
+  # family: age asks "how far behind is the worst of these?", so it takes the
+  # maximum, while this asks "when does anything here next happen?". `ItemsSync`
+  # and `PricesSync` are separate families, but a family that does gain a second
+  # label should report the tick a reader is about to see.
+  #
+  # `nil` for a family with no timer of its own — `BartersSync` and the other
+  # labels emitted from inside `EftBuddy.Items.Sync`'s full pipeline inherit its
+  # cadence rather than owning one. That is the honest answer: nothing is armed
+  # under those labels, and reporting `ItemsSync`'s tick for them would invent a
+  # schedule they do not have.
+  defp next_run_seconds(prefix, schedule, now) do
+    schedule
+    |> Enum.filter(fn {label, _} -> matches?(label, prefix) end)
+    |> Enum.map(fn {_label, %{next_run_at: at}} -> DateTime.diff(at, now) end)
+    |> case do
+      [] -> nil
+      seconds -> Enum.min(seconds)
     end
   end
 

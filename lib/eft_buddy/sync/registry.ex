@@ -55,6 +55,19 @@ defmodule EftBuddy.Sync.Registry do
   maps precede tasks because `tasks.map_id` resolves against them; hideout and
   tasks both seed traders that barters and crafts resolve against.
 
+  The three Fandom scrapes come last. They used to sit outside the cold start
+  entirely — released by the completion cast at their stagger — and the stagger
+  is the wrong number for that job: it is a slot within the recurring cycle, so
+  when the feeds were re-cadenced the events scrape's slot moved from 1 minute to
+  180 and its FIRST run silently moved with it. A fresh database had no events
+  for three hours and no quest pages for two, and any restart inside that window
+  reset the clock. Running them here means the stagger only ever means what it
+  says, and a database that has game data has wiki content too.
+
+  Within the group: chapters is independent, events writes the `event_quests`
+  blacklist the quest scrape reads, so it precedes it. Both read the tasks table,
+  which is why they are after Tasks.
+
   Nothing DEPENDS on the recurring cycle honouring the same order — every sync is
   idempotent and re-links its FKs next run — but the cold start does, because
   there is no previous run to have linked anything.
@@ -68,11 +81,11 @@ defmodule EftBuddy.Sync.Registry do
     %{mod: EftBuddy.Hideout.Sync, bootstrap: :ran, upstream: :tarkov_dev},
     %{mod: EftBuddy.Tasks.Sync, bootstrap: :ran, upstream: :tarkov_dev},
 
-    # The three Fandom scrapes. None is in the cold start: Bootstrap releases the
-    # first two by cast and the quest scrape chains off the events one.
-    %{mod: EftBuddy.Chapters.Sync, bootstrap: :released, upstream: :fandom},
-    %{mod: EftBuddy.Events.Sync, bootstrap: :released, upstream: :fandom},
-    %{mod: EftBuddy.Wiki.Sync, bootstrap: :chained, upstream: :fandom}
+    # The three Fandom scrapes. Like the feeds above they run inside the cold
+    # start, so a fresh database has wiki content as soon as it has game data.
+    %{mod: EftBuddy.Chapters.Sync, bootstrap: :ran, upstream: :fandom},
+    %{mod: EftBuddy.Events.Sync, bootstrap: :ran, upstream: :fandom},
+    %{mod: EftBuddy.Wiki.Sync, bootstrap: :ran, upstream: :fandom}
   ]
 
   @doc """
@@ -127,7 +140,22 @@ defmodule EftBuddy.Sync.Registry do
         label: "Items (barters & crafts)",
         requires: :items,
         run: &EftBuddy.Items.Sync.run_barters_and_crafts/0
-      }
+      },
+
+      # The Fandom scrapes, last: they are the slow ones, they hit a different
+      # upstream, and two of them read the tasks table the Tasks step above
+      # writes. Ordering, not `requires:` — a Tasks step that failed on a machine
+      # with a populated database leaves the previous run's rows in place, and
+      # these scrapes are perfectly useful against those. Where the table really
+      # is empty each one guards itself: the quest scrape returns
+      # `{:error, :no_tasks}` and re-arms in minutes rather than writing a table
+      # of mis-keyed WIP quests.
+      %{label: "Chapters (wiki)", run: &EftBuddy.Chapters.Sync.run/0},
+
+      # Before the quest scrape, which reads the `event_quests` blacklist this
+      # step writes. Same reason the recurring cycle chains the two by cast.
+      %{label: "Events (wiki)", run: &EftBuddy.Events.Sync.run/0},
+      %{label: "Quests (wiki)", run: &EftBuddy.Wiki.Sync.run/0}
     ]
   end
 end

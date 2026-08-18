@@ -346,8 +346,7 @@ defmodule EftBuddy.Sync.Scheduler do
 
         warn_if_interval_outruns_budget(interval)
 
-        timer = Process.send_after(self(), :sync, first + Scheduler.jitter(first))
-        {:ok, %{interval: interval, timer: timer}}
+        {:ok, %{interval: interval, timer: arm(first)}}
       end
 
       @impl true
@@ -356,9 +355,8 @@ defmodule EftBuddy.Sync.Scheduler do
         after_run(result)
 
         next = next_interval(result, interval)
-        timer = Process.send_after(self(), :sync, next + Scheduler.jitter(next))
 
-        {:noreply, %{state | timer: timer}}
+        {:noreply, %{state | timer: arm(next)}}
       end
 
       def handle_info(_msg, state), do: {:noreply, state}
@@ -384,8 +382,21 @@ defmodule EftBuddy.Sync.Scheduler do
       # bootstrap cast and by any chained hand-off.
       def arm_first_run(state, offset) do
         if state.timer, do: Process.cancel_timer(state.timer)
-        timer = Process.send_after(self(), :sync, offset + Scheduler.jitter(offset))
-        %{state | timer: timer}
+        %{state | timer: arm(offset)}
+      end
+
+      # The ONE place this feed schedules a tick, so the recorded intent cannot
+      # drift from the timer that actually exists. Three call sites armed their
+      # own `send_after` before — `init/1`, the post-run re-arm and
+      # `arm_first_run/2` — and a fourth would have been free to forget.
+      #
+      # Jitter is applied here rather than by the callers so the moment reported
+      # to `EftBuddy.Sync.Reporter` is the moment the timer will really fire,
+      # not the nominal one it was asked for.
+      defp arm(delay) do
+        delay = delay + Scheduler.jitter(delay)
+        Reporter.record_next_run(@scheduler_label, delay)
+        Process.send_after(self(), :sync, delay)
       end
 
       @doc false

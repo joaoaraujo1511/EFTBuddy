@@ -49,8 +49,23 @@ defmodule EftBuddy.Sync.FreshnessTest do
     Map.new(Freshness.budgets(), fn {prefix, _budget, _owner} -> run(prefix, 5) end)
   end
 
-  defp evaluate(status, uptime \\ 100_000_000) do
-    Freshness.evaluate(status: status, now: @now, uptime_seconds: uptime)
+  defp evaluate(status, uptime \\ 100_000_000, schedule \\ %{}) do
+    Freshness.evaluate(
+      status: status,
+      schedule: schedule,
+      now: @now,
+      uptime_seconds: uptime
+    )
+  end
+
+  # A label planning to tick `in_seconds` from `@now`.
+  defp armed(label, in_seconds) do
+    {label,
+     %{
+       next_run_at: DateTime.add(@now, in_seconds),
+       armed_at: @now,
+       delay_ms: in_seconds * 1_000
+     }}
   end
 
   describe "a healthy node" do
@@ -92,6 +107,77 @@ defmodule EftBuddy.Sync.FreshnessTest do
 
       assert result.status == :degraded
       assert result.syncs["PricesSync"].state == :never_run
+    end
+  end
+
+  describe "the next planned run" do
+    test "is reported for a family that has never run, which is the whole point" do
+      # THE GAP THIS CLOSED. `:booting` is the correct verdict for a feed whose
+      # first tick is three hours out — it is inside a twelve-hour budget — and it
+      # is also the verdict for one firing in ten seconds. The two were
+      # indistinguishable from outside, and a re-cadence that pushed the Fandom
+      # scrapes' first run from 1 minute to 180 hid there for weeks: no error, no
+      # stale verdict, just an empty events page and a standby spinner.
+      result = evaluate(%{}, 30, Map.new([armed("EventsSync", 10_800)]))
+
+      assert %{state: :booting, age_seconds: nil, next_run_seconds: 10_800} =
+               result.syncs["EventsSync"]
+
+      # Still healthy. The number is reported, not judged — see below.
+      assert result.status == :ok
+    end
+
+    test "is nil for a family that has not armed a timer at all" do
+      # Not zero, and not "now". A supervised feed with no armed timer means its
+      # `init/1` never ran, which is worse than any delay and must not render as
+      # an imminent tick.
+      assert evaluate(%{}, 30).syncs["EventsSync"].next_run_seconds == nil
+    end
+
+    test "is reported alongside age for a family that has run" do
+      # Together they say where in its cycle a feed sits, which is the difference
+      # between quiet-because-waiting and quiet-because-stopped.
+      result =
+        evaluate(Map.new([run("ItemsSync", 42)]), 100_000, Map.new([armed("ItemsSync", 600)]))
+
+      assert %{age_seconds: 42, next_run_seconds: 600} = result.syncs["ItemsSync"]
+    end
+
+    test "never changes the verdict on its own" do
+      # REPORTED, NOT JUDGED. A twelve-hour feed eleven hours from its next tick
+      # is behaving exactly as designed, so any threshold placed here would
+      # eventually cry wolf — and a probe its reader learns to ignore is worse
+      # than no probe. Every state must be identical with and without a schedule.
+      status = all_fresh()
+      far_off = Map.new(Freshness.budgets(), fn {prefix, _b, _o} -> armed(prefix, 999_999) end)
+
+      without = evaluate(status)
+      with_schedule = evaluate(status, 100_000_000, far_off)
+
+      assert without.status == with_schedule.status
+
+      for {family, f} <- with_schedule.syncs do
+        assert f.state == without.syncs[family].state
+      end
+    end
+
+    test "a family's number is the SOONEST of its labels, not the oldest" do
+      # The opposite fold from `age_seconds`, deliberately. Age asks "how far
+      # behind is the worst of these?"; this asks "when does anything here next
+      # happen?" — which is the tick a reader is about to see.
+      schedule = Map.new([armed("TasksSync:regular", 900), armed("TasksSync:pve", 300)])
+
+      assert evaluate(all_fresh(), 100_000_000, schedule).syncs["TasksSync"].next_run_seconds ==
+               300
+    end
+
+    test "a planned moment already past reports negative rather than clamping" do
+      # Briefly this is a run in flight. Persistently it is a feed that armed a
+      # timer and never fired, and clamping to zero would erase the only signal
+      # that distinguishes them.
+      result = evaluate(all_fresh(), 100_000_000, Map.new([armed("ItemsSync", -45)]))
+
+      assert result.syncs["ItemsSync"].next_run_seconds == -45
     end
   end
 
