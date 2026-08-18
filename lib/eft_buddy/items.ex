@@ -1583,7 +1583,7 @@ defmodule EftBuddy.Items do
     deduped_keys = Enum.reject(key_rows, &MapSet.member?(item_side_task_ids, &1.task_id))
 
     # Sorted in ELIXIR, not by an `ORDER BY`, and that is deliberate: this is
-    # byte order, whereas Postgres would apply its collation. Supabase's
+    # byte order, whereas Postgres would apply its collation. The database's
     # collation ignores leading punctuation, so moving this into SQL would
     # silently reorder every quest list in production while looking correct
     # locally — the same trap `EftBuddy.Items.Dataset` documents.

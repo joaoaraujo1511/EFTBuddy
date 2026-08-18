@@ -11,7 +11,7 @@
 # in depth rather than the only guard. Keep them anyway: the next person to add
 # a `COPY` line will not re-derive this reasoning.
 
-# Live credentials: Supabase host, user and password.
+# Live credentials: database host, user and password.
 .env
 .env.*
 

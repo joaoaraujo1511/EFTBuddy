@@ -86,13 +86,17 @@ if config_env() == :prod do
   #
   # DB_CACERTFILE replaces the OS trust store with one pinned CA, and it is what
   # makes `verify_peer` reachable at all against a provider running its own PKI.
-  # Supabase does: its pooler serves a chain rooted at `Supabase Root 2021 CA`,
-  # which is Supabase's own root and is in no OS trust store, so `cacerts_get/0`
-  # cannot build a path to it and verification fails however correct the rest of
-  # this list is. That failure is precisely what DB_SSL_INSECURE was papering
-  # over, and swapping one variable for the other is the actual fix rather than a
-  # softer workaround. Get the file from the Supabase dashboard, under
-  # Database -> Settings -> SSL Configuration.
+  # Such a provider serves a chain rooted at a CA that is in no OS trust store, so
+  # `cacerts_get/0` cannot build a path to it and verification fails however
+  # correct the rest of this list is. That failure is exactly what DB_SSL_INSECURE
+  # papers over, and pinning the root is the actual fix rather than the softer
+  # workaround. Providers that run their own PKI publish the root to download.
+  #
+  # None of this applies to the current deployment: the database is a container on
+  # a private Docker network that never leaves the host, DB_SSL is off, and this
+  # whole branch is skipped. It is kept because the day the database moves back
+  # off-box is the day it is needed, and rebuilding it under time pressure with a
+  # broken connection is worse than carrying it.
   #
   # Pinning is TIGHTER than the default, not a concession: it trusts exactly one
   # issuer for this connection instead of every public CA on the machine.
