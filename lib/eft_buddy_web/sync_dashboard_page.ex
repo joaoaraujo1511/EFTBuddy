@@ -29,6 +29,12 @@ defmodule EftBuddyWeb.SyncDashboardPage do
   A row reading **never · next in 2h58m** says it immediately, which is the whole
   argument for the column.
 
+  The **boot** mode beside each feed's upstream is on the same thread. `:ran` means
+  the cold start runs it; `:released` and `:chained` mean it waits for a cast, and
+  a feed in either of those reading *never* is the shape of the bug above. Every
+  feed is `:ran` today — the column exists so that stops being invisible if one
+  ever is not.
+
   ## What the two tables are for
 
   The **families** table is what `/health/sync` judges: budgets, ages and the
@@ -112,7 +118,7 @@ defmodule EftBuddyWeb.SyncDashboardPage do
       <:col>
         <.card
           title="Never run"
-          inner_title="of #{length(@feeds)} registered feeds"
+          inner_title={"of #{length(@feeds)} registered feeds"}
           inner_hint="Feeds with no recorded run on this node. Non-zero shortly after a boot is normal — the cold start is still working through them. Non-zero an hour in means a feed is waiting on a timer instead of having run, and the Next run column says how long that wait is."
         >
           {@never_run}
@@ -170,7 +176,7 @@ defmodule EftBuddyWeb.SyncDashboardPage do
           <thead>
             <tr>
               <th>Feed</th>
-              <th>Upstream</th>
+              <th>Upstream · boot</th>
               <th class="text-right">Every</th>
               <th class="text-right">Stagger</th>
               <th class="text-right">Last run</th>
@@ -180,7 +186,7 @@ defmodule EftBuddyWeb.SyncDashboardPage do
           <tbody>
             <tr :for={feed <- @feeds}>
               <td class="tabular-column-name">{feed.label}</td>
-              <td>{feed.upstream}</td>
+              <td>{feed.upstream} · {feed.bootstrap}</td>
               <td class="text-right">{duration_ms(feed.interval_ms)}</td>
               <td class="text-right">{duration_ms(feed.stagger_ms)}</td>
               <td class="text-right">{last_run_label(feed.run)}</td>

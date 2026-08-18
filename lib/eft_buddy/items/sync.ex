@@ -221,6 +221,18 @@ defmodule EftBuddy.Items.Sync do
   def interval_ms, do: @default_full_interval
 
   @doc false
+  # Identical to `interval_ms/0` here, and that is the honest answer rather than a
+  # stub: `EftBuddy.Sync.Scheduler` separates the two because it supports a
+  # `:sync_intervals` runtime override, and this module has none — its interval is
+  # settable only through `start_link/1` opts, which the supervisor does not pass.
+  #
+  # Present because it is part of the registry's surface, and a reader of a feed
+  # is entitled to ask what it actually ticks on without knowing which feeds
+  # adopted the scheduler. Omitting it made `EftBuddyWeb.SyncDashboardPage` raise
+  # on every feed after this one in the list.
+  def effective_interval_ms, do: interval_ms()
+
+  @doc false
   def stagger_ms, do: @stagger
 
   @doc false

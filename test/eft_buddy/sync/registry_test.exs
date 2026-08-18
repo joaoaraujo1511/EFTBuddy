@@ -70,6 +70,14 @@ defmodule EftBuddy.Sync.RegistryTest do
 
         assert function_exported?(mod, :interval_ms, 0), "#{inspect(mod)} has no interval_ms/0"
         assert function_exported?(mod, :stagger_ms, 0), "#{inspect(mod)} has no stagger_ms/0"
+
+        # The runtime cadence, as distinct from the compile-time default above.
+        # A hand-rolled feed can implement most of this surface and miss this
+        # one, since nothing in the scheduling path calls it — only readers do,
+        # and they crash at render time rather than at boot.
+        assert function_exported?(mod, :effective_interval_ms, 0),
+               "#{inspect(mod)} has no effective_interval_ms/0"
+
         assert function_exported?(mod, :run, 0), "#{inspect(mod)} has no run/0"
         assert is_integer(mod.interval_ms()) and mod.interval_ms() > 0
       end

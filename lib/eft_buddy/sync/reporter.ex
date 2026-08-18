@@ -150,8 +150,8 @@ defmodule EftBuddy.Sync.Reporter do
     end
   end
 
-  # Public ETS table keyed by sync label → last-run status map. Created
-  # once at app start; idempotent so IEx restarts don't crash.
+  # The two public ETS tables — last-run status and next-run schedule, keyed by
+  # sync label. Created once at app start; idempotent so IEx restarts don't crash.
   defp ensure_status_table do
     for table <- [@status_table, @schedule_table] do
       if :ets.whereis(table) == :undefined do
@@ -216,15 +216,21 @@ defmodule EftBuddy.Sync.Reporter do
   number to tune and a new way for the probe to cry wolf.
   """
   @spec record_next_run(String.t(), non_neg_integer()) :: :ok
-  def record_next_run(label, delay_ms) when is_binary(label) and is_integer(delay_ms) do
+  def record_next_run(label, delay_ms)
+      when is_binary(label) and is_integer(delay_ms) and delay_ms >= 0 do
     ensure_status_table()
+
+    # One clock read, not two. Sampled separately, `armed_at + delay_ms` would
+    # not equal `next_run_at`, and the drift would be invisible until someone
+    # tried to reconcile the two.
+    now = DateTime.utc_now()
 
     :ets.insert(
       @schedule_table,
       {label,
        %{
-         next_run_at: DateTime.add(DateTime.utc_now(), delay_ms, :millisecond),
-         armed_at: DateTime.utc_now(),
+         next_run_at: DateTime.add(now, delay_ms, :millisecond),
+         armed_at: now,
          delay_ms: delay_ms
        }}
     )
