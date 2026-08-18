@@ -42,16 +42,16 @@ defmodule EftBuddy.Chapters.Sync do
   the prune (its slug is still in the processed set).
   """
 
-  # First of the three Fandom scrapes. Bootstrap only RELEASES this one — it has
-  # never run at that point — so `bootstrap: :released` with a zero stagger means
-  # "start as soon as the cold start finishes". The storyline has no DB
-  # dependency and is the smallest set, so it leads, ahead of the heavier events
-  # and quest scrapes, and the three never hit the Fandom API at once.
+  # First of the three Fandom scrapes, and `:ran` like every other feed:
+  # Bootstrap runs it inside the cold start rather than releasing it afterwards,
+  # so the stagger below is purely this feed's slot in the recurring cycle. The
+  # storyline has no DB dependency and is the smallest set, so it leads the
+  # group, ahead of the heavier events and quest scrapes.
   use EftBuddy.Sync.Scheduler,
     label: "ChaptersSync",
     interval: 24 * 60 * 60 * 1_000,
     stagger: 0,
-    bootstrap: :released,
+    bootstrap: :ran,
     config_key: :chapters
 
   require Logger

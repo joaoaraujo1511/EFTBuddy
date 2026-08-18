@@ -39,24 +39,28 @@ defmodule EftBuddy.Sync.Bootstrap do
   ## The completion cast
 
   When the sequence finishes, Bootstrap casts `:bootstrap_complete` to every feed
-  `EftBuddy.Sync.Registry.notifiable/0` names. One message, two meanings, which
-  is why each module declares a `bootstrap_mode/0`:
+  `EftBuddy.Sync.Registry.notifiable/0` names — currently all of them, since
+  every feed is `:ran`. The cast is a SCHEDULING signal, not a trigger: the work
+  already happened, here in `do_run/0`, so each feed arms its first *recurring*
+  run a full interval plus its own stagger away. That spaces the feeds across the
+  cycle and preserves the FK ordering within each one.
 
-    * `:released` — the feed has NOT run. Bootstrap is letting it start, so it
-      arms at its stagger. The Fandom scrapes are these, spaced so they never hit
-      the wiki concurrently.
+  The scheduler still understands `:released` (Bootstrap merely lets a feed
+  start, so it arms at its stagger) and `:chained` (armed by another feed's cast
+  instead). The three Fandom scrapes used to be those, and it went wrong in a way
+  worth remembering: for a `:released` feed the stagger doubles as the delay to
+  its first run ever, and the stagger is really a slot within the recurring
+  cycle. When the feeds were re-cadenced, the events scrape's slot moved from 1
+  minute to 180 and its first run moved with it — so a fresh database had no
+  events for three hours, no quest pages for two, and any restart inside that
+  window started the wait over. Nothing errored and `/health/sync` read healthy
+  throughout, because a feed that has not run yet is `:booting`, not stale.
 
-    * `:ran` — the feed HAS just run, here in `do_run/0`. It arms its first
-      *recurring* run a full interval plus its stagger away, which spaces the
-      feeds across the cycle and preserves the FK ordering within each one.
-
-  `EftBuddy.Wiki.Sync` is `:chained` and receives nothing here: it is armed by
-  `EftBuddy.Events.Sync` completing, because it reads that run's `event_quests`
-  blacklist.
+  Running every feed here means a stagger only ever means what it says.
 
   Every feed also keeps a shorter fallback timer for the case where the cast
-  never arrives — which, for a `:ran` feed, means Bootstrap failed and it has
-  never run at all.
+  never arrives — which now always means Bootstrap failed and the feed has never
+  run at all.
 
   ## Why this exists
 
@@ -223,16 +227,9 @@ defmodule EftBuddy.Sync.Bootstrap do
 
     Logger.info("[#{prefix()}] Cold-start sync sequence complete in #{fmt_time(elapsed_ms)}.")
 
-    # The cold-start data the wiki scrapers depend on (the tasks table the
-    # quest matcher and the event-quest matcher read) is now in place, so
-    # release them. Chapters and events stagger themselves from here
-    # (chapters immediately, events at +1 min); the quest scrape isn't kicked
-    # here — it chains off the events scrape's completion (it needs that run's
-    # `event_quests` blacklist), so the events sync signals it when it
-    # finishes. None of them ever hit the Fandom API concurrently.
-    #
-    # The same signal also anchors the five wipe-scale syncs' recurring timers —
-    # see `notify_schedulers/0`.
+    # Every feed has now run, the Fandom scrapes included, so this signal only
+    # anchors the recurring timers: each feed arms its next run a full interval
+    # plus its own stagger from here. See `notify_schedulers/0`.
     notify_schedulers()
 
     :ok

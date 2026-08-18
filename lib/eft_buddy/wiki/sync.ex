@@ -19,6 +19,13 @@ defmodule EftBuddy.Wiki.Sync do
   `:events_complete` cast re-arms it — `arm_first_run/2` cancels and reschedules,
   so a chained run simply replaces the pending self-timed one.
 
+  The FIRST run is neither of those: Bootstrap runs this scrape directly, in the
+  cold start, immediately after the events scrape it depends on — which is why
+  `bootstrap: :ran` rather than `:chained`. Being chained-only meant the first
+  run came from the fallback timer alone, since the cast that would arm it could
+  not arrive until the events feed's own first run, hours later. On a fresh
+  database that left `wiki_quests` empty for over two hours.
+
   The consequence is that roughly half the runs use a blacklist up to twelve
   hours old. That is acceptable: the blacklist is a set of event-quest slugs,
   and it changes when an event starts or ends, not continuously. A quest that
@@ -79,7 +86,7 @@ defmodule EftBuddy.Wiki.Sync do
     label: "WikiSync",
     interval: 6 * 60 * 60 * 1_000,
     stagger: 90 * 60 * 1_000,
-    bootstrap: :chained,
+    bootstrap: :ran,
     fallback: 45 * 60 * 1_000,
     config_key: :wiki
 
