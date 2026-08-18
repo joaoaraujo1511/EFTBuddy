@@ -1,24 +1,23 @@
-# EFT Buddy — the app container, for the VM that hosts it.
-#
-# NOT for the proxy host. The proxy has ~961MB of RAM and ~4.2GB of free disk:
-# not enough to compile an Elixir release, and filling its disk takes down the
-# 39+ domains it fronts. Build and run this on the application VM.
-#
-# There is no `db` service here on purpose. The database is hosted (Supabase), so
-# a local Postgres would be a second, empty, divergent copy — the kind that gets
-# migrated by accident and then wondered about.
+# EFT Buddy — the full stack, for the Raspberry Pi 5 that hosts it.
 #
 # Usage:
 #
-#   git clone <repo> /opt/eftbuddy && cd /opt/eftbuddy
+#   git clone <repo> ~/eftbuddy && cd ~/eftbuddy
 #   cp .env.example .env          # then fill it in — every variable is documented there
 #   GIT_SHA=$(git rev-parse --short HEAD) docker compose build   # on the target host
 #   docker compose run --rm migrate   # migrations BEFORE the first boot
-#   docker compose up -d app
+#   docker compose up -d app          # starts db first and waits for it to be healthy
 #
 # The GIT_SHA prefix stamps the image with the revision it was built from and is
 # what makes `curl .../health | jq -r .version` able to answer "did my deploy
 # actually land?". It is optional — without it the image reports "unknown".
+#
+# ROOTLESS DOCKER. The host runs the daemon as an unprivileged user, so a
+# container breakout lands as that user rather than as root. Two consequences
+# show up here: the database uses a named volume rather than a bind mount (bind
+# mounts inherit the UID-mapping of the user namespace, which makes ownership
+# fiddly for no benefit), and nothing may publish a port below 1024. Neither is
+# a constraint this file works around — it is why the file looks the way it does.
 #
 # ARCHITECTURE. The Dockerfile builds unmodified on amd64 and arm64, so no
 # BUILDER_IMAGE override belongs here. An earlier version of this file carried
@@ -29,6 +28,77 @@
 # image CI actually tests.
 
 services:
+  # The database. Local, and the primary — there is no hosted copy any more.
+  #
+  # It publishes NO host ports, deliberately. `app` reaches it as `db` over the
+  # compose network, and nothing on the LAN can route to it at all. For a psql
+  # prompt, go through the container:
+  #
+  #     docker compose exec db psql -U eftbuddy -d eft_buddy_prod
+  db:
+    image: postgres:17
+    restart: unless-stopped
+    # Postgres uses shared memory for parallel query workers; Docker's 64MB
+    # default is small enough to make them fail under load.
+    shm_size: 256mb
+    environment:
+      POSTGRES_USER: eftbuddy
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD must be set in .env}
+      POSTGRES_DB: eft_buddy_prod
+      # A SUBDIRECTORY of the mount, not its root. The image refuses to
+      # initialise into a directory that already has content, and a stray
+      # lost+found at the volume root is enough to trip that check.
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # `app` and `migrate` both gate on this, so it has to mean "ready to serve
+      # queries", not "process started". pg_isready checks exactly that.
+      test: ["CMD-SHELL", "pg_isready -U eftbuddy -d eft_buddy_prod"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    command:
+      - postgres
+      # Tuned for 8GB RAM, 4 cores, and a data directory on MICROSD.
+      - -c
+      - shared_buffers=1GB
+      - -c
+      - effective_cache_size=3GB
+      - -c
+      - maintenance_work_mem=256MB
+      - -c
+      - work_mem=16MB
+      # The app's pool is POOL_SIZE (10 by default) and `migrate` opens its own.
+      # 50 leaves room for both plus a psql session, without reserving memory
+      # for connections that will never exist.
+      - -c
+      - max_connections=50
+      # The four WAL settings below all trade latency for FEWER, LARGER writes.
+      # Flash wears out by write volume, and frequent small checkpoints are the
+      # worst case for it. Revisit them if the data directory ever moves to an
+      # SSD, where the tradeoff stops paying for itself.
+      - -c
+      - checkpoint_timeout=15min
+      - -c
+      - max_wal_size=2GB
+      - -c
+      - checkpoint_completion_target=0.9
+      - -c
+      - wal_compression=on
+      # Random reads on flash are far cheaper than the 4.0 default assumes, and
+      # leaving it there pushes the planner toward sequential scans it should
+      # not choose. Not as low as the 1.1 an NVMe would justify.
+      - -c
+      - random_page_cost=2.0
+      - -c
+      - effective_io_concurrency=100
+      # Surfaces the scrapers' slowest queries without the write amplification
+      # of logging every statement.
+      - -c
+      - log_min_duration_statement=1000
+
   app:
     build:
       context: .
@@ -51,10 +121,16 @@ services:
     image: eft-buddy:local
     restart: unless-stopped
     env_file: .env
+    depends_on:
+      # Not merely "started". Ecto opens its pool during boot, so a database
+      # that is running but not yet accepting connections turns every deploy
+      # into a race that usually wins and occasionally does not.
+      db:
+        condition: service_healthy
     ports:
-      # Only the proxy needs to reach this. If this VM has a public interface,
-      # set BIND_ADDR to its LAN address so the app is not published to the
-      # internet outside nginx — which would bypass TLS and HSTS.
+      # Set BIND_ADDR=127.0.0.1 in .env. The tunnel that fronts this app runs on
+      # this same host and dials outbound, so nothing needs to reach port 4000
+      # from the LAN — and publishing it there would bypass TLS.
       - "${BIND_ADDR:-0.0.0.0}:${APP_PORT:-4000}:4000"
       # The operator dashboard (LiveDashboard), pinned to LOOPBACK on the host.
       #
@@ -67,7 +143,7 @@ services:
       # terminates ON this host, which is what satisfies the loopback binding,
       # and opening it requires the operator's SSH key:
       #
-      #     ssh -N -L 4001:127.0.0.1:4001 user@this-vm
+      #     ssh -N -L 4001:127.0.0.1:4001 user@pi5
       #     # then browse http://localhost:4001/dashboard
       #
       # The container still listens on 0.0.0.0 internally (Docker cannot map a
@@ -82,9 +158,9 @@ services:
       # missing binary marks the container unhealthy forever.
       #
       # This proves Bandit is accepting connections, not that the app is healthy
-      # end to end. The real signal is the /health endpoint nginx exposes: that
-      # one goes through the router and touches the database. Here we only want
-      # to know the process is up.
+      # end to end. The real signal is the /health endpoint, which goes through
+      # the router and touches the database. Here we only want to know the
+      # process is up.
       test: ["CMD-SHELL", "bash -c ': < /dev/tcp/127.0.0.1/4000'"]
       interval: 30s
       timeout: 10s
@@ -108,6 +184,50 @@ services:
         GIT_SHA: "${GIT_SHA:-}"
     image: eft-buddy:local
     env_file: .env
+    depends_on:
+      db:
+        condition: service_healthy
     command: ["/app/bin/migrate"]
     restart: "no"
     profiles: ["tools"]
+
+  # The tunnel. Dials OUT to Cloudflare's edge and holds the connection open, so
+  # this host needs no inbound port, no port forwarding, and no static IP — and
+  # the public DNS for eftbuddy.app points at Cloudflare, never at this network.
+  #
+  # Ingress rules live in Cloudflare, not here: the tunnel was created with
+  # `config_src: cloudflare`, so `run` fetches its routing over the API. The
+  # mapping is eftbuddy.app -> http://app:4000, with a 404 catch-all. That
+  # catch-all is what keeps www.eftbuddy.app OFF the app: PHX_HOST is compared
+  # verbatim against the Origin header, so serving the app on a second hostname
+  # would render pages and then silently reject every LiveView socket. www is
+  # redirected to the apex at the edge instead.
+  #
+  # `app:4000` is reached over the compose network, so the app needs no published
+  # host port for the public site to work at all.
+  #
+  # No healthcheck: the image ships no shell, so a CMD-SHELL test cannot run.
+  # Tunnel health is visible in `docker compose logs cloudflared` and in
+  # Cloudflare's own dashboard, which sees the connection from the far end.
+  cloudflared:
+    # Pinned, like every other image here. Cloudflare DOES refuse connections
+    # from sufficiently old clients, so unlike the others this pin needs a
+    # deliberate bump now and then rather than never — check the release notes
+    # if the tunnel ever starts logging protocol or version warnings.
+    image: cloudflare/cloudflared:2026.8.2
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      # From .env. Carries the tunnel's identity and credentials, so it is as
+      # sensitive as a private key: it alone is enough to impersonate this
+      # tunnel and receive the site's traffic.
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:?TUNNEL_TOKEN must be set in .env}
+    depends_on:
+      # Nothing is gained by advertising the tunnel before the app can answer.
+      app:
+        condition: service_healthy
+
+volumes:
+  # Named, not a bind mount — see the rootless note at the top of this file.
+  # On this host it resolves under ~/.local/share/docker/volumes/.
+  pgdata:
