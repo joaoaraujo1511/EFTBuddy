@@ -122,6 +122,12 @@ defmodule EftBuddyWeb.HealthController do
          state: to_string(f.state),
          age_seconds: f.age_seconds,
          budget_seconds: f.budget_seconds,
+         # When this family next plans to tick. `state` and `age_seconds` are
+         # both retrospective, so a feed that has not run yet renders identically
+         # whether its first tick is a minute away or three hours away — which is
+         # exactly how a mis-scheduled feed once hid in plain sight. Negative
+         # means the moment has passed and the run has not been recorded yet.
+         next_run_seconds: f.next_run_seconds,
          # A non-zero count means the cleanup guard refused a destructive prune —
          # this instance is knowingly serving a snapshot it distrusted.
          refused_prunes: f.refusals,

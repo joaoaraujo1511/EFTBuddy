@@ -52,7 +52,14 @@ defmodule EftBuddyWeb.AdminRouter do
       # failing: it returns an answer either way, and a stale or badly-keyed one
       # is indistinguishable from a correct one at every other observation
       # point. See `EftBuddyWeb.CacheDashboardPage`.
-      additional_pages: [cache: EftBuddyWeb.CacheDashboardPage]
+      additional_pages: [
+        cache: EftBuddyWeb.CacheDashboardPage,
+        # The feeds are the app's only source of content, and a stopped one
+        # breaks nothing visible — the pages keep rendering, with older data. See
+        # `EftBuddyWeb.SyncDashboardPage`, and in particular why it shows when
+        # each feed plans to run NEXT and not only when it last did.
+        syncs: EftBuddyWeb.SyncDashboardPage
+      ]
 
     # Anything else on this endpoint redirects to the dashboard, so a bare
     # `http://localhost:4001` lands somewhere useful over the tunnel.

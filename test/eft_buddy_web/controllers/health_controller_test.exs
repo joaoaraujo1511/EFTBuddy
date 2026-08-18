@@ -99,6 +99,33 @@ defmodule EftBuddyWeb.HealthControllerTest do
       assert body(conn)["syncs"]["ItemsSync"]["state"] == "booting"
     end
 
+    test "reports when each family next plans to run" do
+      # The payload's only forward-looking field. Everything else on this
+      # endpoint is retrospective and therefore silent about a feed that has not
+      # run yet — which is how a re-cadenced stagger left the events scrape three
+      # hours from its first run, on a fresh database, with the probe green and
+      # the page showing a standby spinner.
+      Reporter.attach_telemetry()
+      Reporter.record_next_run("EventsSync", :timer.hours(3))
+
+      conn = build_conn() |> get(~p"/health/sync")
+
+      assert conn.status == 200
+      family = body(conn)["syncs"]["EventsSync"]
+
+      assert family["state"] == "booting"
+      assert family["age_seconds"] == nil
+      assert_in_delta family["next_run_seconds"], 10_800, 5
+    end
+
+    test "reports null, not zero, for a family that has armed nothing" do
+      # "No timer at all" and "firing this instant" are opposite conditions. JSON
+      # `0` would read as the latter.
+      conn = build_conn() |> get(~p"/health/sync")
+
+      assert body(conn)["syncs"]["ChaptersSync"]["next_run_seconds"] == nil
+    end
+
     test "goes red when a sync fails" do
       Reporter.attach_telemetry()
       Reporter.with_run("MapsSync", fn -> {:error, :upstream_gone} end)

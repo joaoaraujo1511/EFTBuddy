@@ -10,6 +10,7 @@ defmodule EftBuddy.Sync.SchedulerTest do
   """
   use ExUnit.Case, async: false
 
+  alias EftBuddy.Sync.Reporter
   alias EftBuddy.Sync.Scheduler
 
   # `bootstrap: :ran` — Bootstrap runs this feed itself, so the first scheduled
@@ -80,6 +81,85 @@ defmodule EftBuddy.Sync.SchedulerTest do
 
       assert first != second, "the fallback timer must be replaced, not left racing the new one"
       assert Process.cancel_timer(second) != false
+
+      GenServer.stop(pid)
+    end
+  end
+
+  describe "the recorded next run" do
+    setup do
+      Reporter.reset_status()
+      on_exit(&Reporter.reset_status/0)
+    end
+
+    test "init records the moment the fallback timer will actually fire" do
+      # The point of the whole feature. Before this, a feed that had not run yet
+      # was indistinguishable from outside whether its first tick was a second
+      # away or three hours — which is exactly how a re-cadenced stagger stranded
+      # the Fandom scrapes for hours without anything erroring.
+      {:ok, pid} = GenServer.start_link(RanFeed, [], [])
+
+      assert %{next_run_at: at, delay_ms: delay} = Reporter.schedule()["ProbeRanSync"]
+
+      # `@scheduler_fallback` is fallback + stagger, plus jitter, and jitter is
+      # applied INSIDE `arm/1` so the recorded moment is the real one rather than
+      # the nominal one it was asked for.
+      assert delay >= Scheduler.default_fallback_ms() + RanFeed.stagger_ms()
+      assert DateTime.compare(at, DateTime.utc_now()) == :gt
+
+      GenServer.stop(pid)
+    end
+
+    test "a bootstrap cast re-records, so the reported moment follows the timer" do
+      {:ok, pid} = GenServer.start_link(RanFeed, [], [])
+      %{delay_ms: fallback_delay} = Reporter.schedule()["ProbeRanSync"]
+
+      GenServer.cast(pid, :bootstrap_complete)
+      :sys.get_state(pid)
+
+      %{delay_ms: armed_delay} = Reporter.schedule()["ProbeRanSync"]
+
+      # The cast cancels the fallback and arms `interval + stagger` — 1.2s here,
+      # far below the 15-minute fallback. A stale record would have kept
+      # reporting the fallback and made the page lie in the one direction that
+      # matters.
+      assert armed_delay < fallback_delay
+      assert armed_delay >= RanFeed.interval_ms() + RanFeed.stagger_ms()
+
+      GenServer.stop(pid)
+    end
+
+    test "seconds_until_next_run is nil for a feed that has never armed a timer" do
+      # Not zero. "No timer at all" and "firing right now" are opposite
+      # conditions, and a supervised feed with no armed timer means its `init/1`
+      # never ran — worse than any delay.
+      refute Reporter.seconds_until_next_run("ProbeNeverStartedSync")
+    end
+
+    test "arming does NOT create a run record, which :never_run depends on" do
+      # THE SHARP EDGE OF PUTTING THIS IN ETS.
+      #
+      # `Freshness.evaluate_family/5` reads the ABSENCE of a status row to tell
+      # `:never_run` from merely stale. Had the schedule been written into the
+      # status table, every armed-but-never-run feed would have gained a row and
+      # erased the very distinction this feature exists to expose.
+      {:ok, pid} = GenServer.start_link(RanFeed, [], [])
+
+      assert Map.has_key?(Reporter.schedule(), "ProbeRanSync")
+      refute Map.has_key?(Reporter.status(), "ProbeRanSync")
+
+      GenServer.stop(pid)
+    end
+
+    test "reset_status clears the schedule too" do
+      {:ok, pid} = GenServer.start_link(RanFeed, [], [])
+      assert Reporter.schedule() != %{}
+
+      Reporter.reset_status()
+
+      # Otherwise a test that starts a feed leaks a next-run row into every later
+      # test's `/health/sync` payload — this table is global, named and public.
+      assert Reporter.schedule() == %{}
 
       GenServer.stop(pid)
     end

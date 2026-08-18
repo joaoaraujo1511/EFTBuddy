@@ -71,6 +71,16 @@ defmodule EftBuddy.Sync.Reporter do
   # succeed?" without scraping logs.
   @status_table :eft_buddy_sync_status
 
+  # Table holding each feed's INTENT — when it next plans to tick — as opposed
+  # to `@status_table`, which holds what already happened.
+  #
+  # Deliberately a second table rather than another key in the first. A feed that
+  # has never run has no `@status_table` row at all, and `EftBuddy.Sync.Freshness`
+  # reads exactly that absence to tell `:never_run` from a feed that is merely
+  # stale. Writing a scheduling row into it would give every armed-but-never-run
+  # feed a status entry, which is precisely the distinction being reported on.
+  @schedule_table :eft_buddy_sync_schedule
+
   # ── Module-name → ANSI color ──────────────────────────
   #
   # Bootstrap (orchestrator) gets its own color so the
@@ -143,8 +153,10 @@ defmodule EftBuddy.Sync.Reporter do
   # Public ETS table keyed by sync label → last-run status map. Created
   # once at app start; idempotent so IEx restarts don't crash.
   defp ensure_status_table do
-    if :ets.whereis(@status_table) == :undefined do
-      :ets.new(@status_table, [:set, :public, :named_table, read_concurrency: true])
+    for table <- [@status_table, @schedule_table] do
+      if :ets.whereis(table) == :undefined do
+        :ets.new(table, [:set, :public, :named_table, read_concurrency: true])
+      end
     end
 
     :ok
@@ -172,6 +184,85 @@ defmodule EftBuddy.Sync.Reporter do
     case :ets.whereis(@status_table) do
       :undefined -> %{}
       _ -> @status_table |> :ets.tab2list() |> Map.new()
+    end
+  end
+
+  @doc """
+  Record that `label` has armed a timer to fire in `delay_ms`.
+
+  ## Why intent is worth recording at all
+
+  Everything else here is retrospective: what ran, when, and how it went. That
+  cannot describe a feed which has not run yet, and "has not run yet" turned out
+  to be the failure mode worth catching.
+
+  Three Fandom scrapes were once armed from a stagger meant to place them inside
+  their recurring cycle. A re-cadence moved one of those staggers from 1 minute
+  to 180, and because the feed had not run at boot, the stagger *was* its delay
+  to a first run — so a fresh database served an empty events page for three
+  hours, and a restart inside that window started the wait again. Nothing errored.
+  `EftBuddy.Sync.Freshness` was right to stay quiet: it judges "should this have
+  run by now?" against the feed's staleness budget, and three hours is well inside
+  a twelve-hour budget.
+
+  No outcome record could have shown that, because no run happened. The number
+  that would have shown it instantly is this one — a feed reporting *never run,
+  next run in 2h58m* at boot is legible at a glance.
+
+  So this is REPORTED, NOT JUDGED. `Freshness` surfaces it and derives no verdict
+  from it: a first run some hours out is normal for a feed with a twelve-hour
+  cycle, and the only reader who can tell "staggered" from "stranded" is one who
+  knows what the feed was supposed to do. Inventing a threshold here would add a
+  number to tune and a new way for the probe to cry wolf.
+  """
+  @spec record_next_run(String.t(), non_neg_integer()) :: :ok
+  def record_next_run(label, delay_ms) when is_binary(label) and is_integer(delay_ms) do
+    ensure_status_table()
+
+    :ets.insert(
+      @schedule_table,
+      {label,
+       %{
+         next_run_at: DateTime.add(DateTime.utc_now(), delay_ms, :millisecond),
+         armed_at: DateTime.utc_now(),
+         delay_ms: delay_ms
+       }}
+    )
+
+    :ok
+  rescue
+    ArgumentError -> :ok
+  end
+
+  @doc """
+  Every feed's next planned tick, as a map of
+
+      %{label => %{next_run_at: DateTime.t(), armed_at: DateTime.t(), delay_ms: n}}
+
+  A label is absent until it has armed a timer at least once, which for a
+  supervised feed means "until its `init/1` has run".
+  """
+  @spec schedule() :: %{optional(String.t()) => map()}
+  def schedule do
+    case :ets.whereis(@schedule_table) do
+      :undefined -> %{}
+      _ -> @schedule_table |> :ets.tab2list() |> Map.new()
+    end
+  end
+
+  @doc """
+  Seconds until `label` next plans to run, or `nil` if it has never armed a timer.
+
+  Negative when the planned moment has passed and the tick has not been recorded
+  yet — a run in progress, or a message still queued. Reported as-is rather than
+  clamped: a large negative number means a feed that armed a timer and never
+  fired, which is worth being able to see.
+  """
+  @spec seconds_until_next_run(String.t()) :: integer() | nil
+  def seconds_until_next_run(label) when is_binary(label) do
+    case Map.get(schedule(), label) do
+      %{next_run_at: at} -> DateTime.diff(at, DateTime.utc_now())
+      _ -> nil
     end
   end
 
@@ -207,6 +298,7 @@ defmodule EftBuddy.Sync.Reporter do
   def reset_status do
     ensure_status_table()
     :ets.delete_all_objects(@status_table)
+    :ets.delete_all_objects(@schedule_table)
     :ok
   end
 

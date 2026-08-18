@@ -252,8 +252,8 @@ defmodule EftBuddy.Items.Sync do
     # `EftBuddy.Sync.Registry.notifiable/0` it never received that cast, so its
     # cadence drifted from boot rather than anchoring to the sequence — silently,
     # because a feed that runs on the wrong schedule still runs.
-    full_timer = Process.send_after(self(), :full_sync, full_interval + jitter(full_interval))
-    Process.send_after(self(), :price_sync, price_interval + jitter(price_interval))
+    full_timer = arm(:full_sync, full_interval)
+    arm(:price_sync, price_interval)
 
     {:ok, %{full_interval: full_interval, price_interval: price_interval, full_timer: full_timer}}
   end
@@ -274,10 +274,7 @@ defmodule EftBuddy.Items.Sync do
   def handle_cast(:bootstrap_complete, %{full_interval: interval} = state) do
     if state[:full_timer], do: Process.cancel_timer(state.full_timer)
 
-    delay = interval + @stagger
-    timer = Process.send_after(self(), :full_sync, delay + jitter(delay))
-
-    {:noreply, %{state | full_timer: timer}}
+    {:noreply, %{state | full_timer: arm(:full_sync, interval + @stagger)}}
   end
 
   def handle_cast(_msg, state), do: {:noreply, state}
@@ -285,15 +282,31 @@ defmodule EftBuddy.Items.Sync do
   @impl true
   def handle_info(:full_sync, %{full_interval: interval} = state) do
     safe_run("Periodic full", &run/0)
-    timer = Process.send_after(self(), :full_sync, interval + jitter(interval))
-    {:noreply, %{state | full_timer: timer}}
+    {:noreply, %{state | full_timer: arm(:full_sync, interval)}}
   end
 
   @impl true
   def handle_info(:price_sync, %{price_interval: interval} = state) do
     safe_run("Periodic price", &run_prices/0)
-    Process.send_after(self(), :price_sync, interval + jitter(interval))
+    arm(:price_sync, interval)
     {:noreply, state}
+  end
+
+  # The two timers this module owns, armed in one place so the intent recorded
+  # for `/health/sync` cannot drift from the timer that actually exists. This
+  # module is a hand-rolled GenServer rather than an `EftBuddy.Sync.Scheduler`
+  # user, so it needs its own copy of the scheduler's `arm/1`; the two go away
+  # together when these feeds are split into modules of their own.
+  #
+  # The labels are the ones this module REPORTS under, which is what
+  # `EftBuddy.Sync.Freshness` matches on — not the message names.
+  defp arm(:full_sync, delay), do: do_arm(:full_sync, "ItemsSync", delay)
+  defp arm(:price_sync, delay), do: do_arm(:price_sync, "PricesSync", delay)
+
+  defp do_arm(msg, label, delay) do
+    delay = delay + jitter(delay)
+    Reporter.record_next_run(label, delay)
+    Process.send_after(self(), msg, delay)
   end
 
   # GenServer tick wrapper: runs the given `fun`, logs a single summary
