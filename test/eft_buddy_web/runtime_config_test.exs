@@ -52,35 +52,36 @@ defmodule EftBuddyWeb.RuntimeConfigTest do
 
   defp repo_ssl(config), do: get_in(config, [:eft_buddy, EftBuddy.Repo, :ssl])
 
-  # A real certificate, not a stub: `Supabase Root 2021 CA`, the public root the
-  # production pooler actually chains to. Nothing here verifies a connection with
-  # it — it only has to be something `:public_key.pem_decode/1` accepts as a
-  # certificate — but using the genuine article keeps the fixture honest about
-  # what the surrounding code is for. Public certificate, no secret.
-  defp supabase_root_pem do
+  # A real certificate, not a stub — but a throwaway one, generated for this
+  # fixture and used nowhere. Nothing here verifies a connection with it; it only
+  # has to be something `:public_key.pem_decode/1` accepts as a certificate.
+  #
+  # This used to be the hosted provider's public root, on the argument that the
+  # genuine article kept the fixture honest. That database is gone, so there is no
+  # genuine article left to point at, and pinning to some unrelated third party's
+  # root would imply a relationship the code no longer has. A self-signed CA says
+  # plainly what this is: shaped like a certificate, meaningful to nothing.
+  # Contains no private key, and expires in 2046.
+  defp test_root_pem do
     """
     -----BEGIN CERTIFICATE-----
-    MIIDxDCCAqygAwIBAgIUbLxMod62P2ktCiAkxnKJwtE9VPYwDQYJKoZIhvcNAQEL
-    BQAwazELMAkGA1UEBhMCVVMxEDAOBgNVBAgMB0RlbHdhcmUxEzARBgNVBAcMCk5l
-    dyBDYXN0bGUxFTATBgNVBAoMDFN1cGFiYXNlIEluYzEeMBwGA1UEAwwVU3VwYWJh
-    c2UgUm9vdCAyMDIxIENBMB4XDTIxMDQyODEwNTY1M1oXDTMxMDQyNjEwNTY1M1ow
-    azELMAkGA1UEBhMCVVMxEDAOBgNVBAgMB0RlbHdhcmUxEzARBgNVBAcMCk5ldyBD
-    YXN0bGUxFTATBgNVBAoMDFN1cGFiYXNlIEluYzEeMBwGA1UEAwwVU3VwYWJhc2Ug
-    Um9vdCAyMDIxIENBMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAqQXW
-    QyHOB+qR2GJobCq/CBmQ40G0oDmCC3mzVnn8sv4XNeWtE5XcEL0uVih7Jo4Dkx1Q
-    DmGHBH1zDfgs2qXiLb6xpw/CKQPypZW1JssOTMIfQppNQ87K75Ya0p25Y3ePS2t2
-    GtvHxNjUV6kjOZjEn2yWEcBdpOVCUYBVFBNMB4YBHkNRDa/+S4uywAoaTWnCJLUi
-    cvTlHmMw6xSQQn1UfRQHk50DMCEJ7Cy1RxrZJrkXXRP3LqQL2ijJ6F4yMfh+Gyb4
-    O4XajoVj/+R4GwywKYrrS8PrSNtwxr5StlQO8zIQUSMiq26wM8mgELFlS/32Uclt
-    NaQ1xBRizkzpZct9DwIDAQABo2AwXjALBgNVHQ8EBAMCAQYwHQYDVR0OBBYEFKjX
-    uXY32CztkhImng4yJNUtaUYsMB8GA1UdIwQYMBaAFKjXuXY32CztkhImng4yJNUt
-    aUYsMA8GA1UdEwEB/wQFMAMBAf8wDQYJKoZIhvcNAQELBQADggEBAB8spzNn+4VU
-    tVxbdMaX+39Z50sc7uATmus16jmmHjhIHz+l/9GlJ5KqAMOx26mPZgfzG7oneL2b
-    VW+WgYUkTT3XEPFWnTp2RJwQao8/tYPXWEJDc0WVQHrpmnWOFKU/d3MqBgBm5y+6
-    jB81TU/RG2rVerPDWP+1MMcNNy0491CTL5XQZ7JfDJJ9CCmXSdtTl4uUQnSuv/Qx
-    Cea13BX2ZgJc7Au30vihLhub52De4P/4gonKsNHYdbWjg7OWKwNv/zitGDVDB9Y2
-    CMTyZKG3XEu5Ghl1LEnI3QmEKsqaCLv12BnVjbkSeZsMnevJPs1Ye6TjjJwdik5P
-    o/bKiIz+Fq8=
+    MIIDIzCCAgugAwIBAgIUbm63n+0uMtE0TFlVK52H1AyIpDIwDQYJKoZIhvcNAQEL
+    BQAwITEfMB0GA1UEAwwWRUZUIEJ1ZGR5IFRlc3QgUm9vdCBDQTAeFw0yNjA4MTgx
+    OTQ1MDVaFw00NjA4MTMxOTQ1MDVaMCExHzAdBgNVBAMMFkVGVCBCdWRkeSBUZXN0
+    IFJvb3QgQ0EwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQDKwZd2aYGO
+    pVDIamldlB6tNvLXoQAr3uHg8KslHxWwtdOyKm4KaSZsU2Ctj+jVDmcsM15p8O7j
+    4+lRzS2AwUkrZKjw4zPlEqrCytFgkfLpZZbiuxKodwimMlVApMZGRWwAewWnJ+6I
+    N/OzNoH3KrvMi6ZEQ46TUWfd5hFtetrDvCffF/6CNR7xAjfJi7FhqO6hiHWM3YOA
+    7rBoi/ElnggbImcgMY/Ih0y00S04g0BJGLaHBw4kMWzRL3xBDy5aG9tKUTv2Mh4+
+    hTeT6eTTu4QKf4gRaIF4LyUnlnDQneoU6kecVbJ914gpNq7efvk4B8E0I597RAGl
+    CDCb0r8VCCZ5AgMBAAGjUzBRMB0GA1UdDgQWBBTOnm7GrLwOlmPwl1bVxiwwWqRs
+    ZjAfBgNVHSMEGDAWgBTOnm7GrLwOlmPwl1bVxiwwWqRsZjAPBgNVHRMBAf8EBTAD
+    AQH/MA0GCSqGSIb3DQEBCwUAA4IBAQAFNcpOGrZGbhH8gG3zL519lS2Fl56P9W0C
+    Okxkz0OGiakVSCn3BCpgqVSGLsno3ktyLDlL2vb0WdIscrFJeu/ipv1J+G56TLfn
+    etLOu+ahSGpCg4Czxx/BU+l8MRDd2wPGb/XQkmWg4xrSIXNI19s2H4k7EW97G79D
+    BWcciy8t5kcxhB+xjReTIT8U7hoteuu9PazgAgZG6HwXM76olu4ZWDR3Y2TTR9v/
+    0IXlyDe4DerJjES+61qZnL7KL7NQCaCAlKVC/P3RPOxY0urfddMDYB09DqrDPKhA
+    mnA2Wj2vnYrBazCPRvFhg21zaHJuQr7n1wQh5erbzaIDNOuuiO0m
     -----END CERTIFICATE-----
     """
     |> String.replace(~r/^ +/m, "")
@@ -192,11 +193,11 @@ defmodule EftBuddyWeb.RuntimeConfigTest do
     end
 
     test "DB_CACERTFILE pins that CA INSTEAD of the OS trust store" do
-      # Supabase's pooler is signed by `Supabase Root 2021 CA`, a private root in
-      # no OS trust store, so `cacerts_get/0` cannot build a path to it and
-      # verify_peer fails. Pinning is what makes verification possible there.
+      # A database whose certificate chains to a root the OS does not ship cannot
+      # be verified by `cacerts_get/0` at all, so verify_peer fails however correct
+      # everything else is. Pinning is what makes verification possible.
       path = Path.join(System.tmp_dir!(), "eft_buddy_test_ca.crt")
-      File.write!(path, supabase_root_pem())
+      File.write!(path, test_root_pem())
       on_exit(fn -> File.rm(path) end)
 
       ssl = repo_ssl(read_prod(%{"DB_SSL" => "true", "DB_CACERTFILE" => path}))
@@ -213,7 +214,7 @@ defmodule EftBuddyWeb.RuntimeConfigTest do
       # A missing mount must name itself here rather than surface as an opaque
       # handshake failure inside Postgrex.
       assert_raise RuntimeError, ~r/could not be read/, fn ->
-        read_prod(%{"DB_SSL" => "true", "DB_CACERTFILE" => "/nonexistent/supabase-ca.crt"})
+        read_prod(%{"DB_SSL" => "true", "DB_CACERTFILE" => "/nonexistent/pinned-ca.crt"})
       end
     end
 

@@ -7,11 +7,11 @@ import Config
 # credentials and this connection leaves the machine, so "it's only dev" does not
 # make an unauthenticated peer acceptable.
 #
-# The pinned CA is not hardening, it is what makes verification possible at all:
-# Supabase runs its own PKI, and its root is in no OS trust store, so
-# `:public_key.cacerts_get/0` cannot build a path to it. The pinned file is
-# committed at priv/certs/ and documented in .env.example, which also carries the
-# fingerprint to check it against.
+# A pinned CA is not hardening, it is what makes verification possible at all
+# against a provider running its own PKI, whose root is in no OS trust store. Set
+# DB_CACERTFILE to that root and it replaces the OS store for this connection;
+# leave it unset and the OS store is used, which is correct for any database whose
+# certificate a public CA signed. See .env.example.
 db_hostname = System.get_env("DB_HOSTNAME")
 
 # A LOCAL Postgres is the exception, and it has to be, or this file makes local
@@ -39,16 +39,27 @@ dev_db_ssl =
       false
 
     is_binary(db_hostname) and String.trim(db_hostname) != "" ->
+      # One pinned root, or the OS store — never both, for the same reason
+      # config/runtime.exs gives: adding the public CAs back alongside a pinned
+      # root lets any of them vouch for this host, which is the property pinning
+      # exists to remove. Unset DB_CACERTFILE is the ordinary case, and correct
+      # for any database whose certificate a public CA signed.
+      trust_anchor =
+        case System.get_env("DB_CACERTFILE") do
+          path when is_binary(path) and path != "" ->
+            [cacertfile: String.to_charlist(String.trim(path))]
+
+          _ ->
+            [cacerts: :public_key.cacerts_get()]
+        end
+
       [
         verify: :verify_peer,
-        cacertfile:
-          System.get_env("DB_CACERTFILE") ||
-            Path.expand("../priv/certs/supabase-prod-ca-2021.crt", __DIR__),
         server_name_indication: String.to_charlist(String.trim(db_hostname)),
         customize_hostname_check: [
           match_fun: :public_key.pkix_verify_hostname_match_fun(:https)
         ]
-      ]
+      ] ++ trust_anchor
 
     true ->
       # No DB_HOSTNAME, so there is no host to connect to and none to verify
@@ -89,9 +100,9 @@ config :eft_buddy, EftBuddy.Repo,
   # should not be the thing that leaks the credential.
   show_sensitive_data_on_connection_error: local_db?,
   pool_size: 10,
-  # Supabase requires TLS. Options live inside `ssl:` — the separate `ssl_opts`
-  # key is deprecated in Postgrex and is ignored with a warning. Built above,
-  # where the reasoning lives.
+  # A remote database will require TLS. Options live inside `ssl:` — the separate
+  # `ssl_opts` key is deprecated in Postgrex and is ignored with a warning. Built
+  # above, where the reasoning lives.
   ssl: dev_db_ssl
 
 # For development, we disable any cache and enable
@@ -246,9 +257,11 @@ config :eft_buddy, start_sync: System.get_env("START_SYNC", "1") not in ~w(0 fal
 # it is the one layer that reimplements query semantics rather than skipping a
 # query, and the Items/Flea pages should look identical with it on and off.
 #
-# Note when comparing: a stock local Postgres and Supabase do NOT use the same
-# collation, so the two environments legitimately order punctuation-leading item
-# names differently. The dataset follows whichever database it is talking to.
+# Note when comparing: two Postgres servers do not necessarily use the same
+# collation, and this one does not match production — dev runs on whatever the
+# host provides, production runs Debian's glibc inside the postgres:17 image. The
+# two legitimately order punctuation-leading item names differently. The dataset
+# follows whichever database it is talking to.
 config :eft_buddy, item_dataset_enabled: System.get_env("ITEM_DATASET") in ~w(1 true)
 
 config :eft_buddy,

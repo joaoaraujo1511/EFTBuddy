@@ -121,16 +121,11 @@ ENV MIX_ENV="prod"
 
 COPY --from=builder --chown=root:root /app/_build/${MIX_ENV}/rel/eft_buddy ./
 
-# Database trust anchors, at a STABLE path. These do ship inside the release too
-# (priv/ is part of it), but only under `/app/lib/eft_buddy-<version>/priv/`, and
-# baking a version number into DB_CACERTFILE means the next `version:` bump in
-# mix.exs silently breaks database TLS. `/app/certs/` does not move.
-#
-# Public certificates, no private key material: a CA certificate is the half that
-# is meant to be distributed, so committing one leaks nothing. They are copied
-# rather than mounted so that deploying is a `git pull` and a rebuild, with no
-# out-of-band file for someone to forget.
-COPY --from=builder --chown=root:root /app/priv/certs /app/certs
+# No CA bundle is baked in. The database is a container on a private Docker
+# network, so there is no TLS to verify; DB_SSL is off and config/runtime.exs
+# never reads DB_CACERTFILE. A future hosted database with a private root should
+# MOUNT its CA rather than have it copied in here, so rotating the root does not
+# mean rebuilding the image.
 
 USER eftbuddy
 
