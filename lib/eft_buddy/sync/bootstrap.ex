@@ -38,29 +38,56 @@ defmodule EftBuddy.Sync.Bootstrap do
 
   ## The completion cast
 
-  When the sequence finishes, Bootstrap casts `:bootstrap_complete` to every feed
-  `EftBuddy.Sync.Registry.notifiable/0` names — currently all of them, since
-  every feed is `:ran`. The cast is a SCHEDULING signal, not a trigger: the work
-  already happened, here in `do_run/0`, so each feed arms its first *recurring*
-  run a full interval plus its own stagger away. That spaces the feeds across the
-  cycle and preserves the FK ordering within each one.
+  Bootstrap casts `:bootstrap_complete` to a feed the moment THAT FEED's own
+  cold-start step succeeds — the `:notify` field on each step in
+  `EftBuddy.Sync.Registry.cold_start_steps/0` names the recipient. The cast is a
+  SCHEDULING signal, not a trigger: the work already happened, here in `do_run/0`,
+  so each feed arms its first *recurring* run a full interval plus its own stagger
+  away. That spaces the feeds across the cycle and preserves the FK ordering
+  within each one.
 
-  The scheduler still understands `:released` (Bootstrap merely lets a feed
-  start, so it arms at its stagger) and `:chained` (armed by another feed's cast
-  instead). The three Fandom scrapes used to be those, and it went wrong in a way
-  worth remembering: for a `:released` feed the stagger doubles as the delay to
-  its first run ever, and the stagger is really a slot within the recurring
-  cycle. When the feeds were re-cadenced, the events scrape's slot moved from 1
-  minute to 180 and its first run moved with it — so a fresh database had no
-  events for three hours, no quest pages for two, and any restart inside that
-  window started the wait over. Nothing errored and `/health/sync` read healthy
-  throughout, because a feed that has not run yet is `:booting`, not stale.
+  ## Why per-step, and not once at the end
+
+  It was once at the end, and that was fine while the sequence took seconds.
+
+  Adding the Fandom scrapes made the sequence longer than the SHORTEST fallback in
+  the registry, and a fallback exists to mean "Bootstrap died, run yourself". Once
+  the sequence outlasts one, "Bootstrap is slow" and "Bootstrap is dead" become
+  the same observation from inside a feed.
+
+  `EftBuddy.Chapters.Sync` proved it on the first deploy: a zero stagger puts its
+  step early in the Fandom group and its fallback fifteen minutes out, so it
+  finished at 21:56, sat idle holding no lock while the events scrape ran for
+  thirteen minutes, and at 22:09 re-scraped the eleven pages it had just written.
+  Nothing was corrupted — every feed is idempotent and lock-guarded — but it
+  doubled the load on a rate-limited third party inside the window that party is
+  already being hammered.
+
+  Releasing each feed when its own work finishes also fixes a wart that predates
+  the scrapes: the blanket cast released every feed regardless of whether its step
+  had SUCCEEDED, so a feed whose cold start failed still armed a full interval out
+  and served an empty table until its next cycle. Only `{:ok, _}` releases a feed
+  now; anything else leaves it on the short fallback, which is what that fallback
+  is for. `report_unnotified/1` logs who those are.
+
+  ## The modes the scheduler still understands
+
+  `:released` (Bootstrap merely lets a feed start, so it arms at its stagger) and
+  `:chained` (armed by another feed's cast instead). The three Fandom scrapes used
+  to be those, and it went wrong in a way worth remembering: for a `:released`
+  feed the stagger doubles as the delay to its first run ever, and the stagger is
+  really a slot within the recurring cycle. When the feeds were re-cadenced, the
+  events scrape's slot moved from 1 minute to 180 and its first run moved with it
+  — so a fresh database had no events for three hours, no quest pages for two, and
+  any restart inside that window started the wait over. Nothing errored and
+  `/health/sync` read healthy throughout, because a feed that has not run yet is
+  `:booting`, not stale.
 
   Running every feed here means a stagger only ever means what it says.
 
-  Every feed also keeps a shorter fallback timer for the case where the cast
-  never arrives — which now always means Bootstrap failed and the feed has never
-  run at all.
+  Every feed also keeps a shorter fallback timer for the case where the cast never
+  arrives — which now means either that Bootstrap failed outright, or that this
+  feed's own step did not succeed.
 
   ## Why this exists
 
@@ -220,25 +247,31 @@ defmodule EftBuddy.Sync.Bootstrap do
     # Each step populates BOTH game modes where they diverge: per-mode
     # `item_prices` and vendor prices, the regular and pve quest graphs, barters
     # for both modes. Maps, hideout and item entities are identical across modes.
-    run_cold_start_steps()
+    notified = run_cold_start_steps()
 
     elapsed_ms =
       System.convert_time_unit(System.monotonic_time() - started_at, :native, :millisecond)
 
     Logger.info("[#{prefix()}] Cold-start sync sequence complete in #{fmt_time(elapsed_ms)}.")
 
-    # Every feed has now run, the Fandom scrapes included, so this signal only
-    # anchors the recurring timers: each feed arms its next run a full interval
-    # plus its own stagger from here. See `notify_schedulers/0`.
-    notify_schedulers()
+    # Each feed was released as its own step succeeded, so there is nothing left to
+    # cast here. What remains is to say out loud which feeds were NOT released —
+    # see `report_unnotified/1`.
+    report_unnotified(notified)
 
     :ok
   end
 
   # Run each registered cold-start step in order, carrying forward the outcomes
   # of the steps that later ones depend on.
-  defp run_cold_start_steps do
-    Enum.reduce(EftBuddy.Sync.Registry.cold_start_steps(), %{}, fn step_spec, outcomes ->
+  @doc false
+  # Takes the step list so a test can prove the RELEASE TIMING — that a feed is
+  # cast to while later steps are still running — without driving the real feeds
+  # through the network. Ordering is the whole point of this function, and it
+  # cannot be asserted from the registry's shape alone.
+  def run_cold_start_steps(steps \\ EftBuddy.Sync.Registry.cold_start_steps()) do
+    steps
+    |> Enum.reduce({%{}, []}, fn step_spec, {outcomes, notified} ->
       required = Map.get(step_spec, :requires)
 
       if required && not step_succeeded?(Map.get(outcomes, required)) do
@@ -247,42 +280,77 @@ defmodule EftBuddy.Sync.Bootstrap do
             "failed, so every FK this step resolves would be unresolvable"
         )
 
-        outcomes
+        {outcomes, notified}
       else
         result = step(step_spec.label, step_spec.run)
 
-        case Map.get(step_spec, :key) do
-          nil -> outcomes
-          key -> Map.put(outcomes, key, result)
-        end
+        outcomes =
+          case Map.get(step_spec, :key) do
+            nil -> outcomes
+            key -> Map.put(outcomes, key, result)
+          end
+
+        {outcomes, notify_step(step_spec, result, notified)}
       end
     end)
+    |> elem(1)
   end
 
-  # Cast to the cluster-wide singletons; if one isn't registered (e.g. cold
-  # start disabled), the cast is a harmless no-op.
+  # Release a feed the moment ITS step succeeds, rather than waiting for the rest
+  # of the sequence.
   #
-  # The recipients come from `EftBuddy.Sync.Registry.notifiable/0` rather than a
-  # list maintained here. That list had gone out of step: `EftBuddy.Items.Sync`
-  # was missing from it, so it never received the cast and armed its first run
-  # from `init/1` instead of from the end of the cold start — drifting from boot
-  # forever, with nothing logged and nothing failing.
+  # The cast means "you have run; anchor your recurring timer from here", so the
+  # honest moment to send it is when this feed's work finished — not when every
+  # other feed's did. Sending it at the end was fine while the sequence took
+  # seconds. Once the Fandom scrapes joined it, the sequence began to outlast the
+  # SHORTEST fallback in the registry, and a fallback exists to mean "Bootstrap
+  # died" — so "Bootstrap is slow" became indistinguishable from it.
   #
-  # One message, two meanings, which is why `bootstrap_mode/0` names them:
+  # `EftBuddy.Chapters.Sync` is the one that proved it: a zero stagger puts its
+  # step early in the Fandom group and its fallback 15 minutes out, so it sat idle
+  # holding no lock while the events scrape ran for thirteen minutes, then
+  # re-scraped all eleven pages it had just written. Idempotent and lock-guarded,
+  # so nothing was corrupted — it just doubled the load on a rate-limited third
+  # party during the window that party is already being hammered.
   #
-  #   * `:released` — the feed has NOT run. Bootstrap is letting it start, so it
-  #     arms at its stagger. The Fandom scrapes are these.
-  #
-  #   * `:ran` — the feed HAS just run, right here in `do_run/0`. It arms its
-  #     first RECURRING run a full interval plus stagger away, so the cast
-  #     schedules it rather than triggering it.
-  #
-  # `:chained` feeds are absent by construction: `EftBuddy.Wiki.Sync` is armed by
-  # `EftBuddy.Events.Sync` completing, because it reads that run's `event_quests`
-  # blacklist.
-  defp notify_schedulers do
-    for mod <- EftBuddy.Sync.Registry.notifiable() do
+  # Only a clean `{:ok, _}` releases a feed. A step that failed or skipped wrote
+  # nothing, which is exactly the state the short fallback is for: it should retry
+  # in minutes, not arm a full interval out and leave its table empty until
+  # tomorrow.
+  defp notify_step(step_spec, result, notified) do
+    with mod when not is_nil(mod) <- Map.get(step_spec, :notify),
+         true <- step_succeeded?(result) do
       GenServer.cast({:global, mod}, :bootstrap_complete)
+      [mod | notified]
+    else
+      _ -> notified
+    end
+  end
+
+  # Name the feeds the sequence did NOT release, because they are now running on
+  # their fallback timers and nothing else says so.
+  #
+  # A feed here is not broken: its fallback is short by design, so it retries in
+  # minutes. But "released, on its normal cadence" and "failed, retrying shortly"
+  # are different states and used to be indistinguishable — the blanket
+  # end-of-sequence cast released every feed regardless of whether its step had
+  # worked, which meant a feed whose cold start failed armed a FULL interval out
+  # and served an empty table until tomorrow.
+  #
+  # `:info` when the list is empty, `:warning` when it is not: on a healthy boot
+  # this line is the confirmation that every feed is anchored, and on an unhealthy
+  # one it is the list of what to look at.
+  defp report_unnotified(notified) do
+    case EftBuddy.Sync.Registry.notifiable() -- notified do
+      [] ->
+        Logger.info("[#{prefix()}] All #{length(notified)} feeds released on their own cadence.")
+
+      stranded ->
+        Logger.warning(
+          "[#{prefix()}] #{length(stranded)} feed(s) not released — their cold-start step did " <>
+            "not succeed, so they stay on their short fallback timers rather than a full " <>
+            "interval: #{stranded |> Enum.map(&inspect/1) |> Enum.join(", ")}"
+        )
     end
   end
 
@@ -330,6 +398,14 @@ defmodule EftBuddy.Sync.Bootstrap do
 
   defp log_step_result(label, {:error, :already_running}),
     do: Logger.info("[#{prefix()}] #{label}: skipped — another sync is already running")
+
+  # `{:skip, reason}` is part of the `EftBuddy.Sync.Scheduler.do_run/0` contract —
+  # `EftBuddy.Items.Sync.run_barters_and_crafts/0` returns it when the traders its
+  # FKs resolve against are not in the database yet — but this function had no
+  # clause for it, so a legitimate, expected outcome logged as "unexpected
+  # return". A log line that cries wolf on a normal cold start is worse than none.
+  defp log_step_result(label, {:skip, reason}),
+    do: Logger.info("[#{prefix()}] #{label}: skipped — #{Reporter.describe_error(reason)}")
 
   # A step that committed some of its work and failed the rest (currently
   # only Tasks, per game mode). It's not a clean failure — surface it as a

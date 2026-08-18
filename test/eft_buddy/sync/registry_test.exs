@@ -237,6 +237,59 @@ defmodule EftBuddy.Sync.RegistryTest do
       end
     end
 
+    test "every notifiable feed is released by exactly one step" do
+      # The cast means "you have run, anchor your timer from here". A feed with no
+      # step to release it never gets one and lives on its fallback forever; a
+      # feed released twice has its timer cancelled and re-armed for no reason.
+      notified =
+        Registry.cold_start_steps()
+        |> Enum.map(&Map.get(&1, :notify))
+        |> Enum.reject(&is_nil/1)
+
+      assert Enum.sort(notified) == Enum.sort(Enum.uniq(notified)),
+             "a feed is released by more than one step: #{inspect(notified -- Enum.uniq(notified))}"
+
+      for mod <- Registry.notifiable() do
+        assert mod in notified,
+               "#{inspect(mod)} expects :bootstrap_complete but no cold-start step sends it"
+      end
+    end
+
+    test "a feed with several steps is released by its LAST one" do
+      # THE ONE THAT IS EASY TO GET BACKWARDS. `EftBuddy.Items.Sync` contributes
+      # `run_items/0` and, six steps later, `run_barters_and_crafts/0`. Releasing
+      # it after the first would anchor its recurring timer while half its
+      # cold-start work is still ahead of it — and, worse, would look correct.
+      steps = Registry.cold_start_steps()
+
+      for mod <- Enum.uniq(Enum.map(steps, &Function.info(&1.run)[:module])) do
+        indices =
+          steps
+          |> Enum.with_index()
+          |> Enum.filter(fn {step, _i} -> Function.info(step.run)[:module] == mod end)
+          |> Enum.map(&elem(&1, 1))
+
+        notify_at =
+          steps
+          |> Enum.with_index()
+          |> Enum.filter(fn {step, _i} -> Map.get(step, :notify) == mod end)
+          |> Enum.map(&elem(&1, 1))
+
+        case notify_at do
+          [] ->
+            :ok
+
+          [at] ->
+            assert at == Enum.max(indices),
+                   "#{inspect(mod)} is released at step #{at} but still runs at " <>
+                     "step #{Enum.max(indices)}"
+
+          many ->
+            flunk("#{inspect(mod)} is released by #{length(many)} steps")
+        end
+      end
+    end
+
     test "the wiki scrapes come after the tasks they key against" do
       labels = Enum.map(Registry.cold_start_steps(), & &1.label)
       tasks = index_of(labels, "Tasks")
