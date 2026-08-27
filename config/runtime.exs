@@ -20,8 +20,19 @@ if System.get_env("PHX_SERVER") do
   config :eft_buddy, EftBuddyWeb.Endpoint, server: true
 end
 
-config :eft_buddy, EftBuddyWeb.Endpoint,
-  http: [port: String.to_integer(System.get_env("PORT", "4000"))]
+# `PORT` is required, exactly like every other variable this file reads: no
+# fallback, and a missing value stops the app rather than letting it listen on
+# a number nobody chose. A default is worse than an error here — it is what
+# makes an app come up on the wrong port and look fine until something else
+# fails to reach it.
+#
+# Test is the exception: its endpoint never binds (`server: false`), so the
+# port is a fixture rather than an environment concern and `config/test.exs`
+# pins it.
+if config_env() != :test do
+  config :eft_buddy, EftBuddyWeb.Endpoint,
+    http: [port: String.to_integer(System.fetch_env!("PORT"))]
+end
 
 if config_env() == :prod do
   # Every required variable goes through this rather than `||`, because `||` only

@@ -19,6 +19,8 @@ defmodule EftBuddy.Chapters do
     * `get_chapter/1`      — one prepared chapter by slug
     * `get_endings/0`      — the "Endings" reference page
     * `chapters_for_item/1`— chapters that reference a given item
+    * `branch_objectives/1`— the conditional blocks, badged by ending
+    * `ending_views/1`     — the four endings, each as guide + rewards
 
   The heavy manifest → render projection lives in
   `EftBuddy.Chapters.Projection` and runs on demand (per lookup), not at
@@ -47,6 +49,11 @@ defmodule EftBuddy.Chapters do
   # and surfaced on its own via `get_endings/0` for the storyline
   # "Endings" tab.
   @endings_slug "endings"
+
+  # Slug of the chapter those endings branch from — the one chapter whose
+  # page is its objectives and the branches they fork into, rather than a
+  # walkthrough. The branches' own guides live under the Endings tab.
+  @endgame_slug "the-ticket"
 
   # Curated narrative order, by slug. `Tour` is the Ground Zero tutorial
   # (the entry point); `The Ticket` is the endgame that branches into
@@ -106,6 +113,53 @@ defmodule EftBuddy.Chapters do
       end
     end)
   end
+
+  @doc """
+  The slug of the chapter the four endings branch from. The Endings page
+  belongs to it, and it is the only chapter presented as one tab per
+  ending rather than as a walkthrough.
+  """
+  @spec endgame_slug() :: String.t()
+  def endgame_slug, do: @endgame_slug
+
+  @doc """
+  The endgame chapter's conditional objective blocks, each badged with the
+  endings it leads to — the fork itself, listed on the storyline index's
+  Endings tab.
+  """
+  @spec branch_objectives(chapter() | nil) :: [Projection.content_section()]
+  def branch_objectives(chapter), do: endgame_projection(chapter, &Projection.branch_objectives/2)
+
+  @doc """
+  One view per ending — icon, guide, rewards. Both storyline pages render
+  the tabs; only the endgame chapter renders what is behind them.
+
+  Not cached: it is a cheap re-shape of two reads that are cached already,
+  and caching it would put a second copy of four full walkthroughs in ETS.
+  """
+  @spec ending_views(chapter() | nil) :: [Projection.ending_view()]
+  def ending_views(%{normalized_name: @endgame_slug} = chapter) do
+    case get_endings() do
+      nil -> []
+      endings -> Projection.ending_views(chapter.content_sections, endings.content_sections)
+    end
+  end
+
+  def ending_views(_chapter), do: []
+
+  # The branch projection needs two things — the endgame chapter's sections
+  # and the slugs of the endings that exist — and is meaningless for any
+  # other chapter.
+  defp endgame_projection(%{normalized_name: @endgame_slug} = chapter, project) do
+    case get_endings() do
+      nil -> []
+      endings -> project.(chapter.content_sections, ending_slugs(endings))
+    end
+  end
+
+  defp endgame_projection(_chapter, _project), do: []
+
+  defp ending_slugs(endings), do: Enum.map(endings.content_sections, & &1.slug)
 
   @doc """
   Every wiki "Related items" page name any chapter (or the Endings page)

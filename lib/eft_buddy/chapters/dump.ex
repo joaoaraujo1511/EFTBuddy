@@ -26,7 +26,7 @@ defmodule EftBuddy.Chapters.Dump do
   alias EftBuddy.Wiki.Slug
 
   import EftBuddy.Wiki.Markup,
-    only: [clean_text: 1, strip_inline_file_refs: 1, strip_html_comments: 1, strip_nowiki: 1]
+    only: [clean_text: 1, strip_html_comments: 1, strip_nowiki: 1]
 
   @doc "The wiki category the storyline chapters are enumerated from."
   def category, do: @category
@@ -108,7 +108,13 @@ defmodule EftBuddy.Chapters.Dump do
     * `:resolve` — `[bare_filename] -> %{bare_filename => imageinfo}`
     * `:write`   — `(chapter, manifest) -> :ok | {:error, reason}`
 
-  Options: `:dry_run` (skip image resolution + write).
+  Options:
+
+    * `:prune`   — `(chapter, [section]) -> [section]`, the sections worth
+      storing. Applied BEFORE image resolution, so a section nothing
+      renders costs neither a row nor an imageinfo lookup. Defaults to
+      keeping everything.
+    * `:dry_run` — skip image resolution + write.
 
   Returns `%{failures: [%{slug, reason}], summary: %{processed, failed}}`.
   """
@@ -116,11 +122,12 @@ defmodule EftBuddy.Chapters.Dump do
     fetch = Keyword.fetch!(opts, :fetch)
     resolve = Keyword.fetch!(opts, :resolve)
     write = Keyword.fetch!(opts, :write)
+    prune = Keyword.get(opts, :prune, fn _chapter, sections -> sections end)
     dry_run? = !!Keyword.get(opts, :dry_run, false)
 
     {failures, processed} =
       Enum.reduce(chapters, {[], 0}, fn chapter, {failures, processed} ->
-        case process_one(chapter, fetch, resolve, write, dry_run?) do
+        case process_one(chapter, fetch, resolve, write, prune, dry_run?) do
           :ok ->
             {failures, processed + 1}
 
@@ -137,10 +144,10 @@ defmodule EftBuddy.Chapters.Dump do
     }
   end
 
-  defp process_one(chapter, fetch, resolve, write, dry_run?) do
+  defp process_one(chapter, fetch, resolve, write, prune, dry_run?) do
     case fetch.(chapter) do
       {:ok, fetched} ->
-        parsed = parse_sections(fetched)
+        parsed = fetched |> parse_sections() |> keep_sections(chapter, prune)
         resolved = if dry_run?, do: %{}, else: resolve.(parsed.image_filenames)
         manifest = build_manifest(chapter, parsed, resolved)
         if dry_run?, do: :ok, else: write.(chapter, manifest)
@@ -148,6 +155,23 @@ defmodule EftBuddy.Chapters.Dump do
       {:error, reason} ->
         {:error, reason}
     end
+  end
+
+  # Narrow the parsed sections to the ones worth storing, and re-derive the
+  # image list from what survived so nothing is resolved for a section that
+  # is about to be thrown away.
+  #
+  # `related_links` is deliberately NOT re-derived: the cross-links to real
+  # tasks describe the whole wiki page, and a task the chapter mentions is
+  # worth linking whether or not the paragraph mentioning it is stored.
+  defp keep_sections(parsed, chapter, prune) do
+    kept = prune.(chapter, parsed.sections)
+
+    %{parsed | sections: kept, image_filenames: image_filenames(kept)}
+  end
+
+  defp image_filenames(sections) do
+    sections |> Enum.flat_map(& &1.files) |> Enum.map(& &1.wiki_filename) |> Enum.uniq()
   end
 
   # ── Section parsing ────────────────────────────────────────────────
@@ -162,8 +186,11 @@ defmodule EftBuddy.Chapters.Dump do
 
   Returns `%{sections, image_filenames, related_links}`:
 
-    * `sections` — per-section maps with extracted `objectives`, image
-      `files`, non-file `links`, and the retained raw `wikitext`.
+    * `sections` — per-section maps with image `files`, non-file `links`,
+      and the retained raw `wikitext`. The bullet lines are NOT extracted
+      here: `EftBuddy.Chapters.Projection` re-walks the wikitext to render
+      them in document order, and a second, flatter copy in the manifest
+      was read by nothing while inflating it by 7%.
     * `image_filenames` — de-duplicated bare filenames to resolve.
     * `related_links` — de-duplicated non-file wikilink targets
       (`%{title, slug}`), used later to cross-link chapters to tasks.
@@ -187,13 +214,10 @@ defmodule EftBuddy.Chapters.Dump do
       |> Enum.map(&parse_one_section/1)
       |> inject_banner(lead)
 
-    image_filenames =
-      parsed |> Enum.flat_map(& &1.files) |> Enum.map(& &1.wiki_filename) |> Enum.uniq()
-
     related_links =
       parsed |> Enum.flat_map(& &1.links) |> Enum.uniq_by(& &1.slug)
 
-    %{sections: parsed, image_filenames: image_filenames, related_links: related_links}
+    %{sections: parsed, image_filenames: image_filenames(parsed), related_links: related_links}
   end
 
   defp parse_one_section(s) do
@@ -217,7 +241,6 @@ defmodule EftBuddy.Chapters.Dump do
       heading: s.heading,
       level: s.level,
       slug: slug_for_section(s),
-      objectives: extract_objectives(cleaned),
       files: files,
       links: extract_links(cleaned),
       wikitext: s.wikitext
@@ -228,33 +251,6 @@ defmodule EftBuddy.Chapters.Dump do
   # flat) so image extraction skips the item icons inside them.
   defp strip_wikitables(wikitext) do
     Regex.replace(~r/\{\|.*?\|\}/s, wikitext, " ")
-  end
-
-  # Bullet/numbered list items, in document order. Unlike the quest
-  # parser (which keeps only top-level objectives), chapter walkthroughs
-  # nest objectives several levels deep, so `level` (marker depth) is
-  # retained for the loader to rebuild the hierarchy.
-  defp extract_objectives(wikitext) do
-    wikitext
-    |> String.split(~r/\r?\n/)
-    |> Enum.reduce({[], 0}, fn line, {acc, idx} ->
-      case Regex.run(~r/^([*#]+)\s*(.*)$/, String.trim_leading(line)) do
-        [_, markers, text] ->
-          case clean_text(strip_inline_file_refs(text)) do
-            "" ->
-              {acc, idx}
-
-            cleaned ->
-              new_idx = idx + 1
-              {[%{index: new_idx, level: String.length(markers), text: cleaned} | acc], new_idx}
-          end
-
-        _ ->
-          {acc, idx}
-      end
-    end)
-    |> elem(0)
-    |> Enum.reverse()
   end
 
   # Bare `File:`/`Image:` filenames referenced anywhere in the wikitext.
@@ -379,35 +375,23 @@ defmodule EftBuddy.Chapters.Dump do
           heading: s.heading,
           level: s.level,
           slug: s.slug,
-          objectives:
-            Enum.map(s.objectives, fn o -> %{index: o.index, level: o.level, text: o.text} end),
           files: Enum.map(s.files, &serialize_file(&1, resolved)),
           wikitext: s.wikitext
         }
       end)
-
-    total_files = parsed.sections |> Enum.flat_map(& &1.files) |> length()
-    total_objectives = parsed.sections |> Enum.flat_map(& &1.objectives) |> length()
 
     %{
       chapter_name: chapter.title,
       normalized_name: chapter.normalized_name,
       wiki_title: chapter.wiki_title,
       wiki_link: chapter.wiki_link,
-      fetched_at: DateTime.utc_now() |> DateTime.to_iso8601(),
       banner: banner_for(parsed.sections, resolved),
       # Every non-file wikilink the chapter references (`%{title, slug}`).
       # NOT pre-filtered to quests — the dump never touches the DB — so
       # the app cross-references these slugs against task slugs to render
       # links into the tasks tab.
       related_links: parsed.related_links,
-      sections: sections,
-      summary: %{
-        total_sections: length(sections),
-        total_objectives: total_objectives,
-        total_files: total_files,
-        total_images: map_size(resolved)
-      }
+      sections: sections
     }
   end
 

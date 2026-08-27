@@ -83,9 +83,20 @@ defmodule EftBuddy.Chapters.DumpTest do
       assert lead.slug == "lead"
     end
 
-    test "extracts list objectives", %{parsed: parsed} do
-      objectives = Enum.find(parsed.sections, &(&1.slug == "objectives")).objectives
-      assert [%{index: 1, level: 1, text: "Do the thing"}] = objectives
+    test "retains each section's raw wikitext, which is the parser's only input" do
+      # Bullet lines are deliberately NOT extracted a second time here: the
+      # projection re-walks the wikitext to render them in order, and the
+      # flat copy the manifest used to carry was read by nothing.
+      parsed =
+        Dump.parse_sections(%{
+          lead_wikitext: "",
+          sections: [%{index: 1, heading: "Objectives", level: 2, wikitext: "* Do the thing"}]
+        })
+
+      section = Enum.find(parsed.sections, &(&1.slug == "objectives"))
+
+      assert section.wikitext == "* Do the thing"
+      refute Map.has_key?(section, :objectives)
     end
 
     test "extracts <gallery> filenames (not just [[File:]] links) for resolution", %{
@@ -102,7 +113,7 @@ defmodule EftBuddy.Chapters.DumpTest do
   end
 
   describe "build_manifest/3" do
-    test "assembles the manifest shape with summary counts" do
+    test "assembles the manifest shape, and nothing the app does not read" do
       chapter = Dump.chapter_from_title("Boreas")
 
       parsed =
@@ -124,9 +135,16 @@ defmodule EftBuddy.Chapters.DumpTest do
 
       assert manifest.chapter_name == "Boreas"
       assert manifest.normalized_name == "boreas"
-      assert manifest.summary.total_objectives == 1
-      assert manifest.summary.total_images == 1
       assert is_list(manifest.sections)
+
+      assert %{slug: "objectives", wikitext: "* Do the thing" <> _} =
+               Enum.find(manifest.sections, &(&1.slug == "objectives"))
+
+      # Counted at render time from the blocks actually shown, so the
+      # manifest carries no tallies of its own - the ones it used to carry
+      # double-counted every nested section.
+      refute Map.has_key?(manifest, :summary)
+      refute Map.has_key?(manifest, :fetched_at)
     end
   end
 end

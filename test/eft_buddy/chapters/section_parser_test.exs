@@ -30,7 +30,7 @@ defmodule EftBuddy.Chapters.SectionParserTest do
 
     test "the section's own heading is not emitted, prose is" do
       blocks = SectionParser.parse(section("==Guide==\nFind the camp on Lighthouse."))
-      assert blocks == [%{kind: :prose, text: "Find the camp on Lighthouse."}]
+      assert blocks == [%{kind: :prose, emphasis: false, text: "Find the camp on Lighthouse."}]
     end
   end
 
@@ -66,6 +66,35 @@ defmodule EftBuddy.Chapters.SectionParserTest do
     end
   end
 
+  describe "bolded condition lines" do
+    @wikitext """
+    ==Guide==
+    * Talk to Prapor
+    '''If the [[Armored case]] was given to [[Prapor]] in [[Falling Skies]]'''
+    * Hand over the cash
+    """
+
+    test "a line bolded end to end is marked as emphasis, not body prose" do
+      assert [
+               %{kind: :list},
+               %{kind: :prose, emphasis: true, text: text},
+               %{kind: :list}
+             ] = SectionParser.parse(section(@wikitext))
+
+      assert text == "If the Armored case was given to Prapor in Falling Skies"
+    end
+
+    test "a bolded phrase inside a longer line is ordinary prose" do
+      blocks = SectionParser.parse(section("==H==\nUse the '''left road''' to approach."))
+
+      assert [%{kind: :prose, emphasis: false, text: "Use the left road to approach."}] = blocks
+    end
+
+    test "a bold line with nothing in it yields nothing" do
+      assert SectionParser.parse(section("==H==\n'''  '''")) == []
+    end
+  end
+
   describe "sub-section de-duplication" do
     test "a page-own section stops at its first sub-heading" do
       # MediaWiki returns the parent's wikitext including child sections;
@@ -75,7 +104,7 @@ defmodule EftBuddy.Chapters.SectionParserTest do
           section("==Guide==\nIntro line.\n===Step One===\nChild content.", index: "4")
         )
 
-      assert blocks == [%{kind: :prose, text: "Intro line."}]
+      assert blocks == [%{kind: :prose, emphasis: false, text: "Intro line."}]
     end
 
     test "a transcluded (tmpl:) section renders its sub-headings in full" do
