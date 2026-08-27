@@ -19,6 +19,16 @@ defmodule EftBuddy.Tasks.Sync do
   Concurrency is guarded with `:global.set_lock/3`, so a second
   call while a sync is already running returns
   `{:error, :already_running}` instead of double-writing.
+
+  ## Known failure: a task rename aborts the run
+
+  When tarkov.dev moves a name from one task id to another, the upsert
+  can violate the `(normalized_name, game_mode)` unique index halfway
+  through and take the whole `Ecto.Multi` down with it — every run, until
+  upstream renames again. Seen in the wild on 2026-08-27. The mechanism,
+  the evidence and the two candidate fixes are written up in full at the
+  `bulk_upsert` call in `upsert_tasks/3`; read that before touching the
+  conflict target or the `replace` list.
   """
 
   # Ticks twice as often as the other wipe-scale feeds. Quests are the only one
@@ -513,6 +523,59 @@ defmodule EftBuddy.Tasks.Sync do
       :updated_at
     ]
 
+    # KNOWN FAILURE — a task RENAME can abort this whole sync. Observed
+    # 2026-08-27; not yet fixed, and it does not heal on its own.
+    #
+    # `tasks` carries two unique indexes (20260625130000):
+    #
+    #     (external_id, game_mode)      <- the conflict target below
+    #     (normalized_name, game_mode)  <- NOT a conflict target
+    #
+    # The upsert is keyed on the API's id, which is right: the id is the
+    # stable identity and the name is an attribute of it. But `replace`
+    # includes `:normalized_name`, so an UPDATE here can move a name from
+    # one row to another — and a unique index is checked per statement,
+    # not at COMMIT, so any *permutation* of names across existing rows is
+    # rejected halfway through with 23505, whatever order the rows arrive
+    # in. That aborts the surrounding `Ecto.Multi`, so ONE renamed pair
+    # costs the entire run: tasks, objectives, requirements, rewards.
+    #
+    # It is not hypothetical and not a duplicate upstream. On 2026-08-27
+    # tarkov.dev had rotated three ids' names among themselves:
+    #
+    #     59c50a9e86f7745fef66f4ff   DB: Punisher Part 1  ->  API: Part 2
+    #     59c50c8886f7745fed3193bf   DB: Punisher Part 2  ->  API: Part 3
+    #     59c512ad86f7741f0d09de9b   DB: Punisher Part 3  ->  API: Part 1
+    #
+    # Both sides were internally consistent (0 colliding normalizedNames
+    # in `regular` and `pve`); only the mapping between them had moved.
+    # Writing Part 2 onto 59c50a9e… collides with 59c50c88…, which still
+    # holds that name, and:
+    #
+    #     ERROR 23505 unique_violation, tasks_normalized_name_game_mode_index
+    #     Key (normalized_name, game_mode)=(the-punisher-part-2, regular)
+    #
+    # Every subsequent run re-attempts the same permutation and fails the
+    # same way, so the table stays frozen at the pre-rename snapshot until
+    # upstream happens to rename again or someone intervenes by hand. A
+    # stale task list renders perfectly and is presented as fact, which is
+    # the failure mode `/health/sync` exists for — but the run reports as
+    # a crash, so freshness does at least go red.
+    #
+    # The fix is to let the index be satisfied by the END state rather
+    # than by each intermediate row:
+    #
+    #   * make `(normalized_name, game_mode)` DEFERRABLE INITIALLY
+    #     DEFERRED, so it is checked once at COMMIT, by which point the
+    #     permutation is complete. One migration, no code change here.
+    #   * or drop the index and rely on `(external_id, game_mode)` alone,
+    #     accepting that two rows could briefly share a slug — the read
+    #     paths that look tasks up by `normalized_name` are what the index
+    #     protects, so this is the weaker option.
+    #
+    # Deliberately NOT worked around by chunking or ordering the rows:
+    # there is no order in which a cycle of renames satisfies a
+    # non-deferred unique index.
     bulk_upsert(repo, Task, rows,
       conflict_target: [:external_id, :game_mode],
       replace: replace

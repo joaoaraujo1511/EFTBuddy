@@ -23,7 +23,9 @@ defmodule EftBuddy.Chapters.SectionParser do
     * `%{kind: :heading, level: 3..6, text: String.t()}` — a sub-heading
       *deeper* than the section's own heading (the section heading
       itself is rendered by the caller and skipped here).
-    * `%{kind: :prose, text: String.t()}` — a description paragraph.
+    * `%{kind: :prose, emphasis: boolean(), text: String.t()}` — a
+      description paragraph. `emphasis` marks a line the wiki bolded end
+      to end: a condition introducing the steps below it, not body text.
     * `%{kind: :list, ordered: boolean(), items: [%{level, text}]}` — a
       run of bullet/numbered lines; `level` is the marker depth so the
       caller can indent nested steps.
@@ -40,7 +42,7 @@ defmodule EftBuddy.Chapters.SectionParser do
 
   @type block ::
           %{kind: :heading, level: pos_integer(), text: String.t()}
-          | %{kind: :prose, text: String.t()}
+          | %{kind: :prose, emphasis: boolean(), text: String.t()}
           | %{
               kind: :list,
               ordered: boolean(),
@@ -175,6 +177,9 @@ defmodule EftBuddy.Chapters.SectionParser do
       match = Regex.run(~r/^([*#]+)\s*(.*)$/, trimmed) ->
         handle_list_item(acc, match)
 
+      match = Regex.run(~r/^'''([^'].*[^'])'''$/, trimmed) ->
+        handle_emphasis_line(acc, match)
+
       (refs = standalone_file_refs(trimmed)) != [] ->
         {images, acc} = resolve_files(flush_all(acc), refs)
         if images == [], do: acc, else: push_block(acc, %{kind: :gallery, images: images})
@@ -206,6 +211,23 @@ defmodule EftBuddy.Chapters.SectionParser do
 
       true ->
         push_block(acc, %{kind: :heading, level: clamp_heading(level), text: cleaned})
+    end
+  end
+
+  # A line that is bold end to end is the wiki's inline condition header —
+  # `'''If the Armored case was given to Prapor in Falling Skies'''` —
+  # introducing the steps beneath it. Stripping the markup leaves it
+  # indistinguishable from the branch's own body text, and on a chapter
+  # that forks, which condition a run of steps sits under is the single
+  # most important thing on the page. Not a `:heading`: those render as
+  # uppercase labels, which a full sentence should not become.
+  defp handle_emphasis_line(acc, [_, text]) do
+    case clean_text(strip_inline_file_refs(text)) do
+      "" ->
+        acc
+
+      cleaned ->
+        acc |> flush_all() |> push_block(%{kind: :prose, emphasis: true, text: cleaned})
     end
   end
 
@@ -326,7 +348,7 @@ defmodule EftBuddy.Chapters.SectionParser do
     acc = %{acc | prose: []}
 
     if text != "" and not metadata_paragraph?(text) do
-      push_block(acc, %{kind: :prose, text: text})
+      push_block(acc, %{kind: :prose, emphasis: false, text: text})
     else
       acc
     end

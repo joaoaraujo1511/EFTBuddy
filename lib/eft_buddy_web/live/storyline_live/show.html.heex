@@ -45,10 +45,10 @@
 
         <div class="mt-4 flex flex-wrap items-center gap-x-5 gap-y-1.5 t-label text-[10px] text-fog-400">
           <span class="inline-flex items-center gap-1.5">
-            <.icon name="hero-list-bullet" class="t-label-icon w-4 h-4 text-signal" /> {@chapter.objective_count} objectives
+            <.icon name="hero-list-bullet" class="t-label-icon w-4 h-4 text-signal" /> {@counts.objectives} objectives
           </span>
           <span class="inline-flex items-center gap-1.5">
-            <.icon name="hero-photo" class="t-label-icon w-4 h-4 text-signal" /> {@chapter.image_count} images
+            <.icon name="hero-photo" class="t-label-icon w-4 h-4 text-signal" /> {@counts.images} images
           </span>
         </div>
 
@@ -78,43 +78,48 @@
       </div>
     </article>
 
-    <.tabs :if={length(@tabs) > 1} class="w-fit" active={@view} items={@tabs} />
-
-    <%!-- WALKTHROUGH view. Full width: the old "On this page" jump-nav aside
-         (and the 220px gutter it lived in) is gone, and the per-section
-         "Related items" tables inside the guide cover what the removed
-         chapter-level ITEMS tab used to aggregate. --%>
-    <div :if={@view == "walkthrough"} class="min-w-0 space-y-6">
-      <.content_section
-        :for={sec <- @chapter.content_sections}
-        section={sec}
-        item_index={@item_index}
+    <%!-- ENDGAME view: pick an ending, get its guide and what it pays out.
+         The objectives are not repeated above the picker - each branch guide
+         walks through its own - and which branch leads to which ending is on
+         the storyline index's Endings tab. --%>
+    <div :if={@ending_views != []} class="min-w-0 space-y-6">
+      <.ending_tabs
+        views={@ending_views}
+        active={@ending}
+        href_for={
+          fn view -> ~p"/storyline/#{@chapter.normalized_name}?#{[ending: view.slug]}" end
+        }
       />
+
+      <%= for ending <- @ending_views do %>
+        <div :if={@ending == ending.slug} class="space-y-6">
+          <.content_section :if={ending.guide} section={ending.guide} item_index={@item_index} />
+          <.content_section section={ending.rewards} item_index={@item_index} />
+
+          <%!-- The rewards are scraped from the Endings wiki page, not from
+               this chapter's - so this credit points at `@endings`. --%>
+          <.source_credit
+            :if={@endings}
+            id="credit-endings"
+            what="Rewards"
+            href={@endings.wiki_link}
+            contributors={@endings.contributors}
+            image_uploaders={@endings.image_uploaders}
+          />
+        </div>
+      <% end %>
     </div>
 
-    <%!-- ENDINGS view --%>
-    <div :if={@view == "endings" && @endings} class="space-y-6">
-      <div>
-        <h2 class="t-head text-2xl text-fog-100">Story endings</h2>
-        <p class="text-sm text-fog-400 mt-1 max-w-3xl">
-          How your decisions and completed objectives branch into the four endings - each one's
-          outcome and the rewards it grants.
-        </p>
-      </div>
+    <%!-- WALKTHROUGH view, for every chapter the story does not fork at. Full
+         width: the old "On this page" jump-nav aside (and the 220px gutter it
+         lived in) is gone, and the per-section "Related items" tables inside
+         the guide cover what the removed chapter-level ITEMS tab used to
+         aggregate. --%>
+    <div :if={@ending_views == []} class="min-w-0 space-y-6">
       <.content_section
-        :for={sec <- @endings.content_sections}
-        section={sec}
+        :for={section <- @chapter.content_sections}
+        section={section}
         item_index={@item_index}
-      />
-
-      <%!-- The endings are transcluded from the endgame chapter's own wiki
-           page, which is not necessarily the chapter being viewed - so this
-           credit points at `@endings`, not `@chapter`. --%>
-      <.source_credit
-        id="credit-endings"
-        href={@endings.wiki_link}
-        contributors={@endings.contributors}
-        image_uploaders={@endings.image_uploaders}
       />
     </div>
   </div>

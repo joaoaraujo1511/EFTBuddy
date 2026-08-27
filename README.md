@@ -31,11 +31,17 @@ PostgreSQL server.
 
 ```sh
 mix setup          # deps, database, assets
-mix phx.server     # http://localhost:4000
+mix phx.server     # http://localhost:$PORT
 ```
 
 `mix setup` runs `deps.get`, creates and migrates the database, and installs and
 builds the front-end toolchain.
+
+`PORT` is required and has no default — `mix phx.server` refuses to start
+without it, the same as every other variable `config/runtime.exs` reads. There
+is no dotenv loader, so export it (`.env` carries it) before starting the
+server. `mix test` does not need it: the test endpoint never binds, and
+`config/test.exs` pins its port.
 
 ### Tests
 

@@ -2,7 +2,7 @@
      once the active view has its data. While not loaded the controls + search
      hide and the shared standby shows, matching every other page. --%>
 <% active_loaded? =
-  (@view == "chapters" and @chapters != []) or (@view == "endings" and not is_nil(@endings)) %>
+  (@view == "chapters" and @chapters != []) or (@view == "endings" and @branch_objectives != []) %>
 <% load_state = EftBuddyWeb.LoadState.resolve(active_loaded?, :storyline) %>
 <Layouts.app
   flash={@flash}
@@ -31,13 +31,13 @@
                 count: if(@chapters == [], do: nil, else: length(@chapters)),
                 tone: :neutral
               },
-              @endings &&
+              @branch_objectives != [] &&
                 %{
                   label: "Endings",
                   icon: "hero-rectangle-group",
                   patch: ~p"/storyline?#{[view: "endings"]}",
                   filter: "endings",
-                  count: length(@endings.content_sections),
+                  count: length(@branch_objectives),
                   tone: :neutral
                 }
             ]
@@ -47,12 +47,31 @@
       </:tabs>
     </.controls>
 
-    <%!-- ENDINGS view --%>
-    <div :if={@view == "endings" && @endings} class="space-y-6">
+    <%!-- ENDINGS view: where the story forks, and nothing more. Each block is
+         the run of objectives one branch needs, badged with the endings it
+         leads to - the connection the wiki encodes in the heading and nothing
+         else on the page can express. Deliberately informational: it is what
+         you read to DECIDE, and the endgame chapter is where you go to do it. --%>
+    <div :if={@view == "endings" && @branch_objectives != []} class="space-y-6">
+      <div>
+        <h2 class="t-head text-2xl text-fog-100">Where the story forks</h2>
+        <p class="text-sm text-fog-400 mt-1 max-w-3xl">
+          The objectives each branch of the endgame needs, and which endings they lead to.
+        </p>
+      </div>
+
       <.content_section
-        :for={sec <- @endings.content_sections}
-        section={sec}
+        :for={block <- @branch_objectives}
+        section={block}
         item_index={@item_index}
+      />
+
+      <.source_credit
+        :if={@endgame}
+        id="credit-endgame"
+        href={@endgame.wiki_link}
+        contributors={@endgame.contributors}
+        image_uploaders={@endgame.image_uploaders}
       />
     </div>
 
@@ -129,7 +148,12 @@
               navigate={~p"/storyline/#{chapter.normalized_name}"}
               class="mt-5 t-label text-[10px] text-amber hover:underline inline-flex items-center gap-1"
             >
-              Walkthrough <.icon name="hero-arrow-right" class="w-4 h-4" />
+              <%!-- The endgame chapter has no walkthrough: its page is a guide
+                   per ending, so promising one here would be a lie. --%>
+              {if chapter.normalized_name == EftBuddy.Chapters.endgame_slug(),
+                do: "Endings",
+                else: "Walkthrough"}
+              <.icon name="hero-arrow-right" class="w-4 h-4" />
             </.link>
           </div>
         </div>

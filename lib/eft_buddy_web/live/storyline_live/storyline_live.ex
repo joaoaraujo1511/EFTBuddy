@@ -40,31 +40,35 @@ defmodule EftBuddyWeb.StorylineLive.Index do
   defp load_storyline_data(socket) do
     if connected?(socket) do
       index = task_index()
-      endings = Chapters.get_endings()
+      endgame = Chapters.get_chapter(Chapters.endgame_slug())
 
       chapters =
         Chapters.list_chapters()
         |> Enum.with_index(1)
         |> Enum.map(fn {chapter, number} -> build_view_model(chapter, number, index) end)
 
+      branch_objectives = Chapters.branch_objectives(endgame)
+
       socket
       |> assign(:chapters, chapters)
-      |> assign(:endings, endings)
-      |> assign(:item_index, build_item_index(endings))
+      |> assign(:branch_objectives, branch_objectives)
+      |> assign(:endgame, endgame)
+      |> assign(:item_index, build_item_index(branch_objectives))
     else
       socket
       |> assign(:chapters, [])
-      |> assign(:endings, nil)
+      |> assign(:branch_objectives, [])
+      |> assign(:endgame, nil)
       |> assign(:item_index, %{})
     end
   end
 
-  # Resolve the endings' related items to real DB items (the only items
-  # the index renders, under the Endings view). Degrades to no
+  # Resolve the branch objectives' related items to real DB items (the only
+  # items the index renders, under the Endings view). Degrades to no
   # resolution if the item DB is unavailable.
-  defp build_item_index(nil), do: %{}
+  defp build_item_index([]), do: %{}
 
-  defp build_item_index(_endings) do
+  defp build_item_index(_branch_objectives) do
     # The same shared, cached, warmed index the chapter pages use. A superset of
     # the endings' own items, which is behaviourally identical here — the
     # component only ever looks pages up by name.
@@ -76,14 +80,17 @@ defmodule EftBuddyWeb.StorylineLive.Index do
     _ in [DBConnection.ConnectionError, Postgrex.Error, Ecto.QueryError] -> %{}
   end
 
-  # The index has two views: the chapter timeline (default) and the
-  # endings overview, toggled by the options bar via `?view=`. A `?q=`
-  # search term (matched against chapter names/summaries/related tasks)
-  # narrows the timeline.
+  # The index has two views: the chapter timeline (default) and the endings
+  # overview, toggled by the options bar via `?view=`. There is no ending to
+  # track here - picking one leaves for the endgame chapter, which owns that
+  # state. A `?q=` search term (matched against chapter
+  # names/summaries/related tasks) narrows the timeline.
   @impl true
   def handle_params(params, _uri, socket) do
     view =
-      if params["view"] == "endings" and socket.assigns.endings, do: "endings", else: "chapters"
+      if params["view"] == "endings" and socket.assigns.branch_objectives != [],
+        do: "endings",
+        else: "chapters"
 
     query =
       params
@@ -100,11 +107,19 @@ defmodule EftBuddyWeb.StorylineLive.Index do
   # shareable/refreshable. `replace: true` keeps history clean.
   @impl true
   def handle_event("search", %{"query" => query}, socket) do
-    {:noreply, push_patch(socket, to: storyline_path(socket.assigns.view, query), replace: true)}
+    {:noreply,
+     push_patch(socket,
+       to: storyline_path(socket.assigns.view, query),
+       replace: true
+     )}
   end
 
   def handle_event("clear_search", _params, socket) do
-    {:noreply, push_patch(socket, to: storyline_path(socket.assigns.view, ""), replace: true)}
+    {:noreply,
+     push_patch(socket,
+       to: storyline_path(socket.assigns.view, ""),
+       replace: true
+     )}
   end
 
   @doc """

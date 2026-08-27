@@ -5,11 +5,6 @@ defmodule EftBuddyWeb.StorylineLive.Show do
 
   alias EftBuddy.Chapters
 
-  # The "Endings" overview (descriptions, rewards, and the Smokey
-  # flowchart) belongs on the endgame chapter where the four endings
-  # branch - everywhere else it would be noise.
-  @endings_chapter "the-ticket"
-
   @impl true
   def mount(%{"slug" => slug}, _session, socket) do
     case Chapters.get_chapter(slug) do
@@ -21,7 +16,11 @@ defmodule EftBuddyWeb.StorylineLive.Show do
          |> push_navigate(to: ~p"/storyline")}
 
       chapter ->
-        endings = endings_for(chapter)
+        # The endgame chapter's page is the guide and payout for whichever
+        # ending you are pursuing. The objectives are not repeated here - each
+        # guide covers them - and which branch leads where is the storyline
+        # index's Endings tab. Every other chapter keeps its walkthrough.
+        ending_views = Chapters.ending_views(chapter)
 
         {:ok,
          socket
@@ -32,13 +31,45 @@ defmodule EftBuddyWeb.StorylineLive.Show do
              "Walkthrough, related quests and gallery for the #{chapter.chapter_name} chapter of the Escape from Tarkov storyline."
          )
          |> assign(:active, :storyline)
-         |> assign(:view, "walkthrough")
          |> assign(:chapter, chapter)
          |> assign(:related_tasks, related_tasks(chapter))
-         |> assign(:endings, endings)
-         |> assign(:item_index, build_item_index(chapter, endings))
-         |> assign(:tabs, tabs(chapter, endings))}
+         |> assign(:ending_views, ending_views)
+         |> assign(:ending, nil)
+         |> assign(:counts, counts(chapter, ending_views, nil))
+         # The rewards under each ending are scraped from the Endings wiki
+         # page, not from this chapter's, so they carry their own credit.
+         |> assign(:endings, if(ending_views != [], do: Chapters.get_endings()))
+         |> assign(:item_index, build_item_index())}
     end
+  end
+
+  # The header's tallies describe what is on screen. For the endgame
+  # chapter that is one ending's guide and payout, not the four the page
+  # could show; everywhere else it is the whole walkthrough.
+  defp counts(chapter, ending_views, ending) do
+    case Enum.find(ending_views, &(&1.slug == ending)) do
+      nil -> %{objectives: chapter.objective_count, images: chapter.image_count}
+      view -> view.counts
+    end
+  end
+
+  # Which ending the reader is pursuing. It lives in `?ending=` so it is
+  # shareable and refresh-safe - and so the storyline index can hand the
+  # reader straight to the one they picked - and an unknown or missing
+  # value falls back to the first rather than blanking the page.
+  @impl true
+  def handle_params(params, _uri, socket) do
+    %{chapter: chapter, ending_views: views} = socket.assigns
+    ending = normalize_ending(params["ending"], views)
+
+    {:noreply,
+     socket |> assign(:ending, ending) |> assign(:counts, counts(chapter, views, ending))}
+  end
+
+  defp normalize_ending(_slug, []), do: nil
+
+  defp normalize_ending(slug, [first | _] = views) do
+    if Enum.any?(views, &(&1.slug == slug)), do: slug, else: first.slug
   end
 
   # Resolve every related-item name the page can render (the chapter's
@@ -47,7 +78,7 @@ defmodule EftBuddyWeb.StorylineLive.Show do
   # genuine items and leave wiki concept links ("building materials", ...)
   # as plain text. Degrades to no resolution if the item DB is
   # unavailable (everything then renders as plain text).
-  defp build_item_index(_chapter, _endings) do
+  defp build_item_index do
     # One shared index for every chapter rather than one built per page. The
     # components only do `Map.get(index, page)`, so a superset resolves
     # identically — and this one is cached and warmed, where a per-chapter index
@@ -59,53 +90,6 @@ defmodule EftBuddyWeb.StorylineLive.Show do
     # rendering an empty index.
     _ in [DBConnection.ConnectionError, Postgrex.Error, Ecto.QueryError] -> %{}
   end
-
-  # The options-bar tabs for this chapter: always the walkthrough, plus
-  # the endings overview where it applies. Each tab patches `?view=` so
-  # navigation flows through `handle_params/3`.
-  #
-  # Because the walkthrough is the only tab on every chapter but the
-  # endgame one, the template only renders the bar when there is more
-  # than one tab - so most chapters show no options bar at all.
-  defp tabs(chapter, endings) do
-    slug = chapter.normalized_name
-
-    [
-      %{
-        label: "WALKTHROUGH",
-        icon: "hero-book-open",
-        patch: ~p"/storyline/#{slug}",
-        filter: "walkthrough"
-      },
-      endings &&
-        %{
-          label: "ENDINGS",
-          icon: "hero-rectangle-group",
-          patch: ~p"/storyline/#{slug}?#{[view: "endings"]}",
-          filter: "endings"
-        }
-    ]
-    |> Enum.filter(& &1)
-  end
-
-  # The options bar switches the page between the walkthrough and (where
-  # it applies) the endings overview. The selected view lives in `?view=`
-  # so it's shareable and refresh-safe, and we fall back to the
-  # walkthrough whenever the requested view isn't available for this
-  # chapter.
-  @impl true
-  def handle_params(params, _uri, socket) do
-    {:noreply, assign(socket, :view, normalize_view(params["view"], socket.assigns))}
-  end
-
-  defp normalize_view(view, assigns) do
-    if view == "endings" and assigns[:endings], do: "endings", else: "walkthrough"
-  end
-
-  # Load the dumped "Endings" page only for the chapter where the endings
-  # branch; nil elsewhere (and if it hasn't been dumped/loaded).
-  defp endings_for(%{normalized_name: @endings_chapter}), do: Chapters.get_endings()
-  defp endings_for(_), do: nil
 
   # Keep only the chapter's wiki references that resolve to a real DB
   # task, carrying the task's display name for the `/tasks?q=` deep-link.

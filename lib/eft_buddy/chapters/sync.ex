@@ -58,7 +58,7 @@ defmodule EftBuddy.Chapters.Sync do
   import Ecto.Query
 
   alias EftBuddy.Repo
-  alias EftBuddy.Chapters.{ChapterPage, Dump}
+  alias EftBuddy.Chapters.{ChapterPage, Dump, Projection}
   alias EftBuddy.Wiki.{Contributors, DumpScript, FileLicense}
   alias EftBuddy.Sync.Reporter
 
@@ -71,6 +71,11 @@ defmodule EftBuddy.Chapters.Sync do
   # description and rewards); it's surfaced under the storyline "Endings"
   # tab, NOT as a chapter in the timeline.
   @extra_pages ["Endings"]
+
+  # Slug of the chapter the four endings branch from — the one page this
+  # sync does not store whole. Mirrors `EftBuddy.Chapters`, which owns the
+  # read side of the same fact.
+  @endgame_slug "the-ticket"
 
   @replace_on_conflict [:chapter_name, :content, :updated_at]
 
@@ -111,6 +116,7 @@ defmodule EftBuddy.Chapters.Sync do
         Dump.run(chapters,
           fetch: &fetch_chapter/1,
           resolve: &resolve_image_urls/1,
+          prune: &prune_sections/2,
           write: &upsert_chapter(&1, &2, rosters)
         )
 
@@ -137,6 +143,53 @@ defmodule EftBuddy.Chapters.Sync do
 
     deleted
   end
+
+  # ── Injected prune: what is worth storing ──────────────────────────
+
+  # Every chapter but one is rendered whole, as a walkthrough, so nothing
+  # is dropped.
+  #
+  # The endgame chapter is not: its page is a guide per ending, and the
+  # storyline index lists the conditional blocks the story forks into.
+  # Nothing renders the rest — the shared objective list, the tabber
+  # intro, the dozen closing steps every ending shares, or the per-ending
+  # rewards the Endings page already carries verbatim. Storing them cost
+  # 136 kB of JSONB and 129 image lookups a day for content no route can
+  # reach.
+  #
+  # Anchored on the slug rather than inferred from the page. The inferred
+  # rule — "a chapter with badges in its headings keeps only its badged
+  # sections" — would silently gut any other chapter the first time an
+  # editor put an icon in one of its headings, and losing a walkthrough
+  # to a cosmetic wiki edit is not a trade worth making to avoid naming
+  # one slug.
+  defp prune_sections(%{normalized_name: @endgame_slug}, sections) do
+    case Enum.filter(sections, &endgame_section?/1) do
+      [] ->
+        # The page was restructured and the rule now matches nothing.
+        # Keeping everything renders too much; keeping nothing renders an
+        # empty chapter, and only one of those is recoverable by looking
+        # at the site.
+        Reporter.silent_warn(
+          "[#{prefix()}] #{@endgame_slug}: no branch sections matched; keeping the whole page."
+        )
+
+        sections
+
+      kept ->
+        kept
+    end
+  end
+
+  defp prune_sections(_chapter, sections), do: sections
+
+  # The lead carries the infobox banner; a `tmpl:` section is one of the
+  # transcluded branch guides; and a section whose own heading carries
+  # ending icons is one of the conditional blocks. Everything else on that
+  # page has no route.
+  defp endgame_section?(%{index: "0"}), do: true
+  defp endgame_section?(%{index: "tmpl:" <> _}), do: true
+  defp endgame_section?(%{wikitext: wikitext}), do: Projection.badged_heading?(wikitext)
 
   # ── Injected write: upsert one chapter's manifest as a row ─────────
 
@@ -174,47 +227,15 @@ defmodule EftBuddy.Chapters.Sync do
 
   # Fetch and assemble a chapter's `parse_sections/1` payload: the
   # lead/infobox wikitext (section 0) plus the wikitext of every other
-  # section.
-  #
-  # Some chapter pages (e.g. "The Ticket") build their branch
-  # walkthroughs by transcluding guide templates. MediaWiki lists those
-  # with `T-N` section indices that CANNOT be fetched by index (the API
-  # answers "there is no section T-N"). So we split the section list:
-  # the page's own sections (integer indices) are fetched by index as
-  # usual, and each distinct transcluded template is fetched as a whole
-  # page and appended as one synthetic section — capturing the branch
-  # guides instead of dropping (or crashing on) them.
+  # section, in the order the page presents them.
   defp fetch_chapter(chapter) do
     title = chapter.wiki_title
 
     with {:ok, raw_sections} <- fetch_sections(title),
          {:ok, lead_wikitext} <- fetch_wikitext_section(title, "0") do
-      {own, template_titles} = partition_sections(raw_sections)
-
-      sections = fetch_section_bodies(title, own) ++ fetch_template_sections(template_titles)
-
-      {:ok, %{lead_wikitext: lead_wikitext, sections: sections}}
+      {:ok, %{lead_wikitext: lead_wikitext, sections: fetch_section_bodies(title, raw_sections)}}
     end
   end
-
-  # Split the API's section list into the page's own sections (plain
-  # integer indices, fetchable by index) and the distinct titles of the
-  # templates transcluded into the page (`T-N` indices carry a
-  # `fromtitle`). Template titles keep first-seen order.
-  defp partition_sections(raw_sections) do
-    own = Enum.filter(raw_sections, &integer_index?(&1.index))
-
-    template_titles =
-      raw_sections
-      |> Enum.reject(&integer_index?(&1.index))
-      |> Enum.map(& &1.fromtitle)
-      |> Enum.reject(&is_nil/1)
-      |> Enum.uniq()
-
-    {own, template_titles}
-  end
-
-  defp integer_index?(index), do: to_string(index) =~ ~r/^\d+$/
 
   # `action=parse&prop=sections` — the non-lead section list. The lead /
   # infobox is synthesized separately (it isn't in the API's list) by
@@ -273,54 +294,99 @@ defmodule EftBuddy.Chapters.Sync do
     end
   end
 
-  # Fetch the wikitext of every page-own section. A per-section error is
-  # logged and skipped rather than failing the whole chapter — one odd
-  # section shouldn't lose an entire chapter's content. (A failure of
-  # the page-level `fetch_sections`/lead fetch still fails the chapter.)
-  defp fetch_section_bodies(title, sections_list) do
-    sections_list
-    |> Enum.reduce([], fn s, acc ->
-      case fetch_wikitext_section(title, s.index) do
-        {:ok, wikitext} ->
-          [%{index: s.index, heading: s.heading, level: s.level, wikitext: wikitext} | acc]
+  @doc """
+  Turn the API's section list into the ordered list of wikitext fetches
+  that reproduces the page: `{:own, section}` for one of the page's own
+  sections, `{:template, title}` for a whole transcluded template.
 
-        {:error, reason} ->
-          Reporter.silent_warn(
-            "[#{prefix()}] section skipped: #{s.heading} (#{s.index}) — #{inspect(reason)}"
-          )
+  Some chapter pages (e.g. "The Ticket") build their branch walkthroughs
+  by transcluding guide templates. MediaWiki lists those with `T-N`
+  section indices that CANNOT be fetched by index (the API answers
+  "there is no section T-N"), so the FIRST `T-N` of a template stands in
+  for the whole template page and its remaining slices are dropped.
 
-          acc
-      end
+  Position is the whole point of doing this in one ordered pass rather
+  than as "every own section, then every template": The Ticket
+  transcludes its four branch guides *inside* `==Guide==`, ahead of the
+  shared closing steps. Appending them after the page's own sections
+  left the "Guide" heading introducing four ending icons and nothing
+  else, with the entire walkthrough stranded at the foot of the page
+  below the endings.
+
+  Public only so it can be tested without HTTP.
+  """
+  @spec fetch_plan([map()]) :: [{:own, map()} | {:template, String.t()}]
+  def fetch_plan(raw_sections) do
+    {plan, _seen} =
+      Enum.reduce(raw_sections, {[], MapSet.new()}, fn s, {acc, seen} ->
+        cond do
+          integer_index?(s.index) ->
+            {[{:own, s} | acc], seen}
+
+          is_nil(s.fromtitle) or MapSet.member?(seen, s.fromtitle) ->
+            {acc, seen}
+
+          true ->
+            {[{:template, s.fromtitle} | acc], MapSet.put(seen, s.fromtitle)}
+        end
+      end)
+
+    Enum.reverse(plan)
+  end
+
+  # Run the plan. A per-section error is logged and skipped rather than
+  # failing the whole chapter — one odd section shouldn't lose an entire
+  # chapter's content. (A failure of the page-level
+  # `fetch_sections`/lead fetch still fails the chapter.)
+  defp fetch_section_bodies(title, raw_sections) do
+    raw_sections
+    |> fetch_plan()
+    |> Enum.reduce([], fn
+      {:own, s}, acc -> prepend_own_section(title, s, acc)
+      {:template, tmpl}, acc -> prepend_template_section(tmpl, acc)
     end)
     |> Enum.reverse()
   end
 
-  # Fetch each transcluded guide template as a whole page and turn it
-  # into one synthetic section, so branch-guide walkthroughs (e.g. The
-  # Ticket's Savior/Debtor/Survivor/Fallen paths) are captured. The
-  # heading is the template title minus the `Template:` namespace; the
-  # downstream parser treats the blob like any other section.
-  defp fetch_template_sections(template_titles) do
-    template_titles
-    |> Enum.reduce([], fn tmpl, acc ->
-      case fetch_page_wikitext(tmpl) do
-        {:ok, wikitext} ->
-          [
-            %{
-              index: "tmpl:" <> tmpl,
-              heading: template_heading(tmpl),
-              level: "2",
-              wikitext: wikitext
-            }
-            | acc
-          ]
+  defp integer_index?(index), do: to_string(index) =~ ~r/^\d+$/
 
-        {:error, reason} ->
-          Reporter.silent_warn("[#{prefix()}] template skipped: #{tmpl} — #{inspect(reason)}")
-          acc
-      end
-    end)
-    |> Enum.reverse()
+  defp prepend_own_section(title, s, acc) do
+    case fetch_wikitext_section(title, s.index) do
+      {:ok, wikitext} ->
+        [%{index: s.index, heading: s.heading, level: s.level, wikitext: wikitext} | acc]
+
+      {:error, reason} ->
+        Reporter.silent_warn(
+          "[#{prefix()}] section skipped: #{s.heading} (#{s.index}) — #{inspect(reason)}"
+        )
+
+        acc
+    end
+  end
+
+  # One transcluded guide template, fetched as a whole page and turned
+  # into a single synthetic section, so branch-guide walkthroughs (e.g.
+  # The Ticket's Savior/Debtor/Survivor/Fallen paths) are captured. The
+  # heading is the template title minus the `Template:` namespace, and
+  # the `tmpl:` index is what tells the downstream parser to keep the
+  # blob's own sub-headings — they are never dumped separately.
+  defp prepend_template_section(tmpl, acc) do
+    case fetch_page_wikitext(tmpl) do
+      {:ok, wikitext} ->
+        [
+          %{
+            index: "tmpl:" <> tmpl,
+            heading: template_heading(tmpl),
+            level: "2",
+            wikitext: wikitext
+          }
+          | acc
+        ]
+
+      {:error, reason} ->
+        Reporter.silent_warn("[#{prefix()}] template skipped: #{tmpl} — #{inspect(reason)}")
+        acc
+    end
   end
 
   defp template_heading("Template:" <> rest), do: rest
