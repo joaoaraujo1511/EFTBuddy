@@ -20,7 +20,8 @@ defmodule EftBuddyWeb.RuntimeConfigTest do
     "SECRET_KEY_BASE" => String.duplicate("x", 64),
     "DATABASE_URL" => "ecto://postgres@127.0.0.1/eft_buddy_shape_test",
     "DB_PASSWORD" => "placeholder",
-    "PHX_HOST" => "eftbuddy.example"
+    "PHX_HOST" => "eftbuddy.example",
+    "PORT" => "4000"
   }
 
   # Optional variables the prod branch reads. Tracked here purely so `on_exit`
@@ -96,7 +97,7 @@ defmodule EftBuddyWeb.RuntimeConfigTest do
   end
 
   describe "every required variable must be present AND non-blank" do
-    for name <- ~w(SECRET_KEY_BASE DATABASE_URL DB_PASSWORD PHX_HOST) do
+    for name <- ~w(SECRET_KEY_BASE DATABASE_URL DB_PASSWORD PHX_HOST PORT) do
       test "#{name} missing" do
         assert_raise RuntimeError, ~r/#{unquote(name)}.*missing/s, fn ->
           read_prod(%{unquote(name) => nil})
@@ -151,6 +152,25 @@ defmodule EftBuddyWeb.RuntimeConfigTest do
         assert get_in(config, [:eft_buddy, EftBuddyWeb.Endpoint, :url, :host]) ==
                  String.trim(good)
       end
+    end
+  end
+
+  describe "PORT must be a TCP port number" do
+    # The value reaches `Endpoint`'s `http:` option, so a garbage one used to
+    # surface as a bare `ArgumentError` from `String.to_integer/1` naming neither
+    # the variable nor the file. These assert it names itself instead.
+    for bad <- ["4000x", "80 80", "0", "65536", "-1", "http://host:4000"] do
+      test "rejects #{inspect(bad)}" do
+        assert_raise RuntimeError, ~r/PORT is not a TCP port number/, fn ->
+          read_prod(%{"PORT" => unquote(bad)})
+        end
+      end
+    end
+
+    test "reaches the endpoint as an integer" do
+      config = read_prod(%{"PORT" => " 4001 "})
+
+      assert get_in(config, [:eft_buddy, EftBuddyWeb.Endpoint, :http, :port]) == 4001
     end
   end
 
