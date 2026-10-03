@@ -1,47 +1,51 @@
 # EFT Buddy
 
-A companion web app for Escape from Tarkov — items, ammo, tasks, maps, the flea
-market, the hideout and the storyline, kept current from public data sources.
+An unofficial companion web app for *Escape from Tarkov*: quests, items, the flea
+market, the hideout, ammo, maps, events and the storyline, kept current from
+public data sources.
 
-Phoenix LiveView front to back: every page is a live view, there are no accounts
-and no login, and the whole catalogue is rebuilt from upstream feeds rather than
-hand-maintained.
+No accounts and no login. Your progress lives in your own browser.
 
-> **Status.** This README is the start of a fuller one. It covers how the app is
-> built, run and deployed; it does not yet cover the domain model, the sync
-> feeds in detail, or contribution guidelines.
+> EFT Buddy is a non-commercial fan project and is **not affiliated with or
+> endorsed by Battlestate Games**. See [`NOTICE`](NOTICE).
 
-## What it is made of
+## Features
 
-| | |
+| Page | What it does |
 |---|---|
-| Language / runtime | Elixir on OTP |
-| Web | Phoenix + LiveView, served by Bandit |
-| Database | PostgreSQL 17, via Ecto |
-| Assets | esbuild + Tailwind, digested and gzipped at build time |
-| Packaging | A Mix-free OTP release in a multi-stage Docker image |
-| Serving | Cloudflare Tunnel in front of the app container |
+| **Tasks** | Quest tracker: mark quests complete, watchlist, filters, prerequisites, Kappa/Lightkeeper progress, wiki walkthroughs |
+| **Items** | Searchable item catalogue with where each item is used (quests, hideout, barters, crafts) |
+| **Flea Market** | Current flea prices with a short price history |
+| **Hideout** | Station levels and what each upgrade needs |
+| **Ammo** | Ballistics table and armour-plate penetration |
+| **Maps** | Interactive maps with extracts, bosses and quest markers |
+| **Events** | Seasonal events and their quests |
+| **Storyline** | Story chapters, including a page per ending |
 
-The image builds unmodified on `amd64` and `arm64`, and CI produces both.
+PVP and PVE are tracked separately. Use **Backup** in the top bar to export,
+import or reset your progress.
 
-## Running it locally
+## Where the data comes from
 
-Requirements: Elixir and Erlang/OTP as pinned in `.tool-versions`, plus a local
-PostgreSQL server.
+- Game data from the [tarkov.dev](https://tarkov.dev) API.
+- Walkthroughs, events and story chapters from the
+  [Escape from Tarkov Wiki](https://escapefromtarkov.fandom.com), under
+  CC BY-NC-SA. Each page credits its source.
+
+Background jobs re-sync everything on a schedule, so the catalogue is never
+edited by hand.
+
+## Run it locally
+
+You need Erlang/OTP and Elixir (versions in `.tool-versions`) and PostgreSQL.
 
 ```sh
-mix setup          # deps, database, assets
-mix phx.server     # http://localhost:$PORT
+cp .env.example .env     # fill it in, then export it into your shell
+mix setup                # dependencies, database, assets
+mix phx.server           # http://localhost:$PORT
 ```
 
-`mix setup` runs `deps.get`, creates and migrates the database, and installs and
-builds the front-end toolchain.
-
-`PORT` is required and has no default — `mix phx.server` refuses to start
-without it, the same as every other variable `config/runtime.exs` reads. There
-is no dotenv loader, so export it (`.env` carries it) before starting the
-server. `mix test` does not need it: the test endpoint never binds, and
-`config/test.exs` pins its port.
+There is no dotenv loader, so export the variables yourself. `PORT` is required.
 
 ### Tests
 
@@ -49,157 +53,80 @@ server. `mix test` does not need it: the test endpoint never binds, and
 mix test
 ```
 
-The suite needs its own database and reads `TEST_DB_*` environment variables —
-deliberately **not** the `DB_*` names development uses, so that pointing dev at a
-remote database can never cause the suite to create, truncate or drop anything
-there. `config/test.exs` explains the reasoning; it is worth reading once before
-setting `TEST_DB_HOSTNAME` to anything other than `localhost`.
+The suite uses its own `TEST_DB_*` variables, never the `DB_*` ones, and refuses
+to run against a non-local database. If your local Postgres isn't the stock
+`postgres`/`postgres`, export `TEST_DB_PASSWORD` first.
 
-### Before pushing
+### Before you push
 
 ```sh
 mix precommit
 ```
 
-Dependency and advisory audits, a warnings-as-errors compile, unused-dependency
-check, formatter, Sobelow, and the test suite. The two audits run first, on
-purpose — `hex.audit` becomes unresolvable once `mix compile` has run in the same
-OS process, and it fails faster on a vulnerable dependency than a full compile
-does.
+This runs the dependency audits, a warnings-as-errors compile, the formatter
+check, Sobelow and the test suite.
 
 ## Configuration
 
-Everything is read at runtime, not compile time, so one image runs in any
-environment. `.env.example` is the reference: every variable is documented there,
-including which ones make the release refuse to boot when unset. Copy it and fill
-it in.
+All configuration is read at runtime, so one image runs anywhere.
+`.env.example` lists the variables. Three are easy to get wrong:
 
-```sh
-cp .env.example .env
-```
+- **`PHX_HOST`** must be a bare hostname (no scheme, port or slash). If it's
+  wrong, pages still load but every live connection is rejected.
+- **`SECRET_KEY_BASE`**: generate it with `mix phx.gen.secret`.
+- **`DB_PASSWORD`** is kept separate from `DATABASE_URL` so it never shows up
+  in logs.
 
-Three that are easy to get wrong:
+## Deploying
 
-- **`PHX_HOST`** must be a **bare hostname** — no scheme, port, path or trailing
-  slash. It is compared verbatim against the `Origin` header of every LiveView
-  socket. Get it wrong and pages render, `/health` still returns 200, and every
-  socket is silently rejected. `config/runtime.exs` rejects malformed values at
-  boot rather than letting that happen.
-- **`SECRET_KEY_BASE`** — generate with `mix phx.gen.secret`.
-- **`DB_PASSWORD`** is deliberately separate from `DATABASE_URL`, so the password
-  stays out of logs, crash dumps and anywhere the URL gets echoed.
-
-`.env` is both gitignored and dockerignored — two separate mechanisms that have
-to be maintained separately.
-
-## Deployment
-
-The app is self-hosted on a single small ARM64 machine — a Raspberry Pi 5 running
-Raspberry Pi OS — with three containers managed by one Compose file:
+The production setup is three containers in one Compose file, behind a
+Cloudflare Tunnel, so the host opens no inbound ports:
 
 ```
-Browser → Cloudflare edge (TLS, caching, DDoS, WAF)
-            ↓  tunnel, outbound-only
-        cloudflared  ──►  app :4000  ──►  db :5432
-                          (compose network)
+Browser → Cloudflare → cloudflared → app :4000 → db :5432
 ```
 
-Three properties of that shape are deliberate:
-
-- **No inbound ports.** `cloudflared` dials out to Cloudflare and holds the
-  connection open. The host needs no port forwarding, no static address, and
-  public DNS points at Cloudflare rather than at the origin.
-- **The database publishes no host port at all.** It is reachable only as `db` on
-  the Compose network. For a `psql` prompt, go through the container.
-- **Rootless Docker.** The daemon runs as an unprivileged user, so a container
-  breakout lands as that user rather than as root. This is why the database uses
-  a named volume rather than a bind mount, and why nothing here publishes a port
-  below 1024.
-
-### Deploying
+You need `TUNNEL_TOKEN` in `.env` for the `cloudflared` service.
 
 ```sh
 git pull
 GIT_SHA=$(git rev-parse --short HEAD) docker compose build app
-docker compose run --rm migrate
-docker compose up -d
+docker compose run --rm migrate < /dev/null
+docker compose up -d < /dev/null
 ```
 
-Build **before** `up -d`, and never `down` first: the release build takes minutes
-and `down` means offline for all of them, while `up -d` already recreates a
-container whose image changed.
+- Build **before** `up -d`, and don't run `down` first. The old container keeps
+  serving while the new image builds.
+- Migrations run as their own one-shot container, not on app start.
+- Keep `< /dev/null` when scripting this over SSH. Compose reads stdin and will
+  otherwise swallow the rest of your script.
 
-Migrations run as a separate one-shot container, deliberately outside the app's
-startup path. Migrating on boot makes every restart race itself once there is
-more than one instance, and turns a failed migration into a crash-loop rather
-than a command that reports an error.
+### Is it healthy?
 
-> When scripting a deploy over SSH by piping into `bash -s`, append `< /dev/null`
-> to every `docker compose run` and `exec`. Compose reads stdin, and stdin is the
-> rest of your script — it will silently swallow the remaining commands, and the
-> deploy will look like it succeeded.
-
-### Verifying a deploy
-
-```sh
-curl -s http://127.0.0.1:4000/health
-```
-
-`GIT_SHA` is baked into the image and reported as `version`, so confirming a
-deploy landed is one request rather than comparing a commit date, an image date
-and a container start time by eye. **Check the reported SHA, not the exit code.**
-
-`/health/sync` reports every upstream feed's state and age, which is the reliable
-signal for whether the catalogue is current.
-
-### Logs
-
-```sh
-docker compose logs -f app
-docker compose logs -f db     # queries slower than 1s
-docker compose logs -f cloudflared
-```
-
-Container logs are capped at 10 MB × 3 per container, so history does not grow
-without bound on flash storage.
-
-## Operational notes
-
-**The operator dashboard** (LiveDashboard) runs on its own endpoint and port, and
-starts only when `ADMIN_DASHBOARD_PORT` is set. Compose publishes it to
-**loopback only**. That binding is the entire access control, and it is not
-cosmetic: the page can read ETS, list processes and kill them. Reach it by
-forwarding the port over SSH, so the operator's SSH key is what guards it.
-
-**Storage.** The Postgres settings in `docker-compose.yml` are tuned for 8 GB of
-RAM, four cores, and a data directory on flash. The WAL settings in particular
-trade latency for fewer, larger writes, because flash wears out by write volume.
-Revisit them if the data directory ever moves to an SSD.
-
-**Backups.** Only one table is not re-derivable from upstream sources; everything
-else the sync feeds would refill on their own. A nightly logical dump with
-retention covers it, and a backup that has never been restored is not a backup —
-test the restore into a scratch database.
-
-## Repository layout
-
-| Path | |
+| Endpoint | Meaning |
 |---|---|
-| `lib/eft_buddy/` | domain logic, sync feeds, caching |
-| `lib/eft_buddy_web/` | endpoint, router, LiveViews, components |
-| `config/` | `config.exs`, per-env files, and `runtime.exs` for release config |
-| `priv/repo/migrations/` | schema history |
-| `test/` | ExUnit suite |
-| `rel/overlays/bin/` | release entrypoints (`server`, `migrate`) |
+| `/health` | The app and database are up. `version` is the deployed commit, so check it after a deploy |
+| `/health/sync` | Every data feed is fresh. Returns 503 when any feed is stale, failing or blocked by a safety guard |
 
-`AGENTS.md` holds the Elixir, Phoenix and LiveView conventions this codebase
-follows. Comments throughout the tree tend to explain **why** a thing is the way
-it is, frequently because the alternative was tried and broke something — they
-are worth reading before changing the code they sit above.
+Point an uptime monitor at `/health/sync`. Stale game data still renders fine,
+so this is the only place it shows.
 
-Host-specific operational detail (addresses, identifiers, and the exact state of
-the deployed machine) is kept out of this repository by design.
+## Project layout
+
+| Path | Contents |
+|---|---|
+| `lib/eft_buddy/` | Domain logic, data feeds (`*/sync.ex`), caching |
+| `lib/eft_buddy_web/` | Router, LiveViews, components |
+| `assets/` | JavaScript and CSS |
+| `priv/repo/migrations/` | Database schema |
+| `test/` | Test suite |
+| `config/runtime.exs` | All runtime configuration |
+
+Comments in the code usually explain *why* something is done a certain way,
+often because the obvious alternative broke in production. Read them before
+changing the code.
 
 ## Licence
 
-See `LICENSE` and `NOTICE`.
+[GNU AGPL v3](LICENSE). Game names, images and other material belong to their
+owners; see [`NOTICE`](NOTICE) for attribution and third-party terms.
