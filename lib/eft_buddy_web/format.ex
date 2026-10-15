@@ -26,6 +26,24 @@ defmodule EftBuddyWeb.Format do
   def thousands(_), do: "-"
 
   @doc """
+  A recipe count: `"3"` for whole numbers, `"355.92"` for fractions.
+
+  Barter and craft ingredient counts are `numeric` because upstream reports
+  some as fractions (Ref's GP-coin prices, 0.66 of a Water filter); they
+  render the way tarkov.dev renders them, without trailing zeros.
+
+      iex> EftBuddyWeb.Format.quantity(Decimal.new("355.920"))
+      "355.92"
+      iex> EftBuddyWeb.Format.quantity(Decimal.new("3"))
+      "3"
+      iex> EftBuddyWeb.Format.quantity(2)
+      "2"
+  """
+  def quantity(%Decimal{} = d), do: d |> Decimal.normalize() |> Decimal.to_string(:normal)
+  def quantity(n) when is_integer(n), do: Integer.to_string(n)
+  def quantity(_), do: "-"
+
+  @doc """
   Human raid-duration label. The tarkov.dev API gives minutes; `nil` and
   non-positive values (some event maps report `-1`) render as a dash.
   """

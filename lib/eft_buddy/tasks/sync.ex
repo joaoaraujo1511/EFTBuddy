@@ -264,6 +264,7 @@ defmodule EftBuddy.Tasks.Sync do
     |> Ecto.Multi.run(:cleanup, fn repo, %{reference: reference} ->
       cleanup_stale(repo, tasks, game_mode, reference)
     end)
+    |> Ecto.Multi.run(:prune_orphan_skills, fn repo, _ -> prune_orphan_skills(repo) end)
     # 9. Final counts.
     |> Ecto.Multi.run(:counts, fn repo, _ ->
       {:ok,
@@ -315,10 +316,12 @@ defmodule EftBuddy.Tasks.Sync do
     # left untouched. Overwriting `name` here used to be harmless, but Ground
     # Zero's canonical row deliberately carries its 21+ sibling's name and
     # would be clobbered back to the base name on every task sync.
-    bulk_upsert(repo, GameMap, rows,
-      conflict_target: :external_id,
-      on_conflict: :nothing
-    )
+    #
+    # No conflict target, so a row clashing on EITHER unique index (external
+    # id or slug) is skipped. With `conflict_target: :external_id`, a map whose
+    # id upstream had rotated still hit the slug index, raised 23505, and
+    # rolled the whole TasksSync run back until MapsSync caught up.
+    bulk_upsert(repo, GameMap, rows, on_conflict: :nothing)
   end
 
   # Every map reference in the snapshot: each task's primary map plus every
@@ -1100,6 +1103,24 @@ defmodule EftBuddy.Tasks.Sync do
 
   # ── Cleanup ────────────────────────────────────────────
 
+  # Skills nothing points at any more. Task skills used to be stored under the
+  # game's raw enum keys ("Sniper", "HideoutManagement"); now that they are
+  # translated, the old rows lose their last reference once both modes have
+  # re-synced, and nothing else would remove them. Skills are referenced only by
+  # task skill rewards and hideout skill requirements, so a skill neither uses
+  # is safe to delete, and no cascade follows.
+  defp prune_orphan_skills(repo) do
+    {count, _} =
+      from(s in Skill,
+        where: s.id not in subquery(from(r in SkillReward, select: r.skill_id)),
+        where:
+          s.id not in subquery(from(r in EftBuddy.Hideout.SkillRequirement, select: r.skill_id))
+      )
+      |> repo.delete_all()
+
+    {:ok, count}
+  end
+
   defp cleanup_stale(repo, tasks, game_mode, reference) do
     valid_task_ids = Enum.map(tasks, & &1["id"])
 
@@ -1173,23 +1194,21 @@ defmodule EftBuddy.Tasks.Sync do
   # cols ≈ 30k params).
   defp bulk_upsert(_repo, _schema, [], _opts), do: {:ok, 0}
 
+  # `:conflict_target` may be omitted only with `on_conflict: :nothing`, which
+  # then skips a row clashing on any unique index (see the maps seed).
   defp bulk_upsert(repo, schema, rows, opts) do
-    conflict_target = Keyword.fetch!(opts, :conflict_target)
-
     on_conflict =
       Keyword.get_lazy(opts, :on_conflict, fn ->
         {:replace, Keyword.fetch!(opts, :replace)}
       end)
 
+    insert_opts = [on_conflict: on_conflict] ++ Keyword.take(opts, [:conflict_target])
+
     total =
       rows
       |> Enum.chunk_every(2_000)
       |> Enum.reduce(0, fn chunk, acc ->
-        {count, _} =
-          repo.insert_all(schema, chunk,
-            on_conflict: on_conflict,
-            conflict_target: conflict_target
-          )
+        {count, _} = repo.insert_all(schema, chunk, insert_opts)
 
         acc + count
       end)

@@ -619,6 +619,7 @@ defmodule EftBuddy.TarkovApi do
       "id" => c["id"],
       "duration" => c["duration"],
       "level" => c["level"],
+      "gameEditions" => List.wrap(c["gameEditions"]),
       "station" => station_ref(c["station"], stations),
       "taskUnlock" => task_unlock_ref(c["taskUnlock"]),
       "requiredItems" =>
@@ -632,8 +633,12 @@ defmodule EftBuddy.TarkovApi do
   # `%{"item" => id}` with no count; GraphQL put them in `requiredItems`. They
   # used to be dropped, so a craft like "Reprogrammed RFID keycard" was shown
   # without its quest item, as if complete. One of each is consumed.
+  #
+  # Flagged `questItem`, because upstream can name a quest item it doesn't
+  # define yet; `Items.Sync` stores such an ingredient unresolved rather than
+  # dropping the whole craft.
   defp quest_item_ingredient(%{"item" => id}) when is_binary(id),
-    do: contained_item(%{"item" => id, "count" => 1})
+    do: %{"item" => id, "count" => 1} |> contained_item() |> Map.put("questItem", true)
 
   defp quest_item_ingredient(_), do: nil
 
