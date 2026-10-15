@@ -208,6 +208,12 @@ defmodule EftBuddy.Maps.SyncTest do
   @tag :external
   @tag timeout: 120_000
   test "upstream's boss spawn keys still intersect its spawn zone names" do
+    # This test exists to reach the live API, so it lifts the test config that
+    # routes every tarkov.dev request to `Req.Test` fixtures.
+    saved = Application.get_env(:eft_buddy, :tarkov_req_options)
+    Application.put_env(:eft_buddy, :tarkov_req_options, [])
+    on_exit(fn -> Application.put_env(:eft_buddy, :tarkov_req_options, saved) end)
+
     {:ok, maps} = EftBuddy.TarkovApi.maps()
 
     orphaned =

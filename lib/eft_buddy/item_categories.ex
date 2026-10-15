@@ -110,7 +110,9 @@ defmodule EftBuddy.ItemCategories do
         "Assault carbine",
         "Assault rifle",
         "Revolver",
-        "Throwable weapon"
+        "Throwable weapon",
+        # The CS gas grenade's leaf category; its parent is "Throwable weapon".
+        "Volumetric Throw Weapon"
       ]
     },
     %{
@@ -134,6 +136,8 @@ defmodule EftBuddy.ItemCategories do
       categories: [
         "Tool",
         "Tapes",
+        # PMC personnel files, financial documents and the like.
+        "Battle Pass Document",
         "Recorder",
         "Other",
         "Notes",
