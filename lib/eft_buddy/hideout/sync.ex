@@ -63,11 +63,11 @@ defmodule EftBuddy.Hideout.Sync do
   # `run/0` (from `EftBuddy.Sync.Scheduler`) wraps this in the cluster-wide lock.
   def do_run do
     Reporter.with_run("HideoutSync", fn ->
-      case fetch_stations() do
-        {:ok, raw_stations} ->
+      case EftBuddy.TarkovApi.with_run_cache(&fetch_stations_and_traders/0) do
+        {:ok, raw_stations, traders} ->
           stations = sanitize_stations(raw_stations)
 
-          case upsert_all(stations) do
+          case upsert_all(stations, traders) do
             {:ok, %{stations_count: s, levels_count: l}} ->
               {:ok, %{stations: s, levels: l}}
 
@@ -184,7 +184,17 @@ defmodule EftBuddy.Hideout.Sync do
 
   # ── Transaction ────────────────────────────────────────
 
-  defp upsert_all(stations) do
+  # Every upstream trader, not only those a hideout level mentions: see
+  # `EftBuddy.TarkovApi.traders/1`. This feed runs before barters in the cold
+  # start, so a barter from any trader finds its trader row.
+  defp fetch_stations_and_traders do
+    with {:ok, stations} <- fetch_stations(),
+         {:ok, traders} <- EftBuddy.TarkovApi.traders() do
+      {:ok, stations, traders}
+    end
+  end
+
+  defp upsert_all(stations, traders) do
     Ecto.Multi.new()
     # 0. Read before step 1 re-stamps every station it touches — see
     #    `Sync.Helpers.cleanup_reference/3`.
@@ -203,7 +213,7 @@ defmodule EftBuddy.Hideout.Sync do
     |> Ecto.Multi.run(:skill_map, fn repo, _ ->
       {:ok, fetch_named_map(repo, Skill)}
     end)
-    |> Ecto.Multi.run(:upsert_traders, &upsert_traders(&1, stations, &2))
+    |> Ecto.Multi.run(:upsert_traders, fn repo, _ -> upsert_traders(repo, stations, traders) end)
     |> Ecto.Multi.run(:trader_map, fn repo, _ ->
       {:ok, fetch_named_map(repo, Trader)}
     end)
@@ -336,20 +346,25 @@ defmodule EftBuddy.Hideout.Sync do
 
   # ── Traders ────────────────────────────────────────────
 
-  defp upsert_traders(repo, stations, _changes) do
+  defp upsert_traders(repo, stations, traders) do
     now = now_naive()
 
-    rows =
+    referenced =
       stations
       |> Enum.flat_map(fn s -> s["levels"] end)
       |> Enum.flat_map(fn l -> l["traderRequirements"] || [] end)
       |> Enum.map(& &1["trader"])
+
+    rows =
+      (traders ++ referenced)
+      |> Enum.filter(&is_binary(&1["normalizedName"]))
       |> Enum.uniq_by(& &1["normalizedName"])
       |> Enum.map(fn t ->
         %{
           id: Ecto.UUID.generate(),
           name: t["name"],
           normalized_name: t["normalizedName"],
+          image_link: t["imageLink"],
           inserted_at: now,
           updated_at: now
         }
@@ -362,7 +377,7 @@ defmodule EftBuddy.Hideout.Sync do
       _ ->
         {count, _} =
           repo.insert_all(Trader, rows,
-            on_conflict: {:replace, [:name, :updated_at]},
+            on_conflict: {:replace, [:name, :image_link, :updated_at]},
             conflict_target: :normalized_name
           )
 
