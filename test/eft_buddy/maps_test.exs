@@ -127,7 +127,7 @@ defmodule EftBuddy.MapsTest do
     end
   end
 
-  describe "quest_counts/0" do
+  describe "quest_counts/1" do
     test "counts a map's primary tasks and objective references without double-counting" do
       map = Fixtures.game_map(%{normalized_name: "customs"})
       other = Fixtures.game_map(%{normalized_name: "woods"})
@@ -151,6 +151,23 @@ defmodule EftBuddy.MapsTest do
     test "a map with no tasks is simply absent" do
       map = Fixtures.game_map(%{normalized_name: "customs"})
       refute Map.has_key?(Maps.quest_counts(), map.id)
+    end
+
+    test "counts only the requested mode's tasks" do
+      # REGRESSION (audit H5). Tasks are stored once per mode, and counting every
+      # row put each quest on the badge twice, in either mode.
+      map = Fixtures.game_map(%{normalized_name: "customs"})
+
+      for mode <- ["regular", "pve"] do
+        task = Fixtures.task(%{map_id: map.id, game_mode: mode})
+        obj = Fixtures.objective(%{task_id: task.id})
+        Repo.insert!(%EftBuddy.Tasks.ObjectiveMap{objective_id: obj.id, map_id: map.id})
+      end
+
+      Fixtures.task(%{map_id: map.id, game_mode: "pve"})
+
+      assert Maps.quest_counts(:pvp)[map.id] == 1
+      assert Maps.quest_counts(:pve)[map.id] == 2
     end
   end
 

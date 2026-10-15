@@ -18,6 +18,8 @@ defmodule EftBuddy.Maps.Hazard do
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
   schema "map_hazards" do
+    # "regular" | "pve": upstream publishes map data per mode.
+    field :game_mode, :string, default: "regular"
     belongs_to :map, EftBuddy.Maps.Map
 
     field :hazard_type, :string

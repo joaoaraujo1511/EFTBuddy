@@ -27,6 +27,8 @@ defmodule EftBuddy.Maps.Variant do
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
   schema "map_variants" do
+    # "regular" | "pve": upstream publishes map data per mode.
+    field :game_mode, :string, default: "regular"
     belongs_to :map, EftBuddy.Maps.Map
 
     field :external_id, :string

@@ -49,12 +49,15 @@ defmodule EftBuddy.Maps.Map do
     # 2D / 3D mode toggle and variant looping. See `EftBuddy.Maps.Sync`.
     field :image_variants, :map, default: %{}
     field :description, :string
-    field :enemies, {:array, :string}, default: []
-    field :raid_duration, :integer
-    field :players, :string
-    field :min_player_level, :integer
-    field :max_player_level, :integer
-    field :access_keys_min_player_level, :integer
+
+    # Per game mode upstream, so stored in `map_mode_details` and copied onto the
+    # map by `EftBuddy.Maps` for the active mode.
+    field :enemies, {:array, :string}, virtual: true, default: []
+    field :raid_duration, :integer, virtual: true
+    field :players, :string, virtual: true
+    field :min_player_level, :integer, virtual: true
+    field :max_player_level, :integer, virtual: true
+    field :access_keys_min_player_level, :integer, virtual: true
 
     # ── Interactive-viewer rendering config ──────────────
     # Synced from tarkov-dev's `src/data/maps.json` (see `EftBuddy.Maps.Sync`)
@@ -76,6 +79,7 @@ defmodule EftBuddy.Maps.Map do
     field :image_author_link, :string
 
     has_many :tasks, EftBuddy.Tasks.Task, foreign_key: :map_id
+    has_many :mode_details, EftBuddy.Maps.MapModeDetail, foreign_key: :map_id
 
     has_many :variants, Variant, foreign_key: :map_id
 

@@ -43,6 +43,8 @@ defmodule EftBuddy.Maps.Boss do
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
   schema "map_bosses" do
+    # "regular" | "pve": upstream publishes map data per mode.
+    field :game_mode, :string, default: "regular"
     belongs_to :map, EftBuddy.Maps.Map
     belongs_to :variant, EftBuddy.Maps.Variant
 
