@@ -326,7 +326,9 @@ defmodule EftBuddy.ItemsTest do
       assert [entry] = Items.get_item_details(reward.id).obtained_from_barters
       assert entry.trader_name == "Prapor"
       assert entry.level == 2
-      assert [%{item: %{name: "Wires"}, count: 3, quantity: 3}] = entry.required
+      # Ingredient counts are `numeric`: upstream reports some as fractions.
+      assert [%{item: %{name: "Wires"}, count: count, quantity: quantity}] = entry.required
+      assert Decimal.equal?(count, 3) and Decimal.equal?(quantity, 3)
     end
   end
 

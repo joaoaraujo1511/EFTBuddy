@@ -15,8 +15,8 @@ defmodule EftBuddy.Items.BarterRequiredItem do
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
   schema "items_barter_required_items" do
-    field(:count, :integer)
-    field(:quantity, :integer)
+    field(:count, :decimal)
+    field(:quantity, :decimal)
     field(:attributes, :map, default: %{})
 
     belongs_to(:barter, EftBuddy.Items.Barter)

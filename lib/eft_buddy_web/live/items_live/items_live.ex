@@ -715,12 +715,14 @@ defmodule EftBuddyWeb.ItemsLive.Index do
 
   Attributes:
     * `:item` (required) - `%EftBuddy.Items.Item{}` with at least
-      `name` and `icon_link`.
-    * `:quantity` (required) - integer to render in the badge.
+      `name` and `icon_link`, or nil for an ingredient upstream names but
+      doesn't define yet, which renders as an unknown quest item.
+    * `:quantity` (required) - integer or `Decimal` for the badge; fractions
+      show as tarkov.dev shows them (`x355.92`).
     * `:highlight` (optional, default false) - accent the tile.
   """
   attr(:item, :any, required: true)
-  attr(:quantity, :integer, required: true)
+  attr(:quantity, :any, required: true)
   attr(:highlight, :boolean, default: false)
 
   def craft_item_tile(assigns) do
@@ -734,7 +736,8 @@ defmodule EftBuddyWeb.ItemsLive.Index do
         if(@highlight, do: "border-amber", else: "border-line")
       ]}
       style={"background-color: #{BackgroundColor.css(@item && @item.background_color)}"}
-      title={@item && @item.name}
+      title={if @item, do: @item.name, else: "Unknown quest item"}
+      aria-label={unless @item, do: "Unknown quest item"}
     >
       <%= if @item && (@item.image_512px_link || @item.icon_link) do %>
         <img
@@ -750,10 +753,16 @@ defmodule EftBuddyWeb.ItemsLive.Index do
           </span>
         </span>
       <% else %>
-        <.icon name="hero-cube" class="w-5 h-5 text-line-strong" />
+        <%!-- No item at all means an ingredient upstream hasn't defined yet;
+             a question mark says "unknown" where a cube would read as a
+             missing image. --%>
+        <.icon
+          name={if @item, do: "hero-cube", else: "hero-question-mark-circle"}
+          class={if @item, do: "w-5 h-5 text-line-strong", else: "w-7 h-7 text-fog-400"}
+        />
       <% end %>
       <span class="absolute top-0 right-0 t-num text-[10px] text-fog-100 bg-ink-900/90 border-l border-b border-line px-1 leading-tight">
-        ×{@quantity}
+        ×{EftBuddyWeb.Format.quantity(@quantity)}
       </span>
     </a>
     """
@@ -785,6 +794,15 @@ defmodule EftBuddyWeb.ItemsLive.Index do
           </a>
           <span class="mx-1">·</span>
           <span class="text-fog-200">{format_duration(@row.duration)}</span>
+          <%!-- Upstream gives the game's internal edition ids and no names for
+               them, so the badge doesn't guess; the ids are in the tooltip. --%>
+          <span
+            :if={@row[:game_editions] not in [nil, []]}
+            class="ml-2 inline-block border border-amber/60 text-amber text-[10px] uppercase tracking-wider px-1.5 py-0.5"
+            title={"Game editions: " <> Enum.join(@row.game_editions, ", ")}
+          >
+            Limited to certain game editions
+          </span>
         <% else %>
           <span class="text-fog-200 font-medium">{@row.trader_name} level {@row.level}</span>
           <%= if @row.buy_limit do %>
