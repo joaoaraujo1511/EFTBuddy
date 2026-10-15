@@ -79,7 +79,7 @@ defmodule EftBuddy.Tasks.Sync do
   # full tarkov.dev `maps` query). We still upsert the bare
   # name/normalized_name here as a resilience fallback (so a task can
   # always resolve its `map_id` even if the Maps sync hasn't run), but
-  # we deliberately no longer *delete* stale maps in `cleanup_stale/2` —
+  # we deliberately no longer *delete* stale maps in `cleanup_stale/4` —
   # that lifecycle belongs to the Maps sync, and pruning here would
   # cascade-delete the rich map sub-entities (bosses, extracts, …).
   alias EftBuddy.Maps.Map, as: GameMap
@@ -222,6 +222,12 @@ defmodule EftBuddy.Tasks.Sync do
       {:ok, fetch_external_id_map(repo, Item)}
     end)
     # 5. Tasks themselves. trader_id / map_id resolved via the maps above.
+    # Read before the upsert re-stamps every task it touches — see
+    # `Sync.Helpers.cleanup_reference/3`. Scoped to this mode, like the prune.
+    |> Ecto.Multi.run(:reference, fn repo, _ ->
+      mode_tasks = from(t in Task, where: t.game_mode == ^game_mode)
+      {:ok, cleanup_reference(repo, mode_tasks, cleanup_window_ms(effective_interval_ms()))}
+    end)
     |> Ecto.Multi.run(:upsert_tasks, fn repo, ctx -> upsert_tasks(repo, tasks, ctx, game_mode) end)
     |> Ecto.Multi.run(:task_id_map, fn repo, _ ->
       {:ok, fetch_task_id_map(repo, game_mode)}
@@ -255,7 +261,9 @@ defmodule EftBuddy.Tasks.Sync do
     |> Ecto.Multi.run(:rebuild_unlocks, fn repo, _ -> rebuild_unlocks(repo) end)
     # 8. Drop tasks/maps that disappeared from the snapshot. FK
     #    cascades clean up their children.
-    |> Ecto.Multi.run(:cleanup, fn repo, _ -> cleanup_stale(repo, tasks, game_mode) end)
+    |> Ecto.Multi.run(:cleanup, fn repo, %{reference: reference} ->
+      cleanup_stale(repo, tasks, game_mode, reference)
+    end)
     # 9. Final counts.
     |> Ecto.Multi.run(:counts, fn repo, _ ->
       {:ok,
@@ -1092,19 +1100,16 @@ defmodule EftBuddy.Tasks.Sync do
 
   # ── Cleanup ────────────────────────────────────────────
 
-  defp cleanup_stale(repo, tasks, game_mode) do
+  defp cleanup_stale(repo, tasks, game_mode, reference) do
     valid_task_ids = Enum.map(tasks, & &1["id"])
 
     # Safety guard: a truncated-but-200 tasks snapshot would otherwise
     # delete every task missing from it and cascade-delete its
     # objectives / requirements / rewards / unlocks. Refuse the prune
-    # when the snapshot is implausibly small relative to the table.
-    # Scoped to this game mode so the count comparison is apples to
-    # apples (the snapshot only covers one mode).
-    current_tasks =
-      repo.aggregate(from(t in Task, where: t.game_mode == ^game_mode), :count, :id)
-
-    case cleanup_safe?(current_tasks, length(valid_task_ids)) do
+    # when the snapshot is implausibly small relative to the tasks seen
+    # recently. `reference` is scoped to this game mode so the comparison
+    # is apples to apples (the snapshot only covers one mode).
+    case cleanup_safe?(reference, length(valid_task_ids)) do
       {:skip, reason} ->
         Logger.error(
           "[#{prefix()}] Refusing stale task cleanup (#{game_mode}): #{reason}. Keeping existing rows."
@@ -1127,7 +1132,7 @@ defmodule EftBuddy.Tasks.Sync do
         # a task happens to reference). Deleting maps from the tasks
         # snapshot would cascade-delete the rich map sub-entities
         # (bosses, extracts, locks, …) and orphan `tasks.map_id`. Map
-        # cleanup lives in `Maps.Sync.cleanup_stale/2`.
+        # cleanup lives in `Maps.Sync.cleanup_stale/3`.
         {:ok, %{tasks: task_count}}
     end
   end

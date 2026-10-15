@@ -529,6 +529,11 @@ defmodule EftBuddy.Maps.Sync do
     # 1. Maps themselves (keyed on the stable normalized_name slug so a
     #    map's UUID survives even when the API rotates its external id —
     #    which otherwise collides on the normalized_name unique index).
+    # Read before the upsert re-stamps every map it touches — see
+    # `Sync.Helpers.cleanup_reference/3`.
+    |> Ecto.Multi.run(:reference, fn repo, _ ->
+      {:ok, cleanup_reference(repo, GameMap, cleanup_window_ms(effective_interval_ms()))}
+    end)
     |> Ecto.Multi.run(:upsert_maps, fn repo, _ -> upsert_maps(repo, maps, media) end)
     |> Ecto.Multi.run(:map_id_map, fn repo, _ ->
       {:ok, fetch_external_id_map(repo, GameMap)}
@@ -556,7 +561,9 @@ defmodule EftBuddy.Maps.Sync do
       replace_access_keys(repo, maps, ctx)
     end)
     # 4. Drop maps that disappeared from the snapshot (cascades children).
-    |> Ecto.Multi.run(:cleanup, fn repo, _ -> cleanup_stale(repo, maps) end)
+    |> Ecto.Multi.run(:cleanup, fn repo, %{reference: reference} ->
+      cleanup_stale(repo, maps, reference)
+    end)
     # 5. Final counts.
     |> Ecto.Multi.run(:counts, fn repo, _ ->
       {:ok,
@@ -1169,11 +1176,10 @@ defmodule EftBuddy.Maps.Sync do
 
   # ── Cleanup ────────────────────────────────────────────
 
-  defp cleanup_stale(repo, maps) do
+  defp cleanup_stale(repo, maps, reference) do
     valid_map_ids = Enum.map(maps, & &1["id"])
-    current = repo.aggregate(GameMap, :count, :id)
 
-    case cleanup_safe?(current, length(valid_map_ids)) do
+    case cleanup_safe?(reference, length(valid_map_ids)) do
       {:skip, reason} ->
         Logger.error(
           "[#{prefix()}] Refusing stale map cleanup: #{reason}. Keeping existing rows."

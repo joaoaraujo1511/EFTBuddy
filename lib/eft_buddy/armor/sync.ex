@@ -89,10 +89,17 @@ defmodule EftBuddy.Armor.Sync do
   defp upsert_all(plates) do
     Ecto.Multi.new()
     |> Ecto.Multi.run(:item_id_map, fn repo, _ -> {:ok, fetch_item_id_map(repo)} end)
+    # Before the upsert, which re-stamps every row it touches — see
+    # `Sync.Helpers.cleanup_reference/3`.
+    |> Ecto.Multi.run(:reference, fn repo, _ ->
+      {:ok, cleanup_reference(repo, Plate, cleanup_window_ms(effective_interval_ms()))}
+    end)
     |> Ecto.Multi.run(:upsert, fn repo, %{item_id_map: item_ids} ->
       upsert_plates(repo, plates, item_ids)
     end)
-    |> Ecto.Multi.run(:cleanup, fn repo, _ -> cleanup_stale(repo, plates) end)
+    |> Ecto.Multi.run(:cleanup, fn repo, %{reference: reference} ->
+      cleanup_stale(repo, plates, reference)
+    end)
     |> Ecto.Multi.run(:counts, fn repo, _ ->
       {:ok, %{armor_plates: repo.aggregate(Plate, :count, :id)}}
     end)
@@ -164,11 +171,10 @@ defmodule EftBuddy.Armor.Sync do
 
   # ── Cleanup ────────────────────────────────────────────
 
-  defp cleanup_stale(repo, plates) do
+  defp cleanup_stale(repo, plates, reference) do
     valid_ids = Enum.map(plates, & &1["id"])
-    current = repo.aggregate(Plate, :count, :id)
 
-    case cleanup_safe?(current, length(valid_ids)) do
+    case cleanup_safe?(reference, length(valid_ids)) do
       {:skip, reason} ->
         Logger.error(
           "[#{prefix()}] Refusing stale plate cleanup: #{reason}. Keeping existing rows."
