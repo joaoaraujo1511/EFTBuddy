@@ -15,10 +15,26 @@ defmodule EftBuddy.Maps do
 
   import Ecto.Query
 
-  alias EftBuddy.Maps.Boss
   alias EftBuddy.Maps.Bosses
   alias EftBuddy.Maps.Map, as: GameMap
+
+  alias EftBuddy.Maps.{
+    AccessKey,
+    Boss,
+    Extract,
+    Hazard,
+    Lock,
+    LootContainer,
+    MapModeDetail,
+    Spawn,
+    StationaryWeapon,
+    Switch,
+    Transit,
+    Variant
+  }
+
   alias EftBuddy.Cache
+  alias EftBuddy.GameMode
   alias EftBuddy.Repo
   alias EftBuddy.Tasks.{Objective, ObjectiveMap, Task}
 
@@ -95,24 +111,38 @@ defmodule EftBuddy.Maps do
   # anything if the order is stable. Unordered, the preload returns Postgres
   # heap order, so a re-sync or a VACUUM could silently demote a map's headline
   # boss. `position` is the API's own ordering, synced explicitly.
-  @boss_order from(b in Boss, order_by: [asc: b.position, asc: b.id])
+  defp boss_order(mode),
+    do: from(b in Boss, where: b.game_mode == ^mode, order_by: [asc: b.position, asc: b.id])
+
+  defp in_mode(schema, mode), do: from(r in schema, where: r.game_mode == ^mode)
 
   # Everything the detail page needs, with the second-level joins
   # materialized so the template renders item / destination-map links
-  # without N+1 queries.
-  @detail_preloads [
-    :hazards,
-    :spawns,
-    :loot_containers,
-    :stationary_weapons,
-    :switches,
-    :variants,
-    [bosses: {@boss_order, :variant}],
-    [extracts: :transfer_item],
-    [transits: :destination_map],
-    [locks: :key_item],
-    [access_keys: :item]
-  ]
+  # without N+1 queries. Every association is per game mode upstream, so each
+  # preload is limited to the active mode's rows.
+  defp detail_preloads(mode) do
+    [
+      hazards: in_mode(Hazard, mode),
+      spawns: in_mode(Spawn, mode),
+      loot_containers: in_mode(LootContainer, mode),
+      stationary_weapons: in_mode(StationaryWeapon, mode),
+      switches: in_mode(Switch, mode),
+      variants: in_mode(Variant, mode),
+      bosses: {boss_order(mode), :variant},
+      extracts: {in_mode(Extract, mode), :transfer_item},
+      transits: {in_mode(Transit, mode), :destination_map},
+      locks: {in_mode(Lock, mode), :key_item},
+      access_keys: {in_mode(AccessKey, mode), :item},
+      mode_details: in_mode(MapModeDetail, mode)
+    ]
+  end
+
+  # Copy the active mode's attributes (enemies, raid length, ...) onto the map,
+  # so the pages keep reading `map.raid_duration` whichever mode they show.
+  defp overlay_mode_details(%GameMap{mode_details: [detail | _]} = map),
+    do: struct(map, Map.take(detail, MapModeDetail.overlay_fields()))
+
+  defp overlay_mode_details(%GameMap{} = map), do: map
 
   @doc """
   Whether a map should appear on the Maps tab.
@@ -146,21 +176,24 @@ defmodule EftBuddy.Maps do
   # ── Reads ──────────────────────────────────────────────
 
   @doc """
-  Lists maps for the index grid, ordered by name. Preloads `:bosses`
-  so the cards can show boss portraits/names without a follow-up query.
+  Lists maps for the index grid in `game_mode` (`:pvp` / `:pve`), ordered by
+  name. Preloads `:bosses` so the cards can show boss portraits/names without a
+  follow-up query, and overlays the mode's raid length and player count.
 
   Options:
     * `:order_by` — defaults to `[asc: :name]`.
   """
-  def list_maps(opts \\ []) do
-    # Written by MapsSync and nothing else; `opts` only carries an ordering, so
-    # the key space is a handful of entries rather than one per visitor.
-    Cache.fetch({__MODULE__, :list_maps, opts}, ["MapsSync"], fn ->
-      list_maps_uncached(opts)
+  def list_maps(game_mode \\ GameMode.default(), opts \\ []) do
+    mode = GameMode.to_db(game_mode)
+
+    # Written by MapsSync and nothing else; the key carries only the mode and
+    # an ordering, so the key space is a handful of entries, not one per visitor.
+    Cache.fetch({__MODULE__, :list_maps, mode, opts}, ["MapsSync"], fn ->
+      list_maps_uncached(mode, opts)
     end)
   end
 
-  defp list_maps_uncached(opts) do
+  defp list_maps_uncached(mode, opts) do
     order = Keyword.get(opts, :order_by, asc: :name)
     blacklisted = Map.keys(@blacklisted_slugs)
 
@@ -169,30 +202,39 @@ defmodule EftBuddy.Maps do
     |> order_by(^order)
     # `access_keys` drives the "key required" filter on the index; `bosses`
     # feeds the card portraits.
-    |> preload(bosses: ^@boss_order, access_keys: [])
+    |> preload(
+      bosses: ^boss_order(mode),
+      access_keys: ^in_mode(AccessKey, mode),
+      mode_details: ^in_mode(MapModeDetail, mode)
+    )
     |> Repo.all()
+    |> Enum.map(&overlay_mode_details/1)
     # The imagery half of the gate needs `image_variants` / `projection`, so it
     # runs in Elixir rather than as a second SQL predicate.
     |> Enum.filter(&visible?/1)
   end
 
   @doc """
-  Returns a single map by its `normalized_name` slug with every
-  association needed to render the detail page, or `nil` if no map with
-  that slug exists.
+  Returns a single map by its `normalized_name` slug with every association
+  needed to render the detail page, in `game_mode` (`:pvp` / `:pve`), or `nil`
+  if no map with that slug exists.
   """
-  def get_map_by_slug(slug) when is_binary(slug) do
+  def get_map_by_slug(slug, game_mode \\ GameMode.default())
+
+  def get_map_by_slug(slug, game_mode) when is_binary(slug) do
     if Map.has_key?(@blacklisted_slugs, slug) do
       nil
     else
+      mode = GameMode.to_db(game_mode)
+
       from(m in GameMap, where: m.normalized_name == ^slug)
-      |> preload(^@detail_preloads)
+      |> preload(^detail_preloads(mode))
       |> Repo.one()
-      |> then(fn map -> if map && visible?(map), do: map, else: nil end)
+      |> then(fn map -> if map && visible?(map), do: overlay_mode_details(map), else: nil end)
     end
   end
 
-  def get_map_by_slug(_), do: nil
+  def get_map_by_slug(_, _), do: nil
 
   @doc """
   Returns a `%{map_id => quest_count}` map for the index badges, counting
@@ -203,15 +245,25 @@ defmodule EftBuddy.Maps do
   build a `MapSet` per map just to take its size — thousands of rows marshalled
   on every index mount to produce about twenty integers.
   """
-  def quest_counts do
+  #
+  # Per game mode: tasks are stored once per mode, so counting every row counted
+  # each quest twice (audit H5) whichever mode the visitor was in.
+  def quest_counts(game_mode \\ GameMode.default()) do
+    mode = GameMode.to_db(game_mode)
+
     primary =
-      from(t in Task, where: not is_nil(t.map_id), select: %{map_id: t.map_id, task_id: t.id})
+      from(t in Task,
+        where: not is_nil(t.map_id) and t.game_mode == ^mode,
+        select: %{map_id: t.map_id, task_id: t.id}
+      )
 
     via_objectives =
       from(om in ObjectiveMap,
         join: o in Objective,
         on: o.id == om.objective_id,
-        where: not is_nil(o.task_id),
+        join: t in Task,
+        on: t.id == o.task_id,
+        where: t.game_mode == ^mode,
         select: %{map_id: om.map_id, task_id: o.task_id}
       )
 

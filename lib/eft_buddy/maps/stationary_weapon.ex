@@ -12,6 +12,8 @@ defmodule EftBuddy.Maps.StationaryWeapon do
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
   schema "map_stationary_weapons" do
+    # "regular" | "pve": upstream publishes map data per mode.
+    field :game_mode, :string, default: "regular"
     belongs_to :map, EftBuddy.Maps.Map
 
     field :name, :string

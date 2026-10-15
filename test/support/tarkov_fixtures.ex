@@ -21,7 +21,7 @@ defmodule EftBuddy.TarkovFixtures do
       :counters.add(counter, 1, 1)
       Agent.update(paths, &[conn.request_path | &1])
 
-      case File.read(Path.join(@dir, conn.request_path <> ".json")) do
+      case File.read(fixture_path(conn.request_path)) do
         {:ok, body} ->
           conn
           |> Plug.Conn.put_resp_content_type("application/json")
@@ -37,6 +37,13 @@ defmodule EftBuddy.TarkovFixtures do
       paths: fn -> Agent.get(paths, &Enum.reverse/1) end
     }
   end
+
+  # tarkov.dev's frontend `maps.json` (map imagery) is fetched from GitHub
+  # rather than the JSON API, so it has its own file.
+  defp fixture_path("/the-hideout/tarkov-dev/main/src/data/maps.json"),
+    do: Path.join(@dir, "maps_media.json")
+
+  defp fixture_path(request_path), do: Path.join(@dir, request_path <> ".json")
 
   @doc "A fixture document, decoded."
   def doc(mode, name),
