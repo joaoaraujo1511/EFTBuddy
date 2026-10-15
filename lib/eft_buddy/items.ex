@@ -1170,9 +1170,15 @@ defmodule EftBuddy.Items do
     #
     # Resolving the item first also stops a nonexistent id minting a cached
     # `nil`: 20,000 random UUIDs used to fill the table.
-    case resolve_item(item_id, mode) do
-      nil -> nil
-      item -> Map.put(relational_details(item.id, mode), :item, item)
+    #
+    # Cast before any query. `item_id` arrives straight from `phx-value-id`, and
+    # a non-UUID made the lookup raise `Ecto.Query.CastError` and kill the
+    # LiveView, as `EftBuddy.Events.get_quest_detail/1` once did.
+    with {:ok, item_id} <- Ecto.UUID.cast(item_id),
+         %{} = item <- resolve_item(item_id, mode) do
+      Map.put(relational_details(item.id, mode), :item, item)
+    else
+      _ -> nil
     end
   end
 

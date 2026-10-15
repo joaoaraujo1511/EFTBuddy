@@ -220,28 +220,30 @@ defmodule EftBuddyWeb.ClientBridgeTest do
       refute_push_event(view, "eft:clear", _payload)
     end
 
-    test "after a reset the surviving tab's next write cannot destroy imported storage",
+    test "after a reset the surviving tab reloads instead of writing over the import",
          %{conn: conn} do
-      # The other half: the surviving tab's `:client_state` is emptied by the reset,
-      # so its next write pushes a patch-only blob. That is SAFE only because the
-      # browser merges per mode — and it must still push, or an import in another tab
-      # would leave this one unable to persist anything.
+      # REGRESSION (audit H2). This test used to assert the bug. The surviving tab
+      # adopted an empty client state and kept writing, so its next click pushed a
+      # one-item list for that key, and the browser merge replaced the whole
+      # imported list with it: import a backup in one tab, tick one quest in
+      # another, and the import was gone.
+      #
+      # Now it is told to reload, which re-reads storage and the cookie. Until it
+      # does, it writes nothing.
       task(%{name: "Debut", normalized_name: "debut"})
       token = new_token()
 
       {:ok, view, _html} = live(conn_for(conn, token), ~p"/tasks")
-      render_hook(view, "eft:restore", pvp_blob(%{"completed_tasks" => ["shortage"]}))
+      render_hook(view, "eft:restore", pvp_blob(%{"tasks_watchlist" => ["shortage"]}))
 
       build_conn() |> conn_for(token) |> post(~p"/session/reset")
       assert render(view)
 
-      toggle_watchlist(view, "Debut")
+      assert_push_event(view, "eft:reload", %{})
 
-      # It still pushes (the tab is not left inert)...
-      assert_push_event(view, "eft:store", pushed)
-      # ...and what it pushes carries only this write, which the client merges into
-      # whatever storage now holds rather than replacing it.
-      assert Progress.slice(pushed, :pvp)["tasks_watchlist"] == ["debut"]
+      # A click that races the reload must not push a short list over storage.
+      toggle_watchlist(view, "Debut")
+      refute_push_event(view, "eft:store", _payload)
     end
 
     test "the reset response is not cacheable", %{conn: conn} do
@@ -263,7 +265,10 @@ defmodule EftBuddyWeb.ClientBridgeTest do
             "https://evil.example.com",
             "javascript:alert(1)",
             "/\\evil.example",
-            "/%09/evil.example"
+            "/%09/evil.example",
+            # Passed the old pattern (its query allowed `/` and `%`), and
+            # `redirect/2` raises on `/%09` anywhere in the URL.
+            "/tasks?a=/%09"
           ] do
         conn =
           build_conn()
@@ -285,6 +290,47 @@ defmodule EftBuddyWeb.ClientBridgeTest do
         |> post(~p"/session/reset", %{"return_to" => "/tasks?status=watchlist"})
 
       assert redirected_to(conn) == "/tasks?status=watchlist"
+
+      # A search with a space, as `URI.encode_query/1` writes it. Import or Reset
+      # from here used to land on /tasks.
+      conn =
+        build_conn()
+        |> conn_for(new_token())
+        |> post(~p"/session/reset", %{"return_to" => "/items?q=ak+74"})
+
+      assert redirected_to(conn) == "/items?q=ak+74"
+    end
+  end
+
+  describe "a mode switch" do
+    # REGRESSION (audit M5). `:mode` flips at once, but pages reload their
+    # per-mode lists only when the `{:sidebar_state_changed, :mode, _}` ping
+    # arrives. A click already waiting in the mailbox ran in between, edited the
+    # OLD mode's list, and was written into the NEW mode, replacing that mode's
+    # list. LiveViewTest always delivers the ping before the next event, so the
+    # race itself can't be replayed here; these pin both halves of the guard.
+    test "while it is in flight, put_progress writes nothing" do
+      socket = %Phoenix.LiveView.Socket{
+        assigns: %{__changed__: %{}, mode: :pve, mode_switching?: true}
+      }
+
+      assert EftBuddyWeb.ClientBridge.put_progress(socket, %{"tasks_watchlist" => ["x"]}) ==
+               socket
+    end
+
+    test "once the page has reloaded, writes land in the new mode", %{conn: conn} do
+      task(%{name: "Debut", normalized_name: "debut", game_mode: "pve"})
+      token = new_token()
+
+      {:ok, view, _html} = live(conn_for(conn, token), ~p"/tasks")
+      render_hook(view, "eft:restore", pvp_blob(%{"tasks_watchlist" => ["shortage"]}))
+
+      render_click(view, "set_mode", %{"mode" => "pve"})
+      toggle_watchlist(view, "Debut")
+
+      assert_push_event(view, "eft:store", pushed)
+      assert Progress.slice(pushed, :pve)["tasks_watchlist"] == ["debut"]
+      assert Progress.slice(pushed, :pvp)["tasks_watchlist"] == ["shortage"]
     end
   end
 

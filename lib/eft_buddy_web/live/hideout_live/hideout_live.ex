@@ -12,6 +12,7 @@ defmodule EftBuddyWeb.HideoutLive.Index do
   # `EftBuddy.Progress`.
   @levels_key "hideout"
   @checks_key "hideout_checks"
+  @expandable_sections ~w(prerequisites needed items_used)
 
   @impl true
   def mount(_params, _session, socket) do
@@ -92,22 +93,18 @@ defmodule EftBuddyWeb.HideoutLive.Index do
   # working on it - a card that became READY while expanded now drops into
   # its bucket. Opening a section just pins the card, which leaves the
   # order unchanged.
-  def handle_event("toggle_section", %{"slug" => slug, "section" => section}, socket) do
-    key = "#{slug}:#{section}"
-    expanded = socket.assigns.expanded
-
-    new_expanded =
-      if MapSet.member?(expanded, key),
-        do: MapSet.delete(expanded, key),
-        else: MapSet.put(expanded, key)
-
-    modules = reorder_locking_expanded(socket.assigns.modules, new_expanded)
-
-    {:noreply,
-     socket
-     |> assign(:expanded, new_expanded)
-     |> assign(:modules, modules)}
+  #
+  # The slug and section come from the client, so both are checked against what
+  # this page actually renders. A forged map raised in the interpolation below,
+  # and any string was kept in `:expanded` for the life of the socket.
+  def handle_event("toggle_section", %{"slug" => slug, "section" => section}, socket)
+      when is_binary(slug) and section in @expandable_sections do
+    if Enum.any?(socket.assigns.modules, &(&1.slug == slug)),
+      do: {:noreply, toggle_section(socket, "#{slug}:#{section}")},
+      else: {:noreply, socket}
   end
+
+  def handle_event("toggle_section", _params, socket), do: {:noreply, socket}
 
   # Free-text search. The Flea Market and Items pages use the same
   # `phx-change="search"` shape with a debounced input, so this
@@ -210,9 +207,17 @@ defmodule EftBuddyWeb.HideoutLive.Index do
   # Decrement a module's current level by 1 (floored at 0). The
   # downgrade button is only rendered when current > 1, so in practice
   # this lands a module back at lvl 1 at the lowest from a UI click.
-  def handle_event("downgrade", %{"slug" => slug}, socket) do
-    {:noreply, update_module_level(socket, slug, -1)}
+  def handle_event("downgrade", %{"slug" => slug}, socket) when is_binary(slug) do
+    case Enum.find(socket.assigns.modules, &(&1.slug == slug)) do
+      %{current: current, min_level: min_level} when current > min_level ->
+        {:noreply, update_module_level(socket, slug, -1)}
+
+      _ ->
+        {:noreply, socket}
+    end
   end
+
+  def handle_event("downgrade", _params, socket), do: {:noreply, socket}
 
   # The progress blob changed: either a cold connect handing up localStorage for
   # the first time, or another of the operator's tabs editing it. On a live
@@ -279,6 +284,15 @@ defmodule EftBuddyWeb.HideoutLive.Index do
   # player would build (current + 1). The new level's requirements are
   # un-ticked (ticks are keyed per level), so we recompute this module's
   # status and re-sort afterwards.
+  #
+  # Only the station that changed is written, over the levels already saved.
+  # The whole board used to be written from `modules`, which is the saved levels
+  # joined against whatever HideoutSync last stored. A saved station the
+  # catalogue no longer had (renamed, pruned, or missing from one partial sync)
+  # was dropped by the next click on any other station, and a level above a
+  # station's current max was written back clamped. Both are permanent:
+  # localStorage is the only copy. The Tasks page fixed the same bug for
+  # completed quests; see its mount.
   defp update_module_level(socket, slug, delta) do
     modules =
       socket.assigns.modules
@@ -293,10 +307,16 @@ defmodule EftBuddyWeb.HideoutLive.Index do
       |> recompute_statuses(socket.assigns.checked)
       |> reorder_locking_expanded(socket.assigns.expanded)
 
+    saved = socket |> read_levels() |> saved_levels()
+    changed = modules |> Enum.find(&(&1.slug == slug)) |> Map.fetch!(:current)
+
     socket
     |> assign(:modules, modules)
-    |> ClientBridge.put_progress(%{@levels_key => current_levels(modules)})
+    |> ClientBridge.put_progress(%{@levels_key => Map.put(saved, slug, changed)})
   end
+
+  defp saved_levels(levels) when is_map(levels), do: levels
+  defp saved_levels(_levels), do: %{}
 
   # Restore persisted station levels from the client localStorage blob.
   # `levels` is a `%{slug => current_level}` map (string keys, integer
@@ -355,6 +375,21 @@ defmodule EftBuddyWeb.HideoutLive.Index do
   # The active game mode's persisted `%{slug => level}` map.
   defp read_levels(%{assigns: %{client_state: state, mode: mode}}) do
     Progress.get(state, mode, @levels_key)
+  end
+
+  defp toggle_section(socket, key) do
+    expanded = socket.assigns.expanded
+
+    new_expanded =
+      if MapSet.member?(expanded, key),
+        do: MapSet.delete(expanded, key),
+        else: MapSet.put(expanded, key)
+
+    modules = reorder_locking_expanded(socket.assigns.modules, new_expanded)
+
+    socket
+    |> assign(:expanded, new_expanded)
+    |> assign(:modules, modules)
   end
 
   defp clamp(value, min, _max) when value < min, do: min
@@ -936,7 +971,6 @@ defmodule EftBuddyWeb.HideoutLive.Index do
 
   # Sections whose open state means the user is actively working on a
   # module, and so its grid position should be pinned.
-  @expandable_sections ~w(prerequisites needed items_used)
 
   # Whether a module currently has any section expanded (i.e. the user is
   # working on it and its position should hold still).
@@ -980,9 +1014,5 @@ defmodule EftBuddyWeb.HideoutLive.Index do
 
       Enum.reverse(result)
     end
-  end
-
-  defp current_levels(modules) do
-    Map.new(modules, &{&1.slug, &1.current})
   end
 end

@@ -39,8 +39,10 @@ defmodule EftBuddyWeb.ClientBridge do
   So the contract is: **the server is authoritative about the keys it sends, and
   says nothing about the keys it omits.** The browser is the only party that can
   see both copies, so it is the browser that merges (see `mergeProgress` in
-  `app.js`). Shrinking is never implicit - `"eft:clear"` is the one channel
-  allowed to remove keys, and `OperatorState` pushes it on a reset.
+  `app.js`). Shrinking is never implicit: the server never removes keys. Only
+  the browser's own "Reset progress" and "Import backup" rewrite storage
+  wholesale, before they navigate, and other tabs then reload (see the
+  `{:reset, _}` clause in `EftBuddyWeb.OperatorState`).
 
   Merging per *mode* rather than per blob is what makes this safe: a slice's
   values are whole lists the server replaces deliberately (unwatchlisting sends
@@ -92,6 +94,12 @@ defmodule EftBuddyWeb.ClientBridge do
   re-derives from the blob (e.g. the Tasks page on a mode flip) sees its own
   write immediately without waiting for a client round-trip.
   """
+  # A write that arrives mid mode-switch is dropped: the page built `patch` from
+  # the old mode's list, and `:mode` already names the new one. See
+  # `EftBuddyWeb.OperatorState.apply_prefs/3`.
+  def put_progress(%{assigns: %{mode_switching?: true}} = socket, patch) when is_map(patch),
+    do: socket
+
   def put_progress(socket, patch) when is_map(patch) do
     mode = socket.assigns.mode
 

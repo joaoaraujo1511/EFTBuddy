@@ -118,6 +118,22 @@ jobs:
       - name: Run tests
         run: mix test
 
+      # The browser-side progress helpers (assets/js/progress.js) decide what is
+      # written to localStorage, the only durable copy of a visitor's progress,
+      # and nothing on the server can observe it. Node's built-in runner needs no
+      # npm install.
+      #
+      # The one step NOT mirrored in `mix precommit`, deliberately: working on
+      # this repo needs no Node (esbuild and tailwind are standalone binaries),
+      # and adding it to the alias would make Node a requirement for everyone.
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: JavaScript unit tests
+        run: node --test "assets/js/*.test.mjs"
+
       # Prove every migration is reversible end-to-end: roll the whole schema back
       # down and migrate it back up. Catches a migration that only works in the `up`
       # direction before it ships.

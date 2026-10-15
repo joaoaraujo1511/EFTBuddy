@@ -75,4 +75,51 @@ defmodule EftBuddyWeb.HideoutLiveTest do
       assert render(view) =~ "Available"
     end
   end
+
+  describe "saving a station level never drops another station's saved level" do
+    # REGRESSION (audit H3). Each change used to write the whole board, rebuilt
+    # from the stations currently in the catalogue. A saved level for a station
+    # the catalogue no longer had was dropped by the next click on any other
+    # station, and the browser merge stored that shorter map for good. The Tasks
+    # page fixed the same bug for completed quests.
+    setup %{conn: conn} do
+      workbench = station(%{normalized_name: "workbench", name: "Workbench"})
+      for level <- 1..3, do: station_level(%{station_id: workbench.id, level: level})
+
+      {:ok, view, _html} = live(conn, ~p"/hideout")
+
+      saved = %{"workbench" => 3, "renamed-upstream" => 2}
+      render_hook(view, "eft:restore", %{"modes" => %{"pvp" => %{"hideout" => saved}}})
+
+      %{view: view}
+    end
+
+    test "a station missing from the catalogue keeps its saved level", %{view: view} do
+      render_hook(view, "downgrade", %{"slug" => "workbench"})
+
+      assert_push_event(view, "eft:store", pushed)
+      assert pushed["modes"]["pvp"]["hideout"] == %{"workbench" => 2, "renamed-upstream" => 2}
+    end
+
+    test "a forged downgrade writes nothing", %{view: view} do
+      for slug <- ["renamed-upstream", "not-a-station", %{"a" => 1}, nil] do
+        render_hook(view, "downgrade", %{"slug" => slug})
+      end
+
+      refute_push_event(view, "eft:store", _payload)
+      assert render(view) =~ "Workbench"
+    end
+
+    test "a forged toggle_section is ignored", %{view: view} do
+      for {slug, section} <- [
+            {"workbench", "bogus"},
+            {"not-a-station", "needed"},
+            {%{}, "needed"}
+          ] do
+        assert render_hook(view, "toggle_section", %{"slug" => slug, "section" => section})
+      end
+
+      assert render(view) =~ "Workbench"
+    end
+  end
 end
