@@ -686,17 +686,17 @@ defmodule EftBuddy.Tasks.Sync do
 
   # Subtype-specific fields → JSON. We resolve item / trader IDs to
   # local UUIDs at sync time so render-time code is just JSON access.
+  #
+  # Only fields something reads. `targetNames`, `bodyParts`, `exitName`,
+  # `exitStatus` and `shotType` were stored as raw upstream keys
+  # ("bossBoar", "Sandbox_VExit") that nothing translated or rendered, and
+  # `playerLevel` no longer exists upstream. Translate them in the adapter
+  # first if a feature ever needs them.
   defp build_objective_payload(obj, items, traders) do
     obj
     |> Map.take([
       "count",
       "foundInRaid",
-      "targetNames",
-      "shotType",
-      "bodyParts",
-      "exitStatus",
-      "exitName",
-      "playerLevel",
       "compareMethod",
       "value",
       "level",

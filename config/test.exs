@@ -68,6 +68,13 @@ config :eft_buddy, EftBuddyWeb.Endpoint,
 # Bootstrap) in tests — they'd hit the live API and race the SQL sandbox.
 config :eft_buddy, start_sync: false
 
+# Every tarkov.dev request goes to a `Req.Test` stub, never the network. Tests
+# that exercise the adapter serve trimmed copies of the live documents from
+# test/fixtures/tarkov/ (see `EftBuddy.TarkovFixtures`); any other request
+# fails loudly instead of reaching tarkov.dev. No retries, so a missing stub
+# fails at once.
+config :eft_buddy, :tarkov_req_options, plug: {Req.Test, EftBuddy.TarkovApi}, retry: false
+
 # The read cache is OFF in test. The suite's whole shape is "insert a fixture,
 # read it back", and a cache keyed on sync completion has no sync to invalidate
 # it here — so a value cached by one test would be served to the next and the

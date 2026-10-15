@@ -386,30 +386,50 @@ defmodule EftBuddy.Items.Sync do
   # Columns the price tick is allowed to overwrite on conflict.
   @price_replace_fields @price_compare_keys ++ [:updated_at]
 
+  # Each mode is fetched and written on its own. Both fetches used to sit in one
+  # `with`, so a PVE document that failed to download also skipped the PVP
+  # write, though PVP had arrived fine. A failed mode now makes the run a
+  # `{:partial, ...}` error, which `/health/sync` sees, while the other mode's
+  # prices still land.
   defp do_run_prices do
     Reporter.with_run("PricesSync", fn ->
-      with {:ok, regular_raw} <- fetch_flea_prices(EftBuddy.GameMode.default()),
-           {:ok, pve_raw} <- fetch_flea_prices("pve") do
-        # Legacy regular mirror on the `items` table itself
-        # (change-detected, to avoid catalog-wide write churn).
-        {:ok, items_summary} = refresh_prices(Repo, regular_raw)
+      fetched = Map.new(EftBuddy.GameMode.all(), &{&1, fetch_flea_prices(&1)})
 
-        # Per-mode `item_prices` flea columns — the source of truth the
-        # flea market and item-detail reads go through. Full upsert (no
-        # change-detection); the row set is bounded (~5k per mode) so the
-        # churn is acceptable and the code stays simple. This pass also
-        # appends a point to each item's `historical_prices` series (the
-        # JSON API has no time series of its own), powering the graphs.
-        regular_ip = refresh_item_prices_flea(Repo, regular_raw, "regular")
-        pve_ip = refresh_item_prices_flea(Repo, pve_raw, "pve")
+      # Legacy regular mirror on the `items` table itself
+      # (change-detected, to avoid catalog-wide write churn).
+      items_summary =
+        case fetched[EftBuddy.GameMode.default()] do
+          {:ok, raw} ->
+            {:ok, summary} = refresh_prices(Repo, raw)
+            summary
 
-        {:ok,
-         %{
-           items: items_summary,
-           item_prices: %{"regular" => regular_ip, "pve" => pve_ip}
-         }}
-      else
-        {:error, reason} -> {:error, reason}
+          {:error, _} ->
+            :skipped
+        end
+
+      # Per-mode `item_prices` flea columns — the source of truth the
+      # flea market and item-detail reads go through. Full upsert (no
+      # change-detection); the row set is bounded (~5k per mode) so the
+      # churn is acceptable and the code stays simple. This pass also
+      # appends a point to each item's `historical_prices` series (the
+      # JSON API has no time series of its own), powering the graphs.
+      item_prices =
+        Map.new(fetched, fn
+          {mode, {:ok, raw}} -> {mode, refresh_item_prices_flea(Repo, raw, mode)}
+          {mode, {:error, reason}} -> {mode, {:error, reason}}
+        end)
+
+      summary = %{items: items_summary, item_prices: item_prices}
+
+      # The `{:partial, successes, failures}` shape `Reporter.describe_error/1`
+      # and Bootstrap already read for Tasks: per-mode lists on both sides.
+      case for({mode, {:error, reason}} <- fetched, do: {mode, reason}) do
+        [] ->
+          {:ok, summary}
+
+        failed ->
+          succeeded = for {mode, {:ok, _}} <- fetched, do: {mode, item_prices[mode]}
+          {:error, {:partial, succeeded, failed}}
       end
     end)
   end
@@ -1024,7 +1044,9 @@ defmodule EftBuddy.Items.Sync do
     case :global.set_lock(@lock_id, nodes, 0) do
       true ->
         try do
-          fun.()
+          # One run fetches each upstream document once; see
+          # `EftBuddy.TarkovApi.with_run_cache/1`.
+          EftBuddy.TarkovApi.with_run_cache(fun)
         after
           :global.del_lock(@lock_id, nodes)
         end
