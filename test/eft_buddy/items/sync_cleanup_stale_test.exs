@@ -1,6 +1,6 @@
 defmodule EftBuddy.Items.SyncCleanupStaleTest do
   @moduledoc """
-  Characterisation tests for `EftBuddy.Items.Sync.cleanup_stale/2` — the
+  Characterisation tests for `EftBuddy.Items.Sync.cleanup_stale/3` — the
   highest-blast-radius prune in the application.
 
   `items.id` is referenced with `on_delete: :delete_all` by
@@ -29,6 +29,7 @@ defmodule EftBuddy.Items.SyncCleanupStaleTest do
 
   alias EftBuddy.Items.Item
   alias EftBuddy.Items.Sync
+  alias EftBuddy.Sync.Helpers
   alias EftBuddy.Sync.Reporter
 
   setup do
@@ -191,6 +192,90 @@ defmodule EftBuddy.Items.SyncCleanupStaleTest do
       # Against all 60 rows it would read as 32% and the prune would be refused.
       assert {:ok, %{items: 1}} =
                Sync.cleanup_stale(Repo, snapshot(Enum.map(1..19, &"item-#{&1}")))
+    end
+  end
+
+  describe "the guard compares against rows seen recently, not the whole table" do
+    # The shape of the September 2026 barter incident, on the table this module
+    # covers. tarkov.dev re-issued every barter id; each rebuild added a full new
+    # set, the old set was never pruned, and once the table outgrew the snapshot a
+    # whole-table comparison refused every prune for good: three copies of every
+    # barter, presented as fact. These pin the reference count that replaced it.
+
+    @window Helpers.cleanup_window_ms(Sync.effective_interval_ms())
+
+    # Make rows look as if a sync last wrote them `seconds` ago.
+    defp stamp(external_ids, seconds_ago) do
+      at = NaiveDateTime.add(Helpers.now_naive(), -seconds_ago, :second)
+
+      from(i in Item, where: i.external_id in ^external_ids)
+      |> Repo.update_all(set: [updated_at: at])
+    end
+
+    defp ids(prefix, range), do: Enum.map(range, &"#{prefix}-#{&1}")
+
+    defp reference, do: Helpers.cleanup_reference(Repo, Item, @window)
+
+    test "rows past the window no longer count, so leftovers from an old id set are pruned" do
+      # 20 rows from an id set upstream stopped sending days ago, and the 20 it
+      # sends now. Against the whole table (40) this snapshot of 20 reads as
+      # truncated and is refused — run after run, forever.
+      for id <- ids("old", 1..20) ++ ids("item", 1..20),
+          do: item(%{external_id: id, normalized_name: id})
+
+      stamp(ids("old", 1..20), div(@window, 1_000) + 3_600)
+
+      assert reference() == 20
+
+      assert {:ok, %{items: 20}} =
+               Sync.cleanup_stale(Repo, snapshot(ids("item", 1..20)), reference())
+
+      assert external_ids() == Enum.sort(ids("item", 1..20))
+    end
+
+    test "an id rotation is pruned in the same run, when read before the upsert" do
+      # Every row was seen last run. Upstream now sends the same number of rows
+      # under new ids. The pipeline reads the reference BEFORE its upsert, so the
+      # new rows are not counted yet: 20 against 20 passes, and the old set goes.
+      for id <- ids("old", 1..20), do: item(%{external_id: id, normalized_name: id})
+      stamp(ids("old", 1..20), 12 * 3_600)
+
+      before_upsert = reference()
+
+      for id <- ids("new", 1..20), do: item(%{external_id: id, normalized_name: id})
+
+      assert {:ok, %{items: 20}} =
+               Sync.cleanup_stale(Repo, snapshot(ids("new", 1..20)), before_upsert)
+
+      assert external_ids() == Enum.sort(ids("new", 1..20))
+    end
+
+    test "a second truncated response in a row is still refused" do
+      # The trap a plain "previous snapshot size" would fall into: the first
+      # truncated run re-stamps only the rows it carried, so the next run would
+      # see a 'normal' size of 10 and delete the other 10. They were seen within
+      # the window, so they still count.
+      for id <- ids("item", 1..20), do: item(%{external_id: id, normalized_name: id})
+      stamp(ids("item", 11..20), 12 * 3_600)
+
+      assert reference() == 20
+
+      assert {:ok, %{items: 0}} =
+               Sync.cleanup_stale(Repo, snapshot(ids("item", 1..10)), reference())
+
+      assert length(external_ids()) == 20
+    end
+
+    test "when nothing was seen within the window, it falls back to the whole table" do
+      # A feed that has been failing for longer than the window has no recent rows
+      # at all. Counting zero would wave through any snapshot, truncated or not.
+      for id <- ids("item", 1..20), do: item(%{external_id: id, normalized_name: id})
+      stamp(ids("item", 1..20), div(@window, 1_000) + 3_600)
+
+      assert reference() == 20
+
+      assert {:ok, %{items: 0}} =
+               Sync.cleanup_stale(Repo, snapshot(ids("item", 1..10)), reference())
     end
   end
 end

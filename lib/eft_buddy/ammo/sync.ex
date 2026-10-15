@@ -104,11 +104,16 @@ defmodule EftBuddy.Ammo.Sync do
     |> Ecto.Multi.run(:item_id_map, fn repo, _ ->
       {:ok, fetch_item_id_map(repo)}
     end)
+    # Before the upsert, which re-stamps every row it touches — see
+    # `Sync.Helpers.cleanup_reference/3`.
+    |> Ecto.Multi.run(:reference, fn repo, _ ->
+      {:ok, cleanup_reference(repo, Round, cleanup_window_ms(effective_interval_ms()))}
+    end)
     |> Ecto.Multi.run(:upsert, fn repo, %{item_id_map: item_ids} ->
       upsert_rounds(repo, rounds, item_ids)
     end)
-    |> Ecto.Multi.run(:cleanup, fn repo, _ ->
-      cleanup_stale(repo, rounds)
+    |> Ecto.Multi.run(:cleanup, fn repo, %{reference: reference} ->
+      cleanup_stale(repo, rounds, reference)
     end)
     |> Ecto.Multi.run(:counts, fn repo, _ ->
       {:ok, %{ammo: repo.aggregate(Round, :count, :id)}}
@@ -195,11 +200,10 @@ defmodule EftBuddy.Ammo.Sync do
 
   # ── Cleanup ────────────────────────────────────────────
 
-  defp cleanup_stale(repo, rounds) do
+  defp cleanup_stale(repo, rounds, reference) do
     valid_ids = Enum.map(rounds, & &1["id"])
-    current = repo.aggregate(Round, :count, :id)
 
-    case cleanup_safe?(current, length(valid_ids)) do
+    case cleanup_safe?(reference, length(valid_ids)) do
       {:skip, reason} ->
         Logger.error(
           "[#{prefix()}] Refusing stale ammo cleanup: #{reason}. Keeping existing rows."
