@@ -113,8 +113,13 @@ defmodule EftBuddy.Items.Sync.Resolvers do
   ingredient is worse than a missing recipe, because it renders as a complete
   answer.
   """
+  #
+  # The one exception is a quest-item ingredient upstream doesn't define yet: it
+  # is stored unresolved and shown as an unknown quest item, so the recipe is
+  # visibly incomplete rather than presented as complete.
   def all_items_resolvable?(list, items_map) do
     Enum.all?(list, fn
+      %{"questItem" => true} -> true
       %{"item" => %{"id" => id}} -> Map.has_key?(items_map, id)
       _ -> false
     end)
@@ -126,11 +131,25 @@ defmodule EftBuddy.Items.Sync.Resolvers do
   def resolve_task_unlock(_other, _tasks_map), do: nil
 
   @doc """
-  Coerce a count to a positive integer, or nil.
+  An ingredient count as a positive `Decimal`, or nil.
 
-  The API types `count` and `quantity` as `Float!` while these columns are
-  integers — for barters and crafts they are always whole numbers in practice.
-  Anything non-numeric becomes nil and is filtered out by the caller.
+  Ingredient counts can be fractions upstream, and tarkov.dev shows them that
+  way: Ref prices hundreds of barters in fractional GP coins (355.92, 0.42),
+  and the Water Collector uses 0.66 of a Water filter. They used to be
+  truncated into an integer column, so a 0.42 GP barter read "x0".
+  `Decimal.from_float/1` keeps the value as written (0.66, not
+  0.66000000000000003). Anything non-numeric becomes nil and is filtered out by
+  the caller.
+  """
+  def count_or_nil(n) when is_integer(n) and n > 0, do: Decimal.new(n)
+  def count_or_nil(n) when is_float(n) and n > 0.0, do: Decimal.from_float(n)
+  def count_or_nil(_other), do: nil
+
+  @doc """
+  Coerce a reward count to a positive integer, or nil.
+
+  Reward (output) counts are whole numbers upstream and their columns are
+  integers. Anything non-numeric becomes nil and is filtered out by the caller.
   """
   def trunc_or_nil(nil), do: nil
   def trunc_or_nil(n) when is_integer(n) and n > 0, do: n

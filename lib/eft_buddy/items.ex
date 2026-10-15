@@ -500,8 +500,15 @@ defmodule EftBuddy.Items do
     reward_ids_subq =
       from(rw in CraftRewardItem, distinct: true, select: rw.item_id)
 
+    # Unresolved quest-item ingredients have no `item_id`. A NULL here would make
+    # the `not in` below match nothing, quietly changing which ammo boxes the
+    # Craft tab lists.
     required_ids_subq =
-      from(rq in CraftRequiredItem, distinct: true, select: rq.item_id)
+      from(rq in CraftRequiredItem,
+        where: not is_nil(rq.item_id),
+        distinct: true,
+        select: rq.item_id
+      )
 
     involved_ids_subq = union_all(reward_ids_subq, ^required_ids_subq)
 
@@ -1859,13 +1866,16 @@ defmodule EftBuddy.Items do
   defp craft_required_items([]), do: %{}
 
   defp craft_required_items(crafts) do
+    # A LEFT join: an ingredient upstream names but doesn't define yet has no
+    # item, and must still be listed (as unknown) rather than vanish.
     from(rq in CraftRequiredItem,
-      join: i in assoc(rq, :item),
+      left_join: i in assoc(rq, :item),
       where: rq.craft_id in ^parent_ids(crafts, :craft_id),
       order_by: [asc: rq.id],
       select: %{
         craft_id: rq.craft_id,
         item: i,
+        unresolved_external_id: rq.unresolved_external_id,
         count: rq.count,
         quantity: rq.quantity,
         attributes: rq.attributes
@@ -1919,6 +1929,7 @@ defmodule EftBuddy.Items do
           station_slug: s.normalized_name,
           station_level: l.level,
           duration: c.duration,
+          game_editions: c.game_editions,
           task_unlock_id: tu.id,
           task_unlock_name: tu.name,
           task_unlock_trader_name: tut.name,
@@ -1979,6 +1990,7 @@ defmodule EftBuddy.Items do
           station_slug: s.normalized_name,
           station_level: l.level,
           duration: c.duration,
+          game_editions: c.game_editions,
           task_unlock_id: tu.id,
           task_unlock_name: tu.name,
           task_unlock_trader_name: tut.name
