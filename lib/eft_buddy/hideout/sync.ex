@@ -186,6 +186,11 @@ defmodule EftBuddy.Hideout.Sync do
 
   defp upsert_all(stations) do
     Ecto.Multi.new()
+    # 0. Read before step 1 re-stamps every station it touches — see
+    #    `Sync.Helpers.cleanup_reference/3`.
+    |> Ecto.Multi.run(:reference, fn repo, _ ->
+      {:ok, cleanup_reference(repo, Station, cleanup_window_ms(effective_interval_ms()))}
+    end)
     # 1. Stations — FK target for levels and station-level requirements.
     |> Ecto.Multi.run(:upsert_stations, &upsert_stations(&1, stations, &2))
     |> Ecto.Multi.run(:station_map, fn repo, _ ->
@@ -236,8 +241,8 @@ defmodule EftBuddy.Hideout.Sync do
     end)
     # 5. Drop stations/levels that disappeared from the API. FK cascades
     #    take care of their requirement rows.
-    |> Ecto.Multi.run(:cleanup, fn repo, _ ->
-      cleanup_stale(repo, stations)
+    |> Ecto.Multi.run(:cleanup, fn repo, %{reference: reference} ->
+      cleanup_stale(repo, stations, reference)
     end)
     # 6. Final counts for logging.
     |> Ecto.Multi.run(:final_counts, fn repo, _ ->
@@ -592,7 +597,7 @@ defmodule EftBuddy.Hideout.Sync do
   # ready-made id list, for the same reason as
   # `EftBuddy.Items.Sync.replace_children/5`: passing `Map.values(level_map)` — the
   # whole table — deleted the requirements of every level in the database, while
-  # `cleanup_stale/2` then refused to prune the stations a truncated snapshot had
+  # `cleanup_stale/3` then refused to prune the stations a truncated snapshot had
   # omitted. The visible result is hideout stations with zero item, skill, trader
   # and prerequisite requirements, rendered as fact. Making the wrong argument
   # inexpressible is cheaper than documenting a contract on four call sites.
@@ -642,15 +647,13 @@ defmodule EftBuddy.Hideout.Sync do
   # present (e.g. if BSG ever trims a level off a station).
   # Skills and traders are intentionally left in place because
   # other features may reference them.
-  defp cleanup_stale(repo, stations) do
+  defp cleanup_stale(repo, stations, reference) do
     valid_slugs = Enum.map(stations, & &1["normalizedName"])
 
     # Safety guard: refuse to prune stations (and cascade their levels +
     # requirement rows) when the snapshot is implausibly small relative
-    # to the table — a truncated-but-200 upstream response.
-    current_stations = repo.aggregate(Station, :count, :id)
-
-    case cleanup_safe?(current_stations, length(valid_slugs)) do
+    # to the stations seen recently — a truncated-but-200 upstream response.
+    case cleanup_safe?(reference, length(valid_slugs)) do
       {:skip, reason} ->
         Logger.error(
           "[#{prefix()}] Refusing stale station cleanup: #{reason}. Keeping existing rows."
