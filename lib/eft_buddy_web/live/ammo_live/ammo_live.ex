@@ -93,23 +93,41 @@ defmodule EftBuddyWeb.AmmoLive.Index do
   # Column-header sort toggle for a single caliber block (`<.sort_header>`
   # → 3-state). Scoped per caliber so reordering one block never touches
   # the others.
+  #
+  # Only calibers some round actually has are accepted: the value comes from the
+  # client, and every unknown string used to become a permanent key in `:sorts`.
   def handle_event("toggle_sort", %{"col" => col, "caliber" => caliber}, socket) do
-    current = Map.get(socket.assigns.sorts, caliber, :default)
-    sorts = Map.put(socket.assigns.sorts, caliber, EftBuddyWeb.UI.next_sort(col, current))
+    if Enum.any?(socket.assigns.rounds, &(&1.caliber == caliber)) do
+      current = Map.get(socket.assigns.sorts, caliber, :default)
+      sorts = Map.put(socket.assigns.sorts, caliber, EftBuddyWeb.UI.next_sort(col, current))
 
-    {:noreply, socket |> assign(:sorts, sorts) |> apply_ammo_view()}
+      {:noreply, socket |> assign(:sorts, sorts) |> apply_ammo_view()}
+    else
+      {:noreply, socket}
+    end
   end
 
   # Column-header sort toggle for a single plate class block, scoped per
   # class (via `phx-value-class`) so reordering one block never touches
   # the others.
-  def handle_event("toggle_plates_sort", %{"col" => col, "class" => class}, socket) do
-    class = String.to_integer(class)
-    current = Map.get(socket.assigns.plates_sorts, class, :default)
-    sorts = Map.put(socket.assigns.plates_sorts, class, EftBuddyWeb.UI.next_sort(col, current))
+  #
+  # `class` comes from the client: anything but the class of a plate on this page
+  # is ignored. `String.to_integer/1` raised on a non-number, crashing the
+  # LiveView.
+  def handle_event("toggle_plates_sort", %{"col" => col, "class" => class}, socket)
+      when is_binary(class) do
+    with {class, ""} <- Integer.parse(class),
+         true <- Enum.any?(socket.assigns.plates, &(&1.class == class)) do
+      current = Map.get(socket.assigns.plates_sorts, class, :default)
+      sorts = Map.put(socket.assigns.plates_sorts, class, EftBuddyWeb.UI.next_sort(col, current))
 
-    {:noreply, socket |> assign(:plates_sorts, sorts) |> apply_plates_view()}
+      {:noreply, socket |> assign(:plates_sorts, sorts) |> apply_plates_view()}
+    else
+      _ -> {:noreply, socket}
+    end
   end
+
+  def handle_event("toggle_plates_sort", _params, socket), do: {:noreply, socket}
 
   # Primary view switch fired by the top `<.tabs>` strip (`filter` key):
   # "ammo" | "plates". Rebuild the newly-shown view so it reflects the

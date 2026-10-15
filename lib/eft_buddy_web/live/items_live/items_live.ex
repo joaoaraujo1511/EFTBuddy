@@ -185,31 +185,24 @@ defmodule EftBuddyWeb.ItemsLive.Index do
             {cached, cache}
 
           :error ->
-            d = Items.get_item_details(item_id, socket.assigns.mode) |> with_related_chapters()
-            {d, Map.put(cache, item_id, d)}
+            case Items.get_item_details(item_id, socket.assigns.mode) do
+              nil ->
+                {nil, cache}
+
+              details ->
+                details = with_related_chapters(details)
+                {details, Map.put(cache, item_id, details)}
+            end
         end
 
-      new_expanded = MapSet.put(expanded, item_id)
-      item = details && details.item
-
-      # Build the row VM with details + expanded flag and replace
-      # the existing stream entry.
-      socket =
-        socket
-        |> assign(:expanded_ids, new_expanded)
-        |> assign(:details_cache, new_cache)
-        |> stream_insert(:items, %{
-          id: item_id,
-          item: item,
-          details: details,
-          expanded?: true,
-          watchlisted?: item && item.normalized_name in socket.assigns.favorite_slugs,
-          categories: Map.get(socket.assigns.category_flags, item_id, [])
-        })
-
-      {:noreply, socket}
+      # `item_id` comes from the client. One that names no item is neither cached
+      # nor marked expanded, so a client cannot grow this socket's state without
+      # bound.
+      expand_item(socket, item_id, details, new_cache)
     end
   end
+
+  def handle_event("toggle_expand", _params, socket), do: {:noreply, socket}
 
   def handle_event("load_more", _params, socket) do
     %{items_loaded: items_loaded, query: query, sort: sort, scope: scope} = socket.assigns
@@ -363,6 +356,27 @@ defmodule EftBuddyWeb.ItemsLive.Index do
 
   # Used after a collapse: rebuild the row VM with `expanded?: false`
   # so the template re-renders without the detail panel.
+  defp expand_item(socket, _item_id, nil, _cache), do: {:noreply, socket}
+
+  defp expand_item(socket, item_id, details, cache) do
+    # Build the row VM with details + expanded flag and replace the existing
+    # stream entry.
+    item = details.item
+
+    {:noreply,
+     socket
+     |> assign(:expanded_ids, MapSet.put(socket.assigns.expanded_ids, item_id))
+     |> assign(:details_cache, cache)
+     |> stream_insert(:items, %{
+       id: item_id,
+       item: item,
+       details: details,
+       expanded?: true,
+       watchlisted?: item && item.normalized_name in socket.assigns.favorite_slugs,
+       categories: Map.get(socket.assigns.category_flags, item_id, [])
+     })}
+  end
+
   defp refresh_row(item_id, cache, expanded_ids, favorite_slugs, category_flags) do
     item =
       cache
