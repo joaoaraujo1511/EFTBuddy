@@ -20,7 +20,7 @@ defmodule EftBuddyWeb.MapsLive.Index do
     # Defer the DB reads to the connected mount so the disconnected static
     # render doesn't run the same queries a second time. Until then the grid
     # is empty and the template shows the shared standby panel.
-    {maps, counts} = if connected?(socket), do: load_maps(), else: {[], %{}}
+    {maps, counts} = if connected?(socket), do: load_maps(socket.assigns.mode), else: {[], %{}}
 
     {:ok,
      socket
@@ -87,11 +87,19 @@ defmodule EftBuddyWeb.MapsLive.Index do
     {:noreply, push_patch(socket, to: maps_path("", socket.assigns.active_status), replace: true)}
   end
 
-  # The operator HUD (faction/level/mode/karma) pings every LiveView via
-  # `{:sidebar_state_changed, ...}` and the client bridge forwards a
-  # `{:client_state_restored, ...}` blob on connect. The Maps index derives
-  # nothing from either, so swallow them rather than letting them warn.
+  # Boss chances, enemies, raid length and quest counts all differ between PVP
+  # and PVE, so a mode flip reloads the grid for the new mode.
   @impl true
+  def handle_info({:sidebar_state_changed, :mode, mode}, socket) do
+    {maps, counts} = load_maps(mode)
+
+    {:noreply,
+     socket |> assign(:maps, maps) |> assign(:quest_counts, counts) |> assign_visible_maps()}
+  end
+
+  # The HUD's other pings and the client bridge's `{:client_state_restored, ...}`
+  # carry nothing the Maps index derives from, so swallow them rather than
+  # letting them warn.
   def handle_info(_msg, socket), do: {:noreply, socket}
 
   # ── View helpers ───────────────────────────────────────
@@ -192,9 +200,9 @@ defmodule EftBuddyWeb.MapsLive.Index do
   # `raid_duration_label/1` is provided by the shared `EftBuddyWeb.Format`
   # module (imported into every template via `html_helpers/0`).
 
-  defp load_maps do
-    maps = Maps.list_maps()
-    counts = Maps.quest_counts()
+  defp load_maps(mode) do
+    maps = Maps.list_maps(mode)
+    counts = Maps.quest_counts(mode)
     {maps, counts}
   rescue
     _ in [DBConnection.ConnectionError, Postgrex.Error, Ecto.QueryError] -> {[], %{}}

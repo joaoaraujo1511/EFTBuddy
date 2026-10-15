@@ -207,9 +207,6 @@ defmodule EftBuddy.Cache.Warmer do
       spec("hideout.modules", ["HideoutSync"], {EftBuddy.Hideout, :list_modules, []},
         keys: [{EftBuddy.Hideout, :list_modules}]
       ),
-      spec("maps.list", ["MapsSync"], {EftBuddy.Maps, :list_maps, [[]]},
-        keys: [{EftBuddy.Maps, :list_maps, []}]
-      ),
       spec("tasks.traders_with_tasks", ["TasksSync"], {EftBuddy.Tasks, :traders_with_tasks, []},
         keys: [{EftBuddy.Tasks, :traders_with_tasks, nil}]
       ),
@@ -309,6 +306,12 @@ defmodule EftBuddy.Cache.Warmer do
         keys: [{EftBuddy.Tasks, :list_tasks, [], nil}]
       )
     ] ++
+      for mode <- @ui_modes do
+        # Map data is per game mode upstream; the index reads one list per mode.
+        spec("maps.list:#{mode}", ["MapsSync"], {EftBuddy.Maps, :list_maps, [mode, []]},
+          keys: [{EftBuddy.Maps, :list_maps, EftBuddy.GameMode.to_db(mode), []}]
+        )
+      end ++
       for mode <- @ui_modes do
         # EXACTLY the Tasks page's call shape. `list_tasks/1` only caches a
         # whitelisted set of option shapes, so a warm that passed anything else
