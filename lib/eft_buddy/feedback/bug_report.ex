@@ -65,6 +65,9 @@ defmodule EftBuddy.Feedback.BugReport do
     |> validate_length(:description, min: 10, max: @description_max)
   end
 
-  defp trim(value) when is_binary(value), do: String.trim(value)
+  # NUL characters are removed as well. They are invisible, mean nothing in a bug
+  # report, and Postgres `text` rejects them, so one pasted from a log viewer
+  # made `Repo.insert` raise and took the report page down with the report.
+  defp trim(value) when is_binary(value), do: value |> String.replace("\0", "") |> String.trim()
   defp trim(value), do: value
 end

@@ -341,6 +341,9 @@ defmodule EftBuddy.Operator do
   @doc "Highest legal scav karma, as a float (for form `max=` attributes)."
   def max_karma, do: karma_to_float(@max_karma_cents)
 
+  defp clamp_karma_units(value),
+    do: value |> max(@min_karma_cents / 100) |> min(@max_karma_cents / 100)
+
   defp clamp_karma_cents(cents) do
     cents |> max(@min_karma_cents) |> min(@max_karma_cents)
   end
@@ -361,12 +364,18 @@ defmodule EftBuddy.Operator do
   # JSON deserialises as an integer (JS `JSON.stringify(0.0)` emits `0`), so
   # both numeric shapes mean the same thing and scale by 100. Floats are
   # rounded rather than truncated so 0.15 lands on 15, not 14.
-  defp to_karma_cents(value) when is_integer(value), do: value * 100
-  defp to_karma_cents(value) when is_float(value), do: round(value * 100)
+  #
+  # The value is clamped to the karma range BEFORE it is scaled, not after. A
+  # cookie or an imported backup can carry any number JSON allows, and
+  # `round(1.0e308 * 100)` raises ArithmeticError rather than returning a value
+  # to clamp. `parse_all/1` runs on every request, so one such value made every
+  # page return 500 for that browser, including the Backup -> Reset that would
+  # have fixed it.
+  defp to_karma_cents(value) when is_number(value), do: round(clamp_karma_units(value) * 100)
 
   defp to_karma_cents(value) when is_binary(value) do
     case value |> String.trim() |> Float.parse() do
-      {f, _rest} -> round(f * 100)
+      {f, _rest} -> round(clamp_karma_units(f) * 100)
       :error -> nil
     end
   end

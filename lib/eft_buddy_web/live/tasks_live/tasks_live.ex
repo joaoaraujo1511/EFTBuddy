@@ -322,41 +322,50 @@ defmodule EftBuddyWeb.TasksLive.Index do
   # `Wiki.get_quest/1` read, all of it Postgres. It runs on an explicit
   # user click and is memoised for the rest of the session, which is what
   # makes that acceptable - not a cache layer underneath it.
+  #
+  # The id comes from the client, so an id that names no listed task is ignored.
+  # It used to reach `load_details(nil, _)`, which has no clause for nil, and the
+  # LiveView crashed and remounted.
   def handle_event("toggle_expand", %{"id" => task_id}, socket) do
     %{expanded_ids: expanded, details_cache: cache, filtered_tasks: filtered_tasks} =
       socket.assigns
 
-    if MapSet.member?(expanded, task_id) do
-      new_expanded = MapSet.delete(expanded, task_id)
+    cond do
+      MapSet.member?(expanded, task_id) ->
+        new_expanded = MapSet.delete(expanded, task_id)
 
-      socket =
-        socket
-        |> assign(:expanded_ids, new_expanded)
-        |> stream_insert(
-          :tasks,
-          row_with_expansion(task_id, filtered_tasks, cache, new_expanded)
-        )
+        socket =
+          socket
+          |> assign(:expanded_ids, new_expanded)
+          |> stream_insert(
+            :tasks,
+            row_with_expansion(task_id, filtered_tasks, cache, new_expanded)
+          )
 
-      {:noreply, socket}
-    else
-      {details, new_cache} =
-        case Map.fetch(cache, task_id) do
-          {:ok, cached} -> {cached, cache}
-          :error -> load_details(Enum.find(filtered_tasks, &(&1.id == task_id)), cache)
-        end
+        {:noreply, socket}
 
-      new_expanded = MapSet.put(expanded, task_id)
+      task = Enum.find(filtered_tasks, &(&1.id == task_id)) ->
+        {details, new_cache} =
+          case Map.fetch(cache, task_id) do
+            {:ok, cached} -> {cached, cache}
+            :error -> load_details(task, cache)
+          end
 
-      socket =
-        socket
-        |> assign(:expanded_ids, new_expanded)
-        |> assign(:details_cache, new_cache)
-        |> stream_insert(
-          :tasks,
-          row_with_expansion(task_id, filtered_tasks, new_cache, new_expanded, details)
-        )
+        new_expanded = MapSet.put(expanded, task_id)
 
-      {:noreply, socket}
+        socket =
+          socket
+          |> assign(:expanded_ids, new_expanded)
+          |> assign(:details_cache, new_cache)
+          |> stream_insert(
+            :tasks,
+            row_with_expansion(task_id, filtered_tasks, new_cache, new_expanded, details)
+          )
+
+        {:noreply, socket}
+
+      true ->
+        {:noreply, socket}
     end
   end
 

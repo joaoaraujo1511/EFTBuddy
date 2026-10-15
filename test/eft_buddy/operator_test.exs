@@ -47,6 +47,17 @@ defmodule EftBuddy.OperatorTest do
       assert Operator.parse(:scav_karma, -99) == -600
     end
 
+    test "clamps values far outside the range instead of raising" do
+      # REGRESSION (audit H4). These used to be scaled before they were clamped,
+      # and `round(1.0e308 * 100)` raises. One such value in the prefs cookie or an
+      # imported backup made every page 500 for that browser.
+      assert Operator.parse(:scav_karma, 1.0e308) == 600
+      assert Operator.parse(:scav_karma, -1.0e308) == -600
+      assert Operator.parse(:scav_karma, "1e308") == 600
+      assert Operator.parse(:scav_karma, 10 ** 400) == 600
+      assert Operator.parse(:scav_karma, "1e400") == nil
+    end
+
     test "repeated stepping does not accumulate float drift" do
       # The whole reason karma is integral internally: doing this with floats
       # yields 0.30000000000000004 and renders as a jittering HUD value.

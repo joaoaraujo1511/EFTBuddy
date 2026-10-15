@@ -73,15 +73,20 @@ defmodule EftBuddyWeb.SessionController do
   # to `/tasks` instead of reaching `redirect/2`.
   #
   # Deliberately narrow: every path this app can return to is a slug route with
-  # at most a simple query string, so unreserved characters plus `?`, `=` and `&`
-  # cover them all. Widening it means re-checking against `redirect/2`'s own
-  # rejects.
-  @return_to_pattern ~r{\A/[A-Za-z0-9\-._~/]*(\?[A-Za-z0-9\-._~/=&%]*)?\z}
+  # at most a simple query string, so unreserved characters plus `?`, `=`, `&`,
+  # `%` and `+` cover them all. `+` is how `URI.encode_query/1`, which builds
+  # every search URL here, encodes a space; without it, Import or Reset from
+  # `/items?q=ak+74` dropped the visitor on `/tasks`. Widening it means
+  # re-checking against `redirect/2`'s own rejects.
+  @return_to_pattern ~r{\A/[A-Za-z0-9\-._~/]*(\?[A-Za-z0-9\-._~/=&%+]*)?\z}
 
+  # `%` lets the query spell `/%09`, which is one of `redirect/2`'s rejects, so
+  # that is refused separately. The pattern already excludes `\` and a raw tab.
   defp safe_return_to(%{"return_to" => path}) when is_binary(path) do
-    if not String.starts_with?(path, "//") and Regex.match?(@return_to_pattern, path),
-      do: path,
-      else: "/tasks"
+    if not String.starts_with?(path, "//") and not String.contains?(path, "/%09") and
+         Regex.match?(@return_to_pattern, path),
+       do: path,
+       else: "/tasks"
   end
 
   defp safe_return_to(_params), do: "/tasks"
