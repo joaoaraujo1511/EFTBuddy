@@ -604,6 +604,7 @@ defmodule EftBuddy.Items.Sync do
                 low_24h_price: item["low24hPrice"],
                 high_24h_price: item["high24hPrice"],
                 historical_prices: append_history(prev, item["lastLowPrice"], now_ms),
+                change_last_48h_percent: to_float(item["changeLast48hPercent"]),
                 inserted_at: now,
                 updated_at: now
               }
@@ -617,6 +618,7 @@ defmodule EftBuddy.Items.Sync do
       :low_24h_price,
       :high_24h_price,
       :historical_prices,
+      :change_last_48h_percent,
       :updated_at
     ]
 
