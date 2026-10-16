@@ -526,10 +526,15 @@ defmodule EftBuddyWeb.ItemsLive.Index do
     "#{count} #{needs_verb(count)} to be obtained for the quest"
   end
 
-  # Hideout "needed for" sentence. Hideout items don't have a
-  # found-in-raid concept, so there's only one phrasing. Begins
-  # with a digit, so it's already correctly cased.
+  # Hideout "needed for" sentence. Like quests, some upgrades only accept
+  # found-in-raid items (tarkov.dev `foundInRaid`), and the phrase is
+  # highlighted the same way through `fir_text/1`. Begins with a digit, so
+  # it's already correctly cased.
   @doc false
+  def hideout_needed_sentence(%{quantity: q, found_in_raid: true}) do
+    "#{q} #{needs_verb(q)} to be found in raid for the"
+  end
+
   def hideout_needed_sentence(%{quantity: q}) do
     "#{q} #{needs_verb(q)} to be obtained for the"
   end

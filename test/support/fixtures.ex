@@ -84,7 +84,8 @@ defmodule EftBuddy.Fixtures do
           :last_low_price,
           :avg_24h_price,
           :low_24h_price,
-          :high_24h_price
+          :high_24h_price,
+          :change_last_48h_percent
         ])
 
       item_price(Map.merge(%{item_id: item.id, base_price: item.base_price}, price_attrs))

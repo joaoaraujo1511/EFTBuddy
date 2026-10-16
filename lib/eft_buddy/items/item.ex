@@ -63,6 +63,8 @@ defmodule EftBuddy.Items.Item do
     # (not the DB) so every template that renders an `%Item{}` — flea
     # card, items detail panel — can read `item.historical_prices`.
     field :historical_prices, {:array, :map}, virtual: true
+    # Overlaid from `item_prices` the same way: tarkov.dev's 48h change, in percent.
+    field :change_last_48h_percent, :float, virtual: true
 
     # Source-of-this-item edges. The "for" side (item is rewarded
     # *by* a recipe) is what the expanded UI panel renders under

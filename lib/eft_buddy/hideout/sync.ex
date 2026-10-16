@@ -484,7 +484,8 @@ defmodule EftBuddy.Hideout.Sync do
                   id: Ecto.UUID.generate(),
                   level_id: level_id,
                   item_id: item_id,
-                  quantity: req["quantity"]
+                  quantity: req["quantity"],
+                  found_in_raid: req["foundInRaid"] == true
                 }
               ]
           end

@@ -34,6 +34,8 @@ defmodule EftBuddy.Items.ItemPrice do
     # refresh appends the item's current `lastLowPrice` and trims to a
     # bounded window. NULL/`[]` until enough refreshes have accumulated.
     field :historical_prices, {:array, :map}
+    # tarkov.dev's own 48-hour flea price change, in percent.
+    field :change_last_48h_percent, :float
 
     belongs_to :item, EftBuddy.Items.Item
 
