@@ -29,9 +29,16 @@ defmodule EftBuddyWeb.FleaMarketLiveTest do
     refute html =~ "Bolts"
   end
 
-  test "card shows the flea low and a 24h price-change percentage", %{conn: conn} do
+  test "card shows the flea low and upstream's 48h price change", %{conn: conn} do
     cat = category(%{name: "Medikit"})
-    item(%{name: "Salewa", category_id: cat.id, last_low_price: 3_000, avg_24h_price: 3_450})
+
+    item(%{
+      name: "Salewa",
+      category_id: cat.id,
+      last_low_price: 3_000,
+      avg_24h_price: 3_450,
+      change_last_48h_percent: -13.04
+    })
 
     {:ok, _view, html} = live(conn, ~p"/flea-market")
 
@@ -39,11 +46,9 @@ defmodule EftBuddyWeb.FleaMarketLiveTest do
     # The card leads with the last-low "Flea Low" price, thousands-separated.
     assert html =~ "Flea Low"
     assert html =~ "3,000"
-    # Per the round-2 refinement, the right-hand metric is the 24h price
-    # fluctuation percentage (label + signed %), not the raw 24h average.
-    # With no stored history it falls back to last-low vs the 24h average:
-    # (3000 - 3450) / 3450 * 100 = -13.0%.
-    assert html =~ "24h"
+    # The right-hand metric is tarkov.dev's own 48h change, rounded to one
+    # decimal. It used to be a "24h" figure computed from our own history.
+    assert html =~ "48h"
     assert html =~ "-13.0%"
   end
 

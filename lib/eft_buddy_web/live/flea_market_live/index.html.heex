@@ -105,7 +105,7 @@
     >
       <div :for={{dom_id, item} <- @streams.items} id={dom_id}>
         <% group_id = group_id_for_category(item.category) %>
-        <% pct = price_change_24h_pct(item) %>
+        <% pct = price_change_pct(item) %>
         <% trend = change_trend(pct) %>
         <% locked? = flea_locked?(item, @pmc_level, @flea_unlock_level) %>
         <% fav? = item.normalized_name in @favorite_slugs %>
@@ -164,11 +164,11 @@
               class="w-full h-7 mb-3"
             />
 
-            <%!-- Flea low headline beside the 24h price-fluctuation badge.
+            <%!-- Flea low headline beside the 48h price-change badge.
                  The row is `items-center` and the badge is a single inline
                  element, so the % sits level with the middle of the big Flea
                  Low value rather than hanging off its baseline. The arrow,
-                 signed %, colour and tooltip all convey the 24h move. --%>
+                 signed %, colour and tooltip all convey the 48h move. --%>
             <div class="mt-auto flex items-center justify-between gap-2">
               <div class="min-w-0">
                 <div class="t-label text-[8px] text-fog-600">Flea Low</div>
@@ -180,7 +180,7 @@
                 </div>
               </div>
               <div
-                title="Price change over the last 24h"
+                title="Price change over the last 48h (tarkov.dev)"
                 class={[
                   "shrink-0 inline-flex items-center gap-1 t-num text-sm leading-none",
                   trend == :up && "text-go",

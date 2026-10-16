@@ -13,6 +13,8 @@ defmodule EftBuddy.Hideout.ItemRequirement do
   @foreign_key_type :binary_id
   schema "hideout_item_requirements" do
     field :quantity, :integer
+    # The upgrade only accepts the item found in raid.
+    field :found_in_raid, :boolean, default: false
 
     belongs_to :level, EftBuddy.Hideout.StationLevel
     belongs_to :item, EftBuddy.Items.Item
@@ -22,7 +24,7 @@ defmodule EftBuddy.Hideout.ItemRequirement do
 
   def changeset(item_requirement, attrs) do
     item_requirement
-    |> cast(attrs, [:quantity, :level_id, :item_id])
+    |> cast(attrs, [:quantity, :found_in_raid, :level_id, :item_id])
     |> validate_required([:quantity, :level_id, :item_id])
     |> validate_number(:quantity, greater_than: 0)
     |> unique_constraint([:level_id, :item_id])

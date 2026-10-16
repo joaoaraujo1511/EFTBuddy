@@ -634,6 +634,13 @@ defmodule EftBuddyWeb.HideoutLive.Index do
           <span class="text-fog-200 group-hover/item:text-amber truncate transition-colors">
             {@item.name}
           </span>
+          <span
+            :if={@item[:fir]}
+            class="shrink-0 text-rust font-semibold text-[10px] uppercase tracking-wider"
+            title="Must be found in raid"
+          >
+            FIR
+          </span>
         </span>
         <span class="t-num text-amber shrink-0 ml-2">×{@item.qty}</span>
       </.link>
@@ -928,7 +935,8 @@ defmodule EftBuddyWeb.HideoutLive.Index do
         id: "i:#{r.item.normalized_name}",
         name: r.item.name,
         qty: thousands(r.quantity),
-        icon: r.item.icon_link
+        icon: r.item.icon_link,
+        fir: r.found_in_raid
       }
     end)
   end
