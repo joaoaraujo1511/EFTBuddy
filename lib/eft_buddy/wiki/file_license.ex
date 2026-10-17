@@ -304,9 +304,21 @@ defmodule EftBuddy.Wiki.FileLicense do
 
   # ── Cache ──────────────────────────────────────────────────────────
 
-  # Created on first use rather than in the supervision tree: this module is
-  # also run from `mix run --no-start` dump scripts, where no application is
-  # started to own a table. Two scrapers can race here, hence the rescue.
+  @doc """
+  Create the licence cache. Called once from `EftBuddy.Application.start/2`.
+
+  The table must belong to a process that outlives the scrapes. It used to be
+  created by whichever caller asked first, and an ETS table dies with its
+  owner: on a cold start that was the `:temporary` Bootstrap task (audit M26),
+  and since every sync runs in a short-lived process, it was every run. The
+  seven-day cache then never survived to a second run.
+  """
+  @spec init_cache() :: :ok
+  def init_cache, do: ensure_cache()
+
+  # Also called on use, as a fallback for code running with no application
+  # started (`mix run --no-start`); there the caller owns the table. Two callers
+  # can race here, hence the rescue.
   defp ensure_cache do
     if :ets.whereis(@cache) == :undefined do
       :ets.new(@cache, [:set, :public, :named_table, read_concurrency: true])
