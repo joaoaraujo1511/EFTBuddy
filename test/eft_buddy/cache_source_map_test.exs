@@ -61,6 +61,46 @@ defmodule EftBuddy.CacheSourceMapTest do
     end
   end
 
+  describe "reads that count or join across feeds (audit H7)" do
+    test "the item tab badges are dropped by every feed whose rows they count" do
+      # Keyed on ItemsSync alone, the warmer rebuilt them seconds after the items
+      # step, before barters and crafts committed, and kept that for 26 hours.
+      EftBuddy.Items.scope_counts(:pvp)
+
+      sources = sources_for({EftBuddy.Items, :scope_counts, :pvp})
+
+      for feed <- ~w(ItemsSync QuestItemsSync TasksSync HideoutSync BartersSync CraftsSync) do
+        assert feed in sources, "#{feed} writes rows scope_counts counts"
+      end
+    end
+
+    test "a barter sync drops the badges" do
+      EftBuddy.Items.scope_counts(:pvp)
+
+      assert Cache.invalidate_source("BartersSync") >= 1
+      refute Enum.any?(Cache.entries(), &(&1.key == {EftBuddy.Items, :scope_counts, :pvp}))
+    end
+
+    test "traders_with_tasks is dropped by HideoutSync, which writes the traders" do
+      EftBuddy.Tasks.traders_with_tasks()
+
+      sources = sources_for({EftBuddy.Tasks, :traders_with_tasks, nil})
+
+      assert "TasksSync" in sources
+      assert "HideoutSync" in sources
+    end
+
+    test "the warmer rebuilds both on the same feeds the reads are dropped by" do
+      # Otherwise a feed drops the entry and nothing re-warms it, or a warm runs
+      # on a feed that never invalidated it.
+      specs = Map.new(EftBuddy.Cache.Warmer.default_specs(), &{&1.label, &1.sources})
+
+      assert specs["items.scope_counts:pvp"] == EftBuddy.Items.scope_count_sources()
+      assert specs["items.scope_counts:pve"] == EftBuddy.Items.scope_count_sources()
+      assert specs["tasks.traders_with_tasks"] == EftBuddy.Tasks.traders_with_tasks_sources()
+    end
+  end
+
   describe "the ammo split" do
     test "ballistics and availability are separate entries with different owners" do
       EftBuddy.Ammo.list_rounds()

@@ -35,6 +35,16 @@ defmodule EftBuddy.Sync.Freshness do
   "skipped once on a cold start" and "has skipped every run for a day" has to be
   visible.
 
+  ## One failed run is not a fault; two in a row are
+
+  A family is `:failed` only once a label in it has failed twice in a row
+  (`consecutive_failures` in `Reporter.status/0`). A single failure used to be
+  enough, so one Fandom 503 on the twelve-hourly events scrape meant twelve hours
+  of 503 from `/health/sync` while the data stood well inside its budget. A failed
+  run now retries once after fifteen minutes (`EftBuddy.Sync.Scheduler`), so a
+  real outage reaches the second failure quickly, and a feed that keeps failing
+  still goes `:stale` on its budget either way.
+
   ## Why a fresh boot is not "degraded"
 
   A probe that reports unhealthy for the first minutes of every deploy trains its
@@ -56,6 +66,9 @@ defmodule EftBuddy.Sync.Freshness do
   """
 
   alias EftBuddy.Sync.Reporter
+
+  # Consecutive failed runs before a family reads `:failed`.
+  @failures_to_degrade 2
 
   # {label_prefix, budget_seconds, cadence_owner}
   #
@@ -287,7 +300,14 @@ defmodule EftBuddy.Sync.Freshness do
         # every feed degraded for its first cycle.
         never_succeeded? = ages == []
         oldest = if never_succeeded?, do: nil, else: Enum.max(ages)
-        failed? = Enum.any?(runs, fn {_label, s} -> s.outcome == :error end)
+        # Two failures in a row, not one: see the moduledoc. A record without the
+        # counter predates it, and is read as failing (the old rule) rather than
+        # risk hiding a fault for a cycle.
+        failed? =
+          Enum.any?(runs, fn {_label, s} ->
+            s.outcome == :error and
+              Map.get(s, :consecutive_failures, @failures_to_degrade) >= @failures_to_degrade
+          end)
 
         # A run that refused a destructive prune reports `outcome: :ok` — it did
         # complete. But it completed by DECLINING to trust its own snapshot, which

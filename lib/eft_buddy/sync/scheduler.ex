@@ -71,6 +71,11 @@ defmodule EftBuddy.Sync.Scheduler do
   same callback in one module, which the compiler warns about and which reads as
   an accident.
 
+  On top of `next_interval/2`, a failed run is retried once, after
+  `failure_retry_ms/0` (`after_run_delay/3`), and a feed whose cold-start step
+  failed gets the same single retry through `:bootstrap_failed`. Each run executes
+  in a short-lived process (`run_isolated/1`) so its heap is freed when it ends.
+
   ## Jitter is capped
 
   `:rand.uniform(div(interval, 10) + 1)` reads as "±10%", which is fine at the
@@ -125,6 +130,58 @@ defmodule EftBuddy.Sync.Scheduler do
   # loser that waited twelve hours would turn a five-minute overlap into half a
   # day of stale data.
   @contention_retry_ms 5 * 60 * 1_000
+
+  # How soon a failed run, or a feed whose cold-start step failed, tries again.
+  # Once: if the retry fails too, the feed goes back to its interval, so an
+  # outage costs one extra request per cycle rather than a loop against an
+  # upstream that is already struggling. Before this a failed run waited a full
+  # interval (6-24h), and `EftBuddy.Sync.Freshness` could not see a feed fail
+  # twice in a row for up to two of them.
+  @failure_retry_ms 15 * 60 * 1_000
+
+  @doc "Delay before the single retry of a failed run."
+  def failure_retry_ms, do: @failure_retry_ms
+
+  @doc """
+  Whether `result` is a failed run. Losing the lock is not: that is ordinary
+  contention with its own short retry. A skip is not either: nothing went wrong.
+  """
+  def failed_run?({:error, :already_running}), do: false
+  def failed_run?({:error, _reason}), do: true
+  def failed_run?(_result), do: false
+
+  @doc """
+  The delay to arm after a run, and whether the run it arms is the retry.
+
+  `next` is what the feed's own `next_interval/2` asked for. A first failure is
+  retried after `failure_retry_ms/0` (or sooner, if `next` already is); a failed
+  retry, and anything else, goes back to `next`.
+  """
+  @spec after_run_delay(term(), non_neg_integer(), boolean()) :: {non_neg_integer(), boolean()}
+  def after_run_delay(result, next, retrying?) do
+    if failed_run?(result) and not retrying? do
+      {min(next, @failure_retry_ms), true}
+    else
+      {next, false}
+    end
+  end
+
+  @doc """
+  Run `fun` in a short-lived process and return its result.
+
+  A run decodes documents of up to ~17 MB, and a long-lived GenServer that does
+  that work itself keeps the heap afterwards: measured on the Pi, `Items.Sync`
+  sat at 291 MB and `Armor.Sync` at 70 MB between runs (audit M4). A process
+  that exits gives everything back. The caller waits for it, so locking,
+  scheduling and the one-run-at-a-time guarantee are unchanged, and `$callers`
+  carries test sandbox access across.
+
+  `fun` must not raise (feeds pass their `safe_run`): the task is linked, so a
+  crash takes the caller with it, exactly as it would have run inline.
+  """
+  def run_isolated(fun) when is_function(fun, 0) do
+    fun |> Task.async() |> Task.await(:infinity)
+  end
 
   @doc "Milliseconds of jitter for a delay of `ms`. Capped — see the moduledoc."
   def jitter(ms) when is_integer(ms) and ms > 0,
@@ -346,17 +403,18 @@ defmodule EftBuddy.Sync.Scheduler do
 
         warn_if_interval_outruns_budget(interval)
 
-        {:ok, %{interval: interval, timer: arm(first)}}
+        {:ok, %{interval: interval, timer: arm(first), retrying?: false}}
       end
 
       @impl true
       def handle_info(:sync, %{interval: interval} = state) do
-        result = safe_run()
+        result = Scheduler.run_isolated(&safe_run/0)
         after_run(result)
 
-        next = next_interval(result, interval)
+        {next, retrying?} =
+          Scheduler.after_run_delay(result, next_interval(result, interval), state.retrying?)
 
-        {:noreply, %{state | timer: arm(next)}}
+        {:noreply, %{state | timer: arm(next), retrying?: retrying?}}
       end
 
       def handle_info(_msg, state), do: {:noreply, state}
@@ -366,8 +424,17 @@ defmodule EftBuddy.Sync.Scheduler do
         {:noreply, arm_first_run(state, @scheduler_bootstrap_offset)}
       end
 
+      # This feed's cold-start step failed or was skipped, so it has not run and
+      # its table may be empty. Retry soon, measured from the failure rather than
+      # from boot: a short timer armed at boot could fire while a slow cold start
+      # had not yet reached this feed's step (see `EftBuddy.Sync.Bootstrap`). The
+      # failed step counts as the first failure, so this is the one retry.
+      def handle_cast(:bootstrap_failed, state) do
+        {:noreply, %{arm_first_run(state, Scheduler.failure_retry_ms()) | retrying?: true}}
+      end
+
       def handle_cast(:sync_now, state) do
-        safe_run()
+        Scheduler.run_isolated(&safe_run/0)
         {:noreply, state}
       end
 

@@ -153,6 +153,12 @@ defmodule EftBuddy.Cache do
 
   Passing `[]` for `sources` means the entry is only ever evicted by its TTL. That
   is almost always a mistake — prefer naming the syncer.
+
+  A value is not stored if one of its sources invalidated while `fun` ran: it may
+  have been read before that sync committed, and stored after the invalidation it
+  would stand for the entry's whole TTL (2-52h) as if it were current, and keep
+  the warmer from rebuilding it (audit M7). The caller still gets the value; the
+  next read computes a fresh one.
   """
   def fetch(key, sources, fun, opts \\ []) when is_list(sources) and is_function(fun, 0) do
     if enabled?() do
@@ -163,8 +169,9 @@ defmodule EftBuddy.Cache do
 
         :miss ->
           bump(miss_slot())
+          before = generations(sources)
           value = fun.()
-          put(key, value, sources, opts)
+          if generations(sources) == before, do: put(key, value, sources, opts)
           value
       end
     else
@@ -214,8 +221,10 @@ defmodule EftBuddy.Cache do
           hits
 
         misses ->
+          # The same guard as `fetch/4`.
+          before = generations(sources)
           filled = fun.(Enum.reverse(misses))
-          put_many(Map.to_list(filled), sources, opts)
+          if generations(sources) == before, do: put_many(Map.to_list(filled), sources, opts)
           Map.merge(hits, filled)
       end
     else

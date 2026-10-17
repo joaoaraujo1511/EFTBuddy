@@ -80,7 +80,7 @@ defmodule EftBuddyWeb.TelemetryTest do
       # measurement silently produces no series.
       assert Map.has_key?(metadata, :label)
       assert Map.has_key?(metadata, :outcome)
-      assert is_integer(measurements.seconds_since_run)
+      assert is_integer(measurements.seconds_since_ok)
     end
 
     test "operator sessions: count and ceiling" do
