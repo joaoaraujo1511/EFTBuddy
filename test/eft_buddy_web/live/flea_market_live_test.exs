@@ -2,11 +2,9 @@ defmodule EftBuddyWeb.FleaMarketLiveTest do
   use EftBuddyWeb.ConnCase
 
   import Phoenix.LiveViewTest
-  import Ecto.Query
   import EftBuddy.Fixtures
 
   alias EftBuddy.Repo
-  alias EftBuddy.Items.ItemPrice
 
   test "lists flea-eligible items and renders category filter chips", %{conn: conn} do
     ammo = category(%{name: "Ammo"})
@@ -71,16 +69,16 @@ defmodule EftBuddyWeb.FleaMarketLiveTest do
     it =
       item(%{name: "MOE grip", category_id: cat.id, last_low_price: 4_200})
 
-    Repo.update_all(
-      from(p in ItemPrice, where: p.item_id == ^it.id and p.game_mode == "regular"),
-      set: [
-        historical_prices: [
-          %{"price" => 4_000, "timestamp" => 1},
-          %{"price" => 4_600, "timestamp" => 2},
-          %{"price" => 4_200, "timestamp" => 3}
-        ]
-      ]
-    )
+    now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
+
+    for {price, hours_ago} <- [{4_000, 30}, {4_600, 12}, {4_200, 2}] do
+      Repo.insert!(%EftBuddy.Items.ItemPricePoint{
+        item_id: it.id,
+        game_mode: "regular",
+        price: price,
+        observed_at: NaiveDateTime.add(now, -hours_ago * 3_600, :second)
+      })
+    end
 
     {:ok, _view, html} = live(conn, ~p"/flea-market")
 

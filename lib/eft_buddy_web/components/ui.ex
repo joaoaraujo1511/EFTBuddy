@@ -821,16 +821,16 @@ defmodule EftBuddyWeb.UI do
 
   @doc """
   A compact inline price-history graph rendered straight from an item's
-  `historical_prices` - the ~2-day flea time series from tarkov.dev
-  (`%{"price" => int, "timestamp" => int_ms}` points, oldest first).
+  `historical_prices`: one `%{"price" => int, "timestamp" => int_ms}` point
+  per price change, oldest first (see `EftBuddy.Items.ItemPricePoint`).
 
-  Draws a single `<polyline>` in a fixed 100×28 viewBox stretched to the
-  container width (`class`), tinted by the 48h `tone` (`:up` = go,
-  `:down` = rust, `:flat`/other = fog). Renders nothing when there are
-  fewer than two numeric points to plot, so callers can drop it in
-  unconditionally and items with no history simply show no graph.
-
-  Shared by the Flea Market cards and the Items detail panel.
+  Plotted by time across the last 48 hours as a step line, because a price
+  holds until the next change: a point before the window starts the line at
+  its left edge, and the last price runs to the right edge (now). One point is
+  a flat line, a price that hasn't moved. Draws a single `<polyline>` in a
+  fixed 100x28 viewBox stretched to the container width (`class`), tinted by
+  the 48h `tone` (`:up` = go, `:down` = rust, `:flat`/other = fog). Renders
+  nothing without a numeric point, so callers can drop it in unconditionally.
   """
   attr :points, :any, default: nil
   attr :tone, :atom, default: :flat
@@ -869,35 +869,53 @@ defmodule EftBuddyWeb.UI do
   @spark_h 28
   @spark_pad 2
 
-  # Build the `points` attribute for the polyline: index → x across the
-  # 100-wide viewBox, price → (inverted) y in the 28-high range with a 2px
-  # vertical pad so the line never clips. `nil` for < 2 numeric prices.
+  # Build the `points` attribute for the polyline: time -> x across the
+  # 100-wide viewBox over the 48h window ending now, price -> (inverted) y in
+  # the 28-high range with a 2px vertical pad so the line never clips. Each
+  # price is held (horizontal) until the next point, then steps. `nil` without a
+  # numeric point.
   defp spark_polyline(points) when is_list(points) do
-    prices = points |> Enum.map(&Map.get(&1, "price")) |> Enum.filter(&is_number/1)
-
-    case prices do
+    points
+    |> Enum.filter(&(is_number(Map.get(&1, "price")) and is_number(Map.get(&1, "timestamp"))))
+    |> Enum.sort_by(&Map.get(&1, "timestamp"))
+    |> case do
       [] -> nil
-      [_only] -> nil
-      _ -> build_spark_polyline(prices)
+      sorted -> build_spark_polyline(sorted, System.system_time(:millisecond))
     end
   end
 
   defp spark_polyline(_), do: nil
 
-  defp build_spark_polyline(prices) do
-    min = Enum.min(prices)
-    max = Enum.max(prices)
+  defp build_spark_polyline(points, now) do
+    window = EftBuddy.Items.ItemPricePoint.window_ms()
+    start = now - window
+
+    # Everything before the window collapses to its latest price, at the left edge.
+    {before, inside} = Enum.split_with(points, &(&1["timestamp"] <= start))
+
+    series =
+      case List.last(before) do
+        nil -> inside
+        last -> [%{last | "timestamp" => start} | inside]
+      end
+
+    prices = Enum.map(series, & &1["price"])
+    {min, max} = Enum.min_max(prices)
     span = Kernel.max(max - min, 1)
-    n = length(prices)
     inner_h = @spark_h - 2 * @spark_pad
 
-    prices
-    |> Enum.with_index()
-    |> Enum.map_join(" ", fn {price, i} ->
-      x = i * @spark_w / (n - 1)
-      y = @spark_pad + inner_h * (1 - (price - min) / span)
-      "#{spark_coord(x)},#{spark_coord(y)}"
-    end)
+    x = fn ts -> Kernel.min(Kernel.max((ts - start) * @spark_w / window, 0), @spark_w) end
+    y = fn price -> @spark_pad + inner_h * (1 - (price - min) / span) end
+
+    steps =
+      series
+      |> Enum.chunk_every(2, 1)
+      |> Enum.flat_map(fn
+        [a, b] -> [{x.(a["timestamp"]), y.(a["price"])}, {x.(b["timestamp"]), y.(a["price"])}]
+        [last] -> [{x.(last["timestamp"]), y.(last["price"])}, {@spark_w, y.(last["price"])}]
+      end)
+
+    Enum.map_join(steps, " ", fn {px, py} -> "#{spark_coord(px)},#{spark_coord(py)}" end)
   end
 
   defp spark_coord(n), do: :erlang.float_to_binary(n * 1.0, decimals: 1)

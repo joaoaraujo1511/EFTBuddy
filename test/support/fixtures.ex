@@ -24,7 +24,7 @@ defmodule EftBuddy.Fixtures do
     CraftRewardItem,
     Item,
     ItemPrice,
-    SellFor,
+    BuyFor,
     Vendor
   }
 
@@ -112,8 +112,8 @@ defmodule EftBuddy.Fixtures do
   Insert a `sell_for` row (a vendor sell price). Defaults to the
   `regular` mode; requires `item_id` and `vendor_id`.
   """
-  def sell_for(attrs \\ %{}) do
-    insert(SellFor, %{price: 100, price_rub: 100, currency: "RUB", game_mode: "regular"}, attrs)
+  def buy_for(attrs \\ %{}) do
+    insert(BuyFor, %{price: 100, price_rub: 100, currency: "RUB", game_mode: "regular"}, attrs)
   end
 
   def trader(attrs \\ %{}) do

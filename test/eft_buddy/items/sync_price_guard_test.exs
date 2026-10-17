@@ -114,14 +114,13 @@ defmodule EftBuddy.Items.SyncPriceGuardTest do
     end
 
     test "leaves the accumulated price history untouched", %{items: items} do
-      # `append_history/3` already returns the previous series unchanged for a nil
-      # price, so history was never the exposure — pinned so a future refactor of
-      # the refusal branch cannot quietly start truncating sparklines.
-      before = Repo.all(from(p in ItemPrice, select: p.historical_prices))
+      # Pinned so a future refactor of the refusal branch cannot quietly start
+      # rewriting sparklines: a refused write records no history point either.
+      before = Repo.aggregate(EftBuddy.Items.ItemPricePoint, :count)
 
       write(document(items, fn _ -> nil end))
 
-      assert Repo.all(from(p in ItemPrice, select: p.historical_prices)) == before
+      assert Repo.aggregate(EftBuddy.Items.ItemPricePoint, :count) == before
     end
   end
 
