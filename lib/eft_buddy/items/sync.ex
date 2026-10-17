@@ -755,10 +755,6 @@ defmodule EftBuddy.Items.Sync do
           # trade, don't have a category, and don't have a tier
           # color. The Items page already nil-guards on these.
           base_price: nil,
-          avg_24h_price: nil,
-          low_24h_price: nil,
-          high_24h_price: nil,
-          last_low_price: nil,
           wiki_link: nil,
           link: nil,
           inspect_image_link: nil,
