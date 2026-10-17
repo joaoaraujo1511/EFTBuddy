@@ -437,10 +437,15 @@ defmodule EftBuddy.Tasks do
   Returns a list of `%EftBuddy.Hideout.Trader{}` ordered by name.
   """
   def traders_with_tasks(game_mode \\ nil) do
-    Cache.fetch({__MODULE__, :traders_with_tasks, game_mode}, ["TasksSync"], fn ->
+    Cache.fetch({__MODULE__, :traders_with_tasks, game_mode}, traders_with_tasks_sources(), fn ->
       traders_with_tasks_uncached(game_mode)
     end)
   end
+
+  # The rows are `EftBuddy.Hideout.Trader`s, which the hideout sync writes, joined
+  # to tasks (audit H7). Shared with the warmer's spec.
+  @doc false
+  def traders_with_tasks_sources, do: ["TasksSync", "HideoutSync"]
 
   defp traders_with_tasks_uncached(game_mode) do
     from(tr in Trader,

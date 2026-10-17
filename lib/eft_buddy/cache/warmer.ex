@@ -207,7 +207,10 @@ defmodule EftBuddy.Cache.Warmer do
       spec("hideout.modules", ["HideoutSync"], {EftBuddy.Hideout, :list_modules, []},
         keys: [{EftBuddy.Hideout, :list_modules}]
       ),
-      spec("tasks.traders_with_tasks", ["TasksSync"], {EftBuddy.Tasks, :traders_with_tasks, []},
+      spec(
+        "tasks.traders_with_tasks",
+        EftBuddy.Tasks.traders_with_tasks_sources(),
+        {EftBuddy.Tasks, :traders_with_tasks, []},
         keys: [{EftBuddy.Tasks, :traders_with_tasks, nil}]
       ),
 
@@ -330,7 +333,10 @@ defmodule EftBuddy.Cache.Warmer do
         )
       end ++
       for mode <- @ui_modes do
-        spec("items.scope_counts:#{mode}", ["ItemsSync"], {EftBuddy.Items, :scope_counts, [mode]},
+        spec(
+          "items.scope_counts:#{mode}",
+          EftBuddy.Items.scope_count_sources(),
+          {EftBuddy.Items, :scope_counts, [mode]},
           keys: [{EftBuddy.Items, :scope_counts, mode}]
         )
       end ++
@@ -851,9 +857,11 @@ defmodule EftBuddy.Cache.Warmer do
     # populates something nothing reads, and would otherwise re-run on every
     # single tick forever, silently.
     #
-    # No generation check here: this already self-corrects. An invalidation that
-    # dropped what the warm just wrote shows up as `:no_entry`, and the next tick
-    # rebuilds.
+    # No generation check here, because `Cache.fetch/4` makes one: a value
+    # computed while one of its sources invalidated is never stored, so the warm
+    # shows up as `:no_entry` and the next tick rebuilds. Before that guard
+    # existed, a warm that read before a sync committed could write after its
+    # invalidation, leave a live entry with old data, and report `:ok`.
     if Enum.all?(keys, &Cache.live?/1), do: {:ok, length(keys)}, else: {:no_entry, 0}
   end
 

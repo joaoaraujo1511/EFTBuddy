@@ -120,6 +120,80 @@ defmodule EftBuddy.Sync.ReporterStatusTest do
     end
   end
 
+  describe "consecutive_failures" do
+    test "counts failed runs in a row and resets on anything else" do
+      # What `Freshness` reads: one failure does not fail readiness, two in a row do.
+      assert record("ProbeSync", {:error, :a}).consecutive_failures == 1
+      assert record("ProbeSync", {:error, :b}).consecutive_failures == 2
+      assert record("ProbeSync", {:ok, %{}}).consecutive_failures == 0
+      assert record("ProbeSync", {:error, :c}).consecutive_failures == 1
+      assert record("ProbeSync", {:skip, "nope"}).consecutive_failures == 0
+    end
+
+    test "a crash counts as a failure" do
+      capture_log(fn ->
+        catch_error(Reporter.with_run("ProbeSync", fn -> raise "boom" end))
+        catch_error(Reporter.with_run("ProbeSync", fn -> raise "boom" end))
+      end)
+
+      assert Reporter.status()["ProbeSync"].consecutive_failures == 2
+    end
+  end
+
+  describe "the freshness gauge (audit L17)" do
+    defp gauges do
+      ref = make_ref()
+      test = self()
+
+      :telemetry.attach(
+        {__MODULE__, ref},
+        [:eft_buddy, :sync, :freshness],
+        fn _event, measurements, meta, _ -> send(test, {ref, meta.label, measurements}) end,
+        nil
+      )
+
+      try do
+        Reporter.emit_freshness()
+      after
+        :telemetry.detach({__MODULE__, ref})
+      end
+
+      collect(ref, %{})
+    end
+
+    defp collect(ref, acc) do
+      receive do
+        {^ref, label, measurements} -> collect(ref, Map.put(acc, label, measurements))
+      after
+        0 -> acc
+      end
+    end
+
+    test "ages from the last success, so a feed failing every tick keeps climbing" do
+      record("ProbeSync", {:ok, %{}})
+      # Back-date the success: the gauge must report its age, and a later failed
+      # run must not reset it the way it reset the old run-based gauge.
+      [{"ProbeSync", s}] = :ets.lookup(:eft_buddy_sync_status, "ProbeSync")
+      long_ago = DateTime.add(DateTime.utc_now(), -3_600)
+
+      :ets.insert(
+        :eft_buddy_sync_status,
+        {"ProbeSync", %{s | at: long_ago, last_ok_at: long_ago}}
+      )
+
+      record("ProbeSync", {:error, :boom})
+
+      assert %{seconds_since_ok: age} = gauges()["ProbeSync"]
+      assert age >= 3_600
+    end
+
+    test "a label that has never succeeded emits no age at all" do
+      record("ProbeSync", {:error, :boom})
+
+      refute Map.has_key?(gauges(), "ProbeSync")
+    end
+  end
+
   describe "the telemetry a run emits" do
     test "carries the skipped outcome so a handler can see it too" do
       # `[:eft_buddy, :sync, :stop]` drives cache invalidation and warming, both of

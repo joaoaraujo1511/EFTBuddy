@@ -198,10 +198,21 @@ defmodule EftBuddy.Items do
   no `game_mode`), so they return the same count in both modes.
   """
   def scope_counts(game_mode \\ EftBuddy.GameMode.default()) do
-    Cache.fetch({__MODULE__, :scope_counts, game_mode}, ["ItemsSync"], fn ->
+    Cache.fetch({__MODULE__, :scope_counts, game_mode}, scope_count_sources(), fn ->
       scope_counts_uncached(game_mode)
     end)
   end
+
+  # Every feed whose rows a scope counts: items, quest items and task objectives
+  # (`:quest`), hideout requirements (`:hideout`), barters and crafts. Keyed on
+  # ItemsSync alone, the badges were rebuilt five seconds after the items step,
+  # before barters and crafts committed, and kept that count for the 26h TTL:
+  # on a fresh database "BARTER ITEMS (0)" over a tab listing hundreds (audit
+  # H7). Shared with the warmer's spec so the two cannot drift.
+  @scope_count_sources ~w(ItemsSync QuestItemsSync TasksSync HideoutSync BartersSync CraftsSync)
+
+  @doc false
+  def scope_count_sources, do: @scope_count_sources
 
   defp scope_counts_uncached(game_mode) do
     mode = EftBuddy.GameMode.to_db(game_mode)

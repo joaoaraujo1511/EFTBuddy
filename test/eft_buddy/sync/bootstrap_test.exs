@@ -80,28 +80,30 @@ defmodule EftBuddy.Sync.BootstrapTest do
                      "FeedA must be released by the time a later step runs, not at the end"
     end
 
-    test "a failed step leaves its feed on the short fallback" do
+    test "a failed step is not released, and tells its feed to retry soon" do
       # Releasing a feed whose step failed would anchor it a FULL interval out,
-      # with nothing written — an empty table until tomorrow. The fallback is
-      # measured in minutes and is exactly the right timer for that state.
+      # with nothing written — an empty table until tomorrow. Its boot-time
+      # fallback is no better: it is up to ~5h for a late stagger slot, so it
+      # can never fire into a cold start still running. `:bootstrap_failed` arms
+      # a retry measured from the failure instead.
       steps = [%{label: "a", run: fn -> {:error, :upstream_gone} end, notify: FeedA}]
 
       Bootstrap.run_cold_start_steps(steps)
 
-      assert casts(FeedA) == []
+      assert casts(FeedA) == [:bootstrap_failed]
     end
 
-    test "a skipped step also leaves its feed on the fallback" do
+    test "a skipped step is treated the same way" do
       # A skip means the feed ran and wrote nothing, which is likewise better
       # served by retrying in minutes than by a full cycle.
       steps = [%{label: "a", run: fn -> {:skip, :nothing_to_do} end, notify: FeedA}]
 
       Bootstrap.run_cold_start_steps(steps)
 
-      assert casts(FeedA) == []
+      assert casts(FeedA) == [:bootstrap_failed]
     end
 
-    test "a crashing step leaves its feed on the fallback rather than taking the sequence down" do
+    test "a crashing step retries its feed rather than taking the sequence down" do
       steps = [
         %{label: "boom", run: fn -> raise "upstream exploded" end, notify: FeedA},
         %{label: "b", run: fn -> {:ok, :done} end, notify: FeedB}
@@ -109,12 +111,12 @@ defmodule EftBuddy.Sync.BootstrapTest do
 
       Bootstrap.run_cold_start_steps(steps)
 
-      assert casts(FeedA) == []
+      assert casts(FeedA) == [:bootstrap_failed]
       # The sequence continues — a partial cold start beats none.
       assert casts(FeedB) == [:bootstrap_complete]
     end
 
-    test "a step skipped for a failed dependency does not release its feed" do
+    test "a step skipped for a failed dependency does not release its feed either" do
       steps = [
         %{label: "root", key: :root, run: fn -> {:error, :nope} end},
         %{label: "dependent", requires: :root, run: fn -> {:ok, :done} end, notify: FeedA}
@@ -122,7 +124,7 @@ defmodule EftBuddy.Sync.BootstrapTest do
 
       Bootstrap.run_cold_start_steps(steps)
 
-      assert casts(FeedA) == []
+      assert casts(FeedA) == [:bootstrap_failed]
     end
 
     test "a step with no :notify releases nobody and is not an error" do
@@ -138,6 +140,7 @@ defmodule EftBuddy.Sync.BootstrapTest do
       ]
 
       assert Bootstrap.run_cold_start_steps(steps) == [FeedA]
+      assert casts(FeedB) == [:bootstrap_failed]
     end
 
     test "a feed is released exactly once, even across several of its own steps" do
