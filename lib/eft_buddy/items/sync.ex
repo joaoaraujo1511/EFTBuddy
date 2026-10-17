@@ -181,11 +181,11 @@ defmodule EftBuddy.Items.Sync do
   time series of its own, so the price graphs are built from these).
 
   Unlike `run/0` this does NOT touch the structural columns, the entity
-  `items` rows beyond the legacy price mirror, barters, crafts, quest
-  items, or run stale-cleanup — so it can run frequently without the
-  catalog-wide write churn the full pipeline incurs. Returns
-  `{:ok, %{checked: n, updated: m}}` or `{:error, reason}`. Returns
-  `{:error, :already_running}` if another `run*/0` from this module
+  `items` rows, barters, crafts, quest items, or run stale-cleanup — so it
+  can run frequently without the catalog-wide write churn the full pipeline
+  incurs. Returns `{:ok, %{item_prices: %{mode => summary}}}`, or
+  `{:error, {:partial, succeeded, failed}}` when a mode's fetch failed.
+  Returns `{:error, :already_running}` if another `run*/0` from this module
   holds the cluster lock.
   """
   def run_prices, do: with_global_lock(&do_run_prices/0)
