@@ -172,7 +172,8 @@ defmodule EftBuddy.Sync.Reporter do
                    last_ok_at: DateTime.t() | nil,
                    duration_ms: non_neg_integer(),
                    refusals: non_neg_integer(),
-                   consecutive_skips: non_neg_integer()}}
+                   consecutive_skips: non_neg_integer(),
+                   consecutive_failures: non_neg_integer()}}
 
   `at` is when the label last ran; `last_ok_at` is when it last ran *successfully*
   and is `nil` for a label that has never succeeded since boot. `EftBuddy.Sync.Freshness`
@@ -279,8 +280,8 @@ defmodule EftBuddy.Sync.Reporter do
   """
   def seconds_since_last_success do
     status()
-    |> Enum.filter(fn {_label, s} -> s.outcome == :ok end)
-    |> Enum.map(fn {_label, s} -> s.at end)
+    |> Enum.map(fn {_label, s} -> last_ok_at(s) end)
+    |> Enum.reject(&is_nil/1)
     |> case do
       [] -> nil
       times -> DateTime.diff(DateTime.utc_now(), Enum.max(times, DateTime))
@@ -317,17 +318,28 @@ defmodule EftBuddy.Sync.Reporter do
   # its absence is invisible to an event-driven metric. Age has to be *polled* to
   # be observable — one gauge per label, climbing until the next successful run
   # resets it.
+  #
+  # Measured from `last_ok_at`, as `EftBuddy.Sync.Freshness` ages, not from the
+  # last run: measured from `at`, a feed failing on every tick reset its gauge
+  # each time and charted as perfectly fresh. A label that has never succeeded
+  # since boot has no age to report and emits nothing; `/health/sync` covers it.
   def emit_freshness do
     now = DateTime.utc_now()
 
-    Enum.each(status(), fn {label, s} ->
+    for {label, s} <- status(), ok_at = last_ok_at(s), not is_nil(ok_at) do
       :telemetry.execute(
         [:eft_buddy, :sync, :freshness],
-        %{seconds_since_run: DateTime.diff(now, s.at)},
+        %{seconds_since_ok: DateTime.diff(now, ok_at)},
         %{label: label, outcome: s.outcome}
       )
-    end)
+    end
+
+    :ok
   end
+
+  # A record written before `last_ok_at` existed still says when it last worked
+  # if its own outcome was `:ok` (the same fallback `Freshness` uses).
+  defp last_ok_at(s), do: Map.get(s, :last_ok_at) || if(s.outcome == :ok, do: s.at)
 
   # ── Public API ─────────────────────────────────────────
 
@@ -543,6 +555,10 @@ defmodule EftBuddy.Sync.Reporter do
 
   def describe_error(:already_running), do: "another sync is already running"
 
+  # A sub-step that declined to run inside a roll-up (Items' barters and crafts).
+  def describe_error({:skipped, reason}) when is_binary(reason), do: "skipped: #{reason}"
+  def describe_error({:skipped, reason}), do: "skipped: #{inspect(reason)}"
+
   # Unknown shape: still one line, but cap the length so a stray large term
   # can't reintroduce the wall-of-text we're trying to kill.
   def describe_error(other), do: truncate(inspect(other), 300)
@@ -735,7 +751,13 @@ defmodule EftBuddy.Sync.Reporter do
            # start" and "has skipped forty times in a row" are the same record
            # otherwise, and the second is the shape worth seeing on a dashboard.
            consecutive_skips:
-             if(outcome == :skipped, do: Map.get(prev, :consecutive_skips, 0) + 1, else: 0)
+             if(outcome == :skipped, do: Map.get(prev, :consecutive_skips, 0) + 1, else: 0),
+           # Read by `EftBuddy.Sync.Freshness`: one failed run is not enough to fail
+           # readiness, two in a row are. A single Fandom 503 used to turn
+           # `/health/sync` red for the feed's whole cadence (12h for the events
+           # scrape) while its data was well inside budget.
+           consecutive_failures:
+             if(outcome == :error, do: Map.get(prev, :consecutive_failures, 0) + 1, else: 0)
          }}
       )
     end

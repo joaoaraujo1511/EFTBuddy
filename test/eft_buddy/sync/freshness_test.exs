@@ -26,7 +26,25 @@ defmodule EftBuddy.Sync.FreshnessTest do
        # A successful run is its own last success. A non-`:ok` run leaves this
        # `nil`, which is what a feed that has never worked actually looks like —
        # use `ran_then_stopped_working/4` for the more interesting case.
-       last_ok_at: if(outcome == :ok, do: at)
+       last_ok_at: if(outcome == :ok, do: at),
+       # A failure here is a feed that has failed twice in a row, the point at
+       # which readiness degrades. `failed_once/3` builds the single failure that
+       # must not.
+       consecutive_failures: if(outcome == :error, do: 2, else: 0)
+     }}
+  end
+
+  # A label whose latest run failed for the first time, after succeeding
+  # `succeeded_ago` seconds ago.
+  defp failed_once(label, ran_ago, succeeded_ago) do
+    {label,
+     %{
+       outcome: :error,
+       at: DateTime.add(@now, -ran_ago),
+       duration_ms: 10,
+       refusals: 0,
+       last_ok_at: DateTime.add(@now, -succeeded_ago),
+       consecutive_failures: 1
      }}
   end
 
@@ -202,7 +220,7 @@ defmodule EftBuddy.Sync.FreshnessTest do
       assert evaluate(status).syncs["PricesSync"].state == :ok
     end
 
-    test "a failed run is :failed regardless of how recent it was" do
+    test "two failures in a row are :failed regardless of how recent they were" do
       # Recency is not health: a sync that just ran and errored is worse than one
       # that ran an hour ago and succeeded.
       status = all_fresh() |> Map.merge(Map.new([run("HideoutSync", 1, :error)]))
@@ -210,6 +228,41 @@ defmodule EftBuddy.Sync.FreshnessTest do
 
       assert result.status == :degraded
       assert result.syncs["HideoutSync"].state == :failed
+    end
+
+    test "a single failure is not a fault while the data is inside its budget" do
+      # One Fandom 503 on the twelve-hourly events scrape used to mean twelve hours
+      # of 503 from /health/sync. The scheduler retries a failed run after fifteen
+      # minutes, so a real outage reaches its second failure quickly.
+      status = all_fresh() |> Map.merge(Map.new([failed_once("EventsSync", 1, 3_600)]))
+      result = evaluate(status)
+
+      assert result.syncs["EventsSync"].state == :ok
+      assert result.status == :ok
+    end
+
+    test "a single failure still goes stale once the last success is past budget" do
+      %{budget_seconds: budget} = evaluate(all_fresh()).syncs["EventsSync"]
+
+      status = all_fresh() |> Map.merge(Map.new([failed_once("EventsSync", 1, budget + 1)]))
+
+      assert evaluate(status).syncs["EventsSync"].state == :stale
+    end
+
+    test "one failing label among a family's labels is not enough either" do
+      status =
+        all_fresh()
+        |> Map.merge(Map.new([failed_once("TasksSync:pve", 1, 60), run("TasksSync:regular", 5)]))
+
+      assert evaluate(status).syncs["TasksSync"].state == :ok
+    end
+
+    test "a failed record without the counter predates it, and reads as failing" do
+      # Conservative across a deploy: hiding a real fault for a cycle is worse
+      # than reporting one that the next run clears.
+      legacy = %{"HideoutSync" => %{outcome: :error, at: @now, duration_ms: 5, last_ok_at: @now}}
+
+      assert evaluate(Map.merge(all_fresh(), legacy)).syncs["HideoutSync"].state == :failed
     end
 
     test "a failure outranks staleness in the same family" do

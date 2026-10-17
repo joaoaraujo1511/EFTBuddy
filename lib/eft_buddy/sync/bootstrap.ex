@@ -67,8 +67,10 @@ defmodule EftBuddy.Sync.Bootstrap do
   the scrapes: the blanket cast released every feed regardless of whether its step
   had SUCCEEDED, so a feed whose cold start failed still armed a full interval out
   and served an empty table until its next cycle. Only `{:ok, _}` releases a feed
-  now; anything else leaves it on the short fallback, which is what that fallback
-  is for. `report_unnotified/1` logs who those are.
+  now; anything else casts `:bootstrap_failed`, which arms that feed's one retry
+  fifteen minutes after the failure. Not the boot-time fallback: that is up to ~5h
+  for a late stagger slot, deliberately, so it can never fire into a cold start
+  that is still running. `report_unnotified/1` logs who those are.
 
   ## The modes the scheduler still understands
 
@@ -280,7 +282,9 @@ defmodule EftBuddy.Sync.Bootstrap do
             "failed, so every FK this step resolves would be unresolvable"
         )
 
-        {outcomes, notified}
+        # Not run, so not released: its feed gets the same short retry as one
+        # whose own step failed.
+        {outcomes, notify_step(step_spec, {:skip, {:requires, required}}, notified)}
       else
         result = step(step_spec.label, step_spec.run)
 
@@ -317,13 +321,25 @@ defmodule EftBuddy.Sync.Bootstrap do
   # nothing, which is exactly the state the short fallback is for: it should retry
   # in minutes, not arm a full interval out and leave its table empty until
   # tomorrow.
+  #
+  # And a step that did not succeed tells its feed so (`:bootstrap_failed`), which
+  # arms that feed's one retry fifteen minutes from now. Its boot-time fallback is
+  # long on purpose — up to ~5h for a late stagger slot, so it can never fire into
+  # a cold start still running — which left a feed that failed at boot (the Pi up
+  # before the router has internet) serving an empty table for hours.
   defp notify_step(step_spec, result, notified) do
-    with mod when not is_nil(mod) <- Map.get(step_spec, :notify),
-         true <- step_succeeded?(result) do
-      GenServer.cast({:global, mod}, :bootstrap_complete)
-      [mod | notified]
-    else
-      _ -> notified
+    case Map.get(step_spec, :notify) do
+      nil ->
+        notified
+
+      mod ->
+        if step_succeeded?(result) do
+          GenServer.cast({:global, mod}, :bootstrap_complete)
+          [mod | notified]
+        else
+          GenServer.cast({:global, mod}, :bootstrap_failed)
+          notified
+        end
     end
   end
 
@@ -348,7 +364,7 @@ defmodule EftBuddy.Sync.Bootstrap do
       stranded ->
         Logger.warning(
           "[#{prefix()}] #{length(stranded)} feed(s) not released — their cold-start step did " <>
-            "not succeed, so they stay on their short fallback timers rather than a full " <>
+            "not succeed, so each retries in 15 minutes rather than waiting a full " <>
             "interval: #{stranded |> Enum.map(&inspect/1) |> Enum.join(", ")}"
         )
     end

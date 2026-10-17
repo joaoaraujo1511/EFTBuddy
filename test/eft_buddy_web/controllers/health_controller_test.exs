@@ -126,8 +126,21 @@ defmodule EftBuddyWeb.HealthControllerTest do
       assert body(conn)["syncs"]["ChaptersSync"]["next_run_seconds"] == nil
     end
 
-    test "goes red when a sync fails" do
+    test "stays green after a single failed run" do
+      # One transient upstream error used to mean 503 for the feed's whole
+      # cadence. The scheduler retries a failed run after fifteen minutes.
       Reporter.attach_telemetry()
+      Reporter.with_run("MapsSync", fn -> {:error, :upstream_gone} end)
+
+      conn = build_conn() |> get(~p"/health/sync")
+
+      assert conn.status == 200
+      refute body(conn)["syncs"]["MapsSync"]["state"] == "failed"
+    end
+
+    test "goes red when a sync fails twice in a row" do
+      Reporter.attach_telemetry()
+      Reporter.with_run("MapsSync", fn -> {:error, :upstream_gone} end)
       Reporter.with_run("MapsSync", fn -> {:error, :upstream_gone} end)
 
       conn = build_conn() |> get(~p"/health/sync")

@@ -149,9 +149,9 @@ defmodule EftBuddyWeb.Telemetry do
 
       # POLLED. The gauge that answers "is anything stale?" — see the moduledoc on
       # why a stopped sync cannot be detected from its own events.
-      last_value("eft_buddy.sync.freshness.seconds_since_run",
+      last_value("eft_buddy.sync.freshness.seconds_since_ok",
         tags: [:label, :outcome],
-        description: "Age of each sync's last run. Climbs forever if a sync stops."
+        description: "Seconds since each sync last succeeded. Climbs while it fails or stops."
       ),
 
       # POLLED. Headroom against the `max_children` backstop in `application.ex`.
