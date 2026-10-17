@@ -11,10 +11,12 @@ defmodule EftBuddy.Items.Item do
     field :normalized_name, :string
     field :description, :string
     field :base_price, :integer
-    field :last_low_price, :integer
-    field :avg_24h_price, :integer
-    field :low_24h_price, :integer
-    field :high_24h_price, :integer
+    # The flea prices live per game mode in `item_prices`; `EftBuddy.Items`
+    # overlays the active mode's onto the item for display.
+    field :last_low_price, :integer, virtual: true
+    field :avg_24h_price, :integer, virtual: true
+    field :low_24h_price, :integer, virtual: true
+    field :high_24h_price, :integer, virtual: true
     field :wiki_link, :string
     field :link, :string
     field :icon_link, :string
@@ -46,7 +48,6 @@ defmodule EftBuddy.Items.Item do
     # opens /items?q=<name> and finds the row.
     field :is_quest_item, :boolean, default: false
 
-    has_many :sell_for, EftBuddy.Items.SellFor, foreign_key: :item_id
     has_many :buy_for, EftBuddy.Items.BuyFor, foreign_key: :item_id
 
     # Per-mode economy snapshot (one row per game mode). The columns
@@ -57,9 +58,9 @@ defmodule EftBuddy.Items.Item do
 
     # Virtual overlay for the active game mode's flea price history,
     # filled in by `EftBuddy.Items.select_merge_mode_prices/1` from the
-    # joined `item_prices` row (same overlay pattern as the price columns
-    # above). A JSON array of `%{"price" => int, "timestamp" => int_ms}`
-    # points; `nil` when the item has no history. Lives on the struct
+    # item's `item_price_points` (see `EftBuddy.Items.ItemPricePoint`). A list
+    # of `%{"price" => int, "timestamp" => int_ms}` points, oldest first, one
+    # per price change; `nil` when the item has no history. Lives on the struct
     # (not the DB) so every template that renders an `%Item{}` — flea
     # card, items detail panel — can read `item.historical_prices`.
     field :historical_prices, {:array, :map}, virtual: true

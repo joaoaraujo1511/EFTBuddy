@@ -14,7 +14,7 @@ defmodule EftBuddy.Items do
   # need an explicit alias.
   alias EftBuddy.Items.{BarterRequiredItem, BarterRewardItem}
   alias EftBuddy.Items.{CraftRequiredItem, CraftRewardItem}
-  alias EftBuddy.Items.{Item, ItemPrice}
+  alias EftBuddy.Items.{Item, ItemPrice, ItemPricePoint}
   alias EftBuddy.Cache
   # The in-memory catalogue these three listing reads prefer when it is built and
   # fresh. `ready?/1` is the whole safety story: it is false before the first
@@ -156,6 +156,7 @@ defmodule EftBuddy.Items do
     |> preload(:category)
     |> select_merge_mode_prices()
     |> Repo.all()
+    |> attach_price_series(game_mode)
   end
 
   # `:watchlist` isn't a catalog subset like the structured scopes — it cuts
@@ -614,11 +615,44 @@ defmodule EftBuddy.Items do
         avg_24h_price: p.avg_24h_price,
         low_24h_price: p.low_24h_price,
         high_24h_price: p.high_24h_price,
-        historical_prices: p.historical_prices,
         change_last_48h_percent: p.change_last_48h_percent
       }
     )
     |> Repo.all()
+    |> then(fn rows ->
+      series = price_series(mode, :all)
+      Enum.map(rows, &Map.put(&1, :historical_prices, Map.get(series, &1.item_id)))
+    end)
+  end
+
+  # Each item's price history for `mode`: `%{item_id => [%{"price", "timestamp"}]}`,
+  # oldest first, one point per price change. All of an item's points: the price
+  # tick prunes them to the window plus the one point before it, and the
+  # sparkline clips to the window itself. Filtering here instead would make two
+  # reads a moment apart disagree, and the SQL and in-memory paths must not.
+  defp price_series(_mode, []), do: %{}
+
+  defp price_series(mode, item_ids) do
+    from(pt in ItemPricePoint,
+      where: pt.game_mode == ^mode,
+      order_by: [asc: pt.item_id, asc: pt.observed_at, asc: pt.id],
+      select: {pt.item_id, pt.observed_at, pt.price}
+    )
+    |> then(fn q -> if item_ids == :all, do: q, else: where(q, [pt], pt.item_id in ^item_ids) end)
+    |> Repo.all()
+    |> Enum.group_by(&elem(&1, 0), fn {_id, at, price} ->
+      %{"price" => price, "timestamp" => to_unix_ms(at)}
+    end)
+  end
+
+  defp to_unix_ms(%NaiveDateTime{} = at),
+    do: at |> DateTime.from_naive!("Etc/UTC") |> DateTime.to_unix(:millisecond)
+
+  # The SQL listings' half of the overlay: the same series `price_rows/1` gives
+  # the in-memory dataset, for just the items on the page.
+  defp attach_price_series(items, mode) do
+    series = price_series(mode, Enum.map(items, & &1.id))
+    Enum.map(items, &%{&1 | historical_prices: Map.get(series, &1.id)})
   end
 
   @doc false
@@ -810,7 +844,6 @@ defmodule EftBuddy.Items do
       avg_24h_price: p.avg_24h_price,
       low_24h_price: p.low_24h_price,
       high_24h_price: p.high_24h_price,
-      historical_prices: p.historical_prices,
       change_last_48h_percent: p.change_last_48h_percent
     })
   end
@@ -878,6 +911,7 @@ defmodule EftBuddy.Items do
     |> preload(:category)
     |> select_merge_mode_prices()
     |> Repo.all()
+    |> attach_price_series(opts |> Keyword.get(:game_mode) |> EftBuddy.GameMode.to_db())
   end
 
   # Float watchlisted items to the very top of every NON-watchlist flea
@@ -1478,6 +1512,10 @@ defmodule EftBuddy.Items do
     |> preload(:category)
     |> select_merge_mode_prices()
     |> Repo.one()
+    |> case do
+      nil -> nil
+      item -> item |> List.wrap() |> attach_price_series(mode) |> hd()
+    end
   end
 
   # Task objectives that include this item — either as a target

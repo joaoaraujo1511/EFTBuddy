@@ -111,8 +111,8 @@ defmodule EftBuddy.Sync.Freshness do
 
     # Structural tarkov.dev feeds, 12h.
     #
-    # `EconomySync` is the per-mode vendor-economy pass — `item_prices.base_price`,
-    # `sell_for`, `buy_for`. It used to label itself `PricesSync:<mode>`, which
+    # `EconomySync` is the per-mode vendor-economy pass — `item_prices.base_price`
+    # and `buy_for`. It used to label itself `PricesSync:<mode>`, which
     # `matches?/2` folded into the PricesSync family above, so a pass running on
     # the structural cadence was judged against the ten-minute feed's 2h budget.
     # `evaluate_family/5` ages a family on its OLDEST label, so that family read

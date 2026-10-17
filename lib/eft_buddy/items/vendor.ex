@@ -8,7 +8,6 @@ defmodule EftBuddy.Items.Vendor do
     field :name, :string
     field :normalized_name, :string
 
-    has_many :sell_for, EftBuddy.Items.SellFor, foreign_key: :vendor_id
     has_many :buy_for, EftBuddy.Items.BuyFor, foreign_key: :vendor_id
 
     timestamps()
