@@ -27,14 +27,8 @@ defmodule EftBuddy.Items.ItemPrice do
     field :low_24h_price, :integer
     field :high_24h_price, :integer
 
-    # Accumulated flea price history powering the sparkline / detail
-    # graph. A JSON array of `%{"price" => int, "timestamp" => int_ms}`
-    # points, oldest first. tarkov.dev's JSON API has no price time
-    # series, so `EftBuddy.Items.Sync` builds this itself: each price
-    # refresh appends the item's current `lastLowPrice` and trims to a
-    # bounded window. NULL/`[]` until enough refreshes have accumulated.
-    field :historical_prices, {:array, :map}
-    # tarkov.dev's own 48-hour flea price change, in percent.
+    # tarkov.dev's own 48-hour flea price change, in percent. The price
+    # history behind the sparkline is in `item_price_points`.
     field :change_last_48h_percent, :float
 
     belongs_to :item, EftBuddy.Items.Item
@@ -51,7 +45,6 @@ defmodule EftBuddy.Items.ItemPrice do
       :avg_24h_price,
       :low_24h_price,
       :high_24h_price,
-      :historical_prices,
       :item_id
     ])
     |> validate_required([:game_mode, :item_id])

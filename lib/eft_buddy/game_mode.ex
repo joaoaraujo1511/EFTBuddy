@@ -8,7 +8,7 @@ defmodule EftBuddy.GameMode do
     * **DB / API form** — the strings `"regular"` and `"pve"`. These
       are exactly the values the tarkov.dev GraphQL `gameMode` argument
       accepts, and the values we store in the `game_mode` columns
-      (`tasks`, `item_prices`, `sell_for`, `buy_for`, `items_barters`).
+      (`tasks`, `item_prices`, `buy_for`, `items_barters`, the map tables).
       Using the API's own spelling means the sync code can pass the
       stored value straight into a query without translation.
 

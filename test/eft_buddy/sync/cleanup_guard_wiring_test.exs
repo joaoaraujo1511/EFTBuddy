@@ -106,15 +106,16 @@ defmodule EftBuddy.Sync.CleanupGuardWiringTest do
     branches =
       for path <- sync_sources(), branch <- refusal_branches(path), do: {path, branch}
 
-    # ELEVEN sites. Nine prunes guarded by `cleanup_safe?/3`: eight that already
+    # TEN sites. Nine prunes guarded by `cleanup_safe?/3`: eight that already
     # existed (armor, ammo, hideout, maps, tasks, and three in items) plus the
     # quest-item prune, which had no guard at all until it was brought under one.
-    # Then two writes guarded by `prices_safe?/3` — the `item_prices` flea upsert
-    # and the legacy items-table price mirror, both in items.
+    # Then the `item_prices` flea upsert, guarded by `prices_safe?/3`. (A second
+    # `prices_safe?/3` site, the legacy items-table price mirror, went when the
+    # mirror was removed: nothing read it.)
     #
     # The floor is what makes this test non-vacuous: an AST walker that silently
     # matched nothing would otherwise pass forever.
-    assert length(branches) >= 11,
+    assert length(branches) >= 10,
            "expected to find the guards' call sites; found #{length(branches)}"
 
     for {path, branch} <- branches do
