@@ -1,0 +1,57 @@
+{
+ "batchcomplete": true,
+ "query": {
+  "pages": [
+   {
+    "pageid": 6743,
+    "ns": 0,
+    "title": "Golden Swag",
+    "anoncontributors": 12,
+    "contributors": [
+     {
+      "userid": 5726142,
+      "name": "Lady Botris"
+     },
+     {
+      "userid": 3026053,
+      "name": "Lady Lostris"
+     },
+     {
+      "userid": 24377231,
+      "name": "Mehabr"
+     },
+     {
+      "userid": 28185621,
+      "name": "TalkingCactus"
+     }
+    ]
+   },
+   {
+    "pageid": 21888,
+    "ns": 0,
+    "title": "The Punisher - Part 1",
+    "contributors": [
+     {
+      "userid": 5726142,
+      "name": "Lady Botris"
+     },
+     {
+      "userid": 3026053,
+      "name": "Lady Lostris"
+     },
+     {
+      "userid": 37816397,
+      "name": "Muhawi"
+     },
+     {
+      "userid": 42014766,
+      "name": "Crimroxs"
+     }
+    ]
+   }
+  ]
+ },
+ "limits": {
+  "contributors": 500
+ }
+}

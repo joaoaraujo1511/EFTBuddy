@@ -71,7 +71,7 @@ defmodule EftBuddy.Events.Sync do
   alias EftBuddy.Events.{Event, EventQuest}
   alias EftBuddy.Events.Dump, as: EventsDump
   alias EftBuddy.Wiki.Dump, as: WikiDump
-  alias EftBuddy.Wiki.{Api, Contributors}
+  alias EftBuddy.Wiki.{Api, Contributors, PageGaps}
   alias EftBuddy.Sync.Reporter
 
   @events_page "Events"
@@ -88,7 +88,14 @@ defmodule EftBuddy.Events.Sync do
     :updated_at
   ]
 
-  @event_quest_replace_on_conflict [:name, :task_id, :position, :content, :updated_at]
+  @event_quest_replace_on_conflict [
+    :name,
+    :task_id,
+    :position,
+    :content,
+    :revision_id,
+    :updated_at
+  ]
 
   # When a quest page failed to scrape this run there is no manifest, and the
   # stored walkthrough is the best copy there is: only the fields the Events page
@@ -142,7 +149,7 @@ defmodule EftBuddy.Events.Sync do
     fetched_at = DateTime.utc_now() |> DateTime.to_iso8601()
 
     banner_map = resolve_banner_urls(events)
-    {manifests, scrape} = scrape_quest_manifests(events)
+    {walkthroughs, scrape} = quest_walkthroughs(events)
 
     # Every parsed event stays in the keep-set even when its row could not be
     # written, so a bad row keeps its previous version rather than being pruned.
@@ -152,7 +159,7 @@ defmodule EftBuddy.Events.Sync do
       Enum.reduce(events, 0, fn event, qcount ->
         case upsert_event(event, banner_map, fetched_at) do
           {:ok, row} ->
-            upsert_event_quests(row, event, manifests)
+            upsert_event_quests(row, event, walkthroughs)
 
           # One event the parser got wrong (a heading like `==(25 June 2026)==`
           # yields an empty name) used to raise a MatchError here and abort the
@@ -175,7 +182,8 @@ defmodule EftBuddy.Events.Sync do
       %{
         events: length(events),
         quests: quest_count,
-        scraped: map_size(manifests),
+        scraped: scrape.processed,
+        unchanged: scrape.unchanged,
         failed: scrape.failed,
         pruned: pruned
       },
@@ -219,7 +227,7 @@ defmodule EftBuddy.Events.Sync do
 
   # ── Event-quest upsert + per-event prune ───────────────
 
-  defp upsert_event_quests(%Event{id: event_id}, event, manifests) do
+  defp upsert_event_quests(%Event{id: event_id}, event, walkthroughs) do
     slugs = Enum.map(event.quests, & &1.slug)
 
     # Drop quests this event no longer lists (the cross-event prune in
@@ -233,7 +241,7 @@ defmodule EftBuddy.Events.Sync do
     event.quests
     |> Enum.with_index()
     |> Enum.each(fn {quest, idx} ->
-      case upsert_event_quest(event_id, quest, idx, manifests) do
+      case upsert_event_quest(event_id, quest, idx, walkthroughs) do
         :ok ->
           :ok
 
@@ -245,21 +253,23 @@ defmodule EftBuddy.Events.Sync do
     end)
   end
 
-  defp upsert_event_quest(event_id, quest, position, manifests) do
-    manifest = Map.get(manifests, quest.slug)
-    content = if manifest, do: json_round_trip(manifest), else: %{}
-    task_id = manifest && Map.get(manifest, :task_id)
+  defp upsert_event_quest(event_id, quest, position, walkthroughs) do
+    walkthrough = Map.get(walkthroughs, quest.slug)
 
-    replace =
-      if manifest, do: @event_quest_replace_on_conflict, else: @event_quest_listing_only
+    {replace, walkthrough} =
+      case walkthrough do
+        nil -> {@event_quest_listing_only, %{content: %{}, task_id: nil, revision_id: nil}}
+        found -> {@event_quest_replace_on_conflict, found}
+      end
 
     attrs = %{
       event_id: event_id,
       normalized_name: quest.slug,
       name: quest.name,
-      task_id: task_id,
+      task_id: walkthrough.task_id,
       position: position,
-      content: content
+      content: walkthrough.content,
+      revision_id: walkthrough.revision_id
     }
 
     %EventQuest{}
@@ -276,47 +286,121 @@ defmodule EftBuddy.Events.Sync do
 
   # ── Quest-page scraping (reuses the quest dump pipeline) ───────────
 
-  # Scrape every distinct event quest's wiki page through the SAME
-  # `EftBuddy.Wiki.Dump` pipeline the quest sync uses, collecting each
-  # quest's manifest by slug. The injected `write` accumulates into an
-  # Agent rather than persisting, so we can fan the one manifest out to
-  # every (event, quest) row afterwards.
+  # Every event quest's walkthrough, as `%{slug => %{content, task_id,
+  # revision_id}}` keyed by the Events page's own quest slug, plus
+  # `%{processed, failed, unchanged}` counts. A quest absent from the map failed
+  # to scrape this run.
   #
-  # Returns `{manifests, %{processed: n, failed: n}}`. The counts used to be
-  # dropped, which is how a run where every quest page failed still reported ok.
-  defp scrape_quest_manifests(events) do
+  # Only pages edited since their stored revision are scraped (audit M22). The
+  # events scrape used to fetch all ~250 quest pages every twelve hours, 14-16
+  # minutes and ~1,700 requests per run against a wiki that rate-limits; one
+  # batched revision probe per fifty pages now decides, as in `EftBuddy.Wiki.Sync`.
+  # Unknown resolves to "scrape it" in every direction: no stored revision, or
+  # none reported by the API.
+  defp quest_walkthroughs(events) do
     quest_titles = EventsDump.unique_quest_titles(events)
 
     if quest_titles == [] do
-      {%{}, %{processed: 0, failed: 0}}
+      {%{}, %{processed: 0, failed: 0, unchanged: 0}}
     else
-      db_index = WikiDump.build_db_index(load_db_rows())
-      quests = Enum.map(quest_titles, fn q -> WikiDump.build_quest(q.wiki_title, db_index) end)
+      {revisions, failed_probes} = quest_titles |> Enum.map(& &1.wiki_title) |> Api.revision_ids()
 
-      # Each event quest has its own wiki page, so each carries its own
-      # authors. The event rows themselves are all scraped from the single
-      # shared "Events" page, so there is no per-event roster to fetch.
-      rosters = Contributors.fetch(Enum.map(quests, & &1.wiki_title), Api.http_opts())
+      if failed_probes > 0 do
+        Reporter.silent_warn(
+          "[#{prefix()}] #{failed_probes} revision probe batch(es) failed; scraping those pages"
+        )
+      end
 
-      {:ok, agent} = Agent.start_link(fn -> %{} end)
+      stored = stored_walkthroughs()
 
-      try do
-        result =
-          WikiDump.run(quests,
-            fetch: &fetch_quest_sections/1,
-            resolve: &resolve_image_urls/1,
-            write: fn quest, manifest ->
-              manifest = Contributors.merge(manifest, Map.get(rosters, quest.wiki_title))
-              Agent.update(agent, &Map.put(&1, quest.normalized_name, manifest))
-              :ok
-            end
+      {changed, unchanged} =
+        Enum.split_with(quest_titles, fn q ->
+          current = revisions[q.wiki_title]
+          previous = stored[q.slug]
+          is_nil(current) or is_nil(previous) or previous.revision_id != current
+        end)
+
+      kept = Map.new(unchanged, &{&1.slug, stored[&1.slug]})
+      {scraped, counts} = scrape_quest_pages(changed, revisions)
+
+      {Map.merge(kept, scraped), Map.put(counts, :unchanged, length(unchanged))}
+    end
+  end
+
+  # One stored walkthrough per quest slug. Only rows with a revision qualify:
+  # a revision is stamped only on a complete scrape, so its content is whole.
+  defp stored_walkthroughs do
+    from(eq in EventQuest,
+      where: not is_nil(eq.revision_id),
+      select:
+        {eq.normalized_name,
+         %{content: eq.content, task_id: eq.task_id, revision_id: eq.revision_id}}
+    )
+    |> Repo.all()
+    |> Map.new()
+  end
+
+  # Scrape `quest_titles` through the SAME `EftBuddy.Wiki.Dump` pipeline the
+  # quest sync uses. The injected `write` accumulates into an Agent rather than
+  # persisting, so the one walkthrough can be fanned out to every (event, quest)
+  # row afterwards.
+  defp scrape_quest_pages([], _revisions), do: {%{}, %{processed: 0, failed: 0}}
+
+  defp scrape_quest_pages(quest_titles, revisions) do
+    slug_for = Map.new(quest_titles, &{&1.wiki_title, &1.slug})
+    db_index = WikiDump.build_db_index(load_db_rows())
+    quests = Enum.map(quest_titles, fn q -> WikiDump.build_quest(q.wiki_title, db_index) end)
+
+    # Each event quest has its own wiki page, so each carries its own
+    # authors. The event rows themselves are all scraped from the single
+    # shared "Events" page, so there is no per-event roster to fetch.
+    rosters = Contributors.fetch(Enum.map(quests, & &1.wiki_title), Api.http_opts())
+
+    {:ok, agent} = Agent.start_link(fn -> %{} end)
+
+    try do
+      result =
+        WikiDump.run(quests,
+          fetch: &fetch_quest_sections/1,
+          resolve: &resolve_image_urls/1,
+          write: fn quest, manifest ->
+            walkthrough = walkthrough(quest, manifest, rosters, revisions)
+            Agent.update(agent, &Map.put(&1, slug_for[quest.wiki_title], walkthrough))
+            :ok
+          end
+        )
+
+      {Agent.get(agent, & &1), Map.take(result.summary, [:processed, :failed])}
+    after
+      Agent.stop(agent)
+    end
+  end
+
+  # The revision is stamped only when every part of the page was fetched, as in
+  # `EftBuddy.Wiki.Sync` (audit H11): a page with a gap would otherwise be
+  # skipped, incomplete, until an editor touched it.
+  defp walkthrough(quest, manifest, rosters, revisions) do
+    roster = Map.get(rosters, quest.wiki_title)
+    if roster == :unavailable, do: PageGaps.note(:contributors)
+
+    revision_id =
+      case PageGaps.gaps() do
+        [] ->
+          revisions[quest.wiki_title]
+
+        gaps ->
+          Reporter.silent_warn(
+            "[#{prefix()}] #{quest.wiki_title}: stored without a revision, will retry (#{inspect(gaps)})"
           )
 
-        {Agent.get(agent, & &1), Map.take(result.summary, [:processed, :failed])}
-      after
-        Agent.stop(agent)
+          nil
       end
-    end
+
+    %{
+      content: manifest |> Contributors.merge(roster) |> json_round_trip(),
+      task_id: Map.get(manifest, :task_id),
+      revision_id: revision_id
+    }
   end
 
   defp load_db_rows do
@@ -334,6 +418,9 @@ defmodule EftBuddy.Events.Sync do
   # section's wikitext for one quest — identical to the quest sync, so
   # the manifest shape matches `wiki_quests.content` exactly.
   defp fetch_quest_sections(quest) do
+    # What fails for this page is recorded from here until `walkthrough/4`.
+    PageGaps.reset()
+
     with {:ok, sections_list} <- Api.section_list(quest.wiki_title) do
       sections_list = [%{index: "0", heading: "(lead / infobox)", level: "0"} | sections_list]
 
@@ -357,6 +444,8 @@ defmodule EftBuddy.Events.Sync do
         wikitext
 
       {:error, reason} ->
+        PageGaps.note({:section, section_index})
+
         Reporter.silent_warn(
           "[#{prefix()}] wikitext section #{section_index} of #{title} failed: #{inspect(reason)}"
         )
@@ -370,8 +459,10 @@ defmodule EftBuddy.Events.Sync do
   defp resolve_image_urls(file_titles) do
     {info, failed} = Api.images_with_licenses(file_titles, "url|size|mime|user")
 
-    if failed > 0,
-      do: Reporter.silent_warn("[#{prefix()}] #{failed} image or licence batch(es) failed")
+    if failed > 0 do
+      PageGaps.note({:images, failed})
+      Reporter.silent_warn("[#{prefix()}] #{failed} image or licence batch(es) failed")
+    end
 
     info
   end

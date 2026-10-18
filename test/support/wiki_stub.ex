@@ -14,6 +14,7 @@ defmodule EftBuddy.WikiStub do
   request with a 503, which is how the tests inject a transient failure.
   `:api_error` does the same with an HTTP 200 carrying an `error` body.
   `:page_size` splits category listings into pages joined by `cmcontinue`.
+  `:observe` is called with every request's parameters, for counting requests.
   """
 
   @doc """
@@ -40,6 +41,7 @@ defmodule EftBuddy.WikiStub do
     Req.Test.stub(EftBuddy.Wiki.DumpScript, fn conn ->
       conn = Plug.Conn.fetch_query_params(conn)
       params = conn.query_params
+      Map.get(wiki, :observe, fn _ -> :ok end).(params)
 
       cond do
         Map.get(wiki, :fail, fn _ -> false end).(params) ->

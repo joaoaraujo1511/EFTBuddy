@@ -78,12 +78,16 @@ defmodule EftBuddy.Chapters.ProjectionTest do
       assert projected.objective_count == 0
     end
 
-    test "passes identity fields through and retains the raw sections" do
+    test "passes identity fields through, and not the raw sections (audit M23)" do
       projected = Projection.project(manifest())
       assert projected.normalized_name == "boreas"
       assert projected.chapter_name == "Boreas"
       assert projected.wiki_title == "Boreas"
-      assert length(projected.sections) == 3
+
+      # Every field the page renders is built from them; the wikitext itself was
+      # carried in every cached projection and read by nothing.
+      refute Map.has_key?(projected, :sections)
+      assert projected.content_sections != []
     end
 
     test "returns nil for non-map input" do

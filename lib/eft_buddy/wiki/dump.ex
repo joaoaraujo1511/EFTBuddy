@@ -102,7 +102,7 @@ defmodule EftBuddy.Wiki.Dump do
       yet). `wip` is `true` and the wiki-derived slug is used.
   """
   def build_quest(title, db_index) when is_map(db_index) do
-    wiki_link = "https://escapefromtarkov.fandom.com/wiki/" <> String.replace(title, " ", "_")
+    wiki_link = EftBuddy.Wiki.Url.page(title)
     name = strip_disambiguator(title)
 
     case Map.get(db_index, normalize_name(name)) do

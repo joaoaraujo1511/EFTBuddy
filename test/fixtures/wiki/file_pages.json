@@ -1,0 +1,55 @@
+{
+ "batchcomplete": true,
+ "query": {
+  "pages": [
+   {
+    "pageid": 32081,
+    "ns": 6,
+    "title": "File:GroundZero3DMapByRe3mr.png",
+    "revisions": [
+     {
+      "slots": {
+       "main": {
+        "contentmodel": "wikitext",
+        "contentformat": "text/x-wiki",
+        "content": "== Licensing ==\n{{Copyright CC-BY-NC-SA 4.0}}"
+       }
+      }
+     }
+    ]
+   },
+   {
+    "pageid": 44359,
+    "ns": 6,
+    "title": "File:Icebreaker Event.jpg",
+    "revisions": [
+     {
+      "slots": {
+       "main": {
+        "contentmodel": "wikitext",
+        "contentformat": "text/x-wiki",
+        "content": ""
+       }
+      }
+     }
+    ]
+   },
+   {
+    "pageid": 47509,
+    "ns": 6,
+    "title": "File:Hidden Route Banner.png",
+    "revisions": [
+     {
+      "slots": {
+       "main": {
+        "contentmodel": "wikitext",
+        "contentformat": "text/x-wiki",
+        "content": "\n[[Category:Quest banners]]"
+       }
+      }
+     }
+    ]
+   }
+  ]
+ }
+}

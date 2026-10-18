@@ -68,8 +68,7 @@ defmodule EftBuddy.Chapters.Dump do
       wiki_title: wiki_title,
       title: display,
       normalized_name: normalize_name(display),
-      wiki_link:
-        "https://escapefromtarkov.fandom.com/wiki/" <> String.replace(wiki_title, " ", "_")
+      wiki_link: EftBuddy.Wiki.Url.page(wiki_title)
     }
   end
 

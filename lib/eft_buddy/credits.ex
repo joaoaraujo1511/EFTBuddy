@@ -23,7 +23,7 @@ defmodule EftBuddy.Credits do
   would mean holding third-party personal data.
   """
 
-  @wiki_base "https://escapefromtarkov.fandom.com/wiki/"
+  alias EftBuddy.Wiki.Url
 
   @doc """
   The contributor's Fandom profile — avatar, bio and any social links they
@@ -35,12 +35,12 @@ defmodule EftBuddy.Credits do
   renders it, always current, at no cost to us.
   """
   @spec profile_url(String.t()) :: String.t()
-  def profile_url(name) when is_binary(name), do: @wiki_base <> "UserProfile:" <> slug(name)
+  def profile_url(name) when is_binary(name), do: Url.page("UserProfile:" <> name)
 
   @doc "The contributor's uploads, linked from the per-image credit."
   @spec uploads_url(String.t()) :: String.t()
   def uploads_url(name) when is_binary(name),
-    do: @wiki_base <> "Special:ListFiles/" <> slug(name)
+    do: Url.page("Special:ListFiles/" <> name)
 
   @doc """
   Split names into a first page and the remainder for an inline credit popup.
@@ -94,6 +94,4 @@ defmodule EftBuddy.Credits do
   """
   @spec color_index(String.t()) :: non_neg_integer()
   def color_index(name) when is_binary(name), do: :erlang.phash2(name, 6)
-
-  defp slug(name), do: name |> String.trim() |> String.replace(" ", "_") |> URI.encode()
 end

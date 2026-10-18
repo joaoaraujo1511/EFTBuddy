@@ -191,33 +191,38 @@ defmodule EftBuddy.Wiki.Sync do
           {:ok, titles} ->
             titles
             |> Enum.filter(&Dump.quest_title?/1)
-            |> blacklist_event_quests()
-            |> scrape_and_upsert(db_index)
+            |> Enum.map(&Dump.build_quest(&1, db_index))
+            |> drop_event_only_quests()
+            |> scrape_and_upsert()
         end
     end
   end
 
-  # Event quests are owned by `EftBuddy.Events.Sync` and intentionally
-  # excluded from this scrape so they stop surfacing as WIP on the Tasks
-  # tab (their walkthroughs live on the Events tab instead). Drop any
-  # enumerated title whose slug is a known event-quest slug; the prune
-  # that follows then deletes any `wiki_quests` rows previously written
-  # for them. The events sync is scheduled to run before this one, but if
-  # its table isn't populated yet the blacklist is empty and this is a
-  # no-op (the quests fall back to WIP until the next cycle).
-  defp blacklist_event_quests(titles) do
+  # Event quests that tarkov.dev does not serve as tasks are owned by
+  # `EftBuddy.Events.Sync`: without this they would surface on the Tasks tab as
+  # WIP quests "recently added to the wiki", when their walkthroughs live on the
+  # Events tab. Their rows are dropped here, and the prune that follows deletes
+  # any a previous run wrote.
+  #
+  # ONLY the ones that would be WIP. The blacklist used to remove every event-page
+  # title, including 24 that tarkov.dev serves as real tasks (Icebreaker: Stick
+  # to It, Saving Private Roman, the Labyrinth quests), so their Tasks rows had no
+  # guide, objective images or karma requirement (audit H13). A quest matched to
+  # a real task is not WIP, so it keeps its wiki guide, keyed by the task's slug,
+  # and still appears on the Events tab as well.
+  #
+  # The events sync runs before this one. If its table isn't populated yet the
+  # blacklist is empty and this is a no-op: the quests fall back to WIP until the
+  # next cycle.
+  defp drop_event_only_quests(quests) do
     blacklist = EftBuddy.Events.blacklisted_quest_slugs()
 
-    if MapSet.size(blacklist) == 0 do
-      titles
-    else
-      Enum.reject(titles, fn title -> MapSet.member?(blacklist, Dump.normalize_name(title)) end)
-    end
+    Enum.reject(quests, fn quest ->
+      quest.wip and MapSet.member?(blacklist, Dump.normalize_name(quest.wiki_title))
+    end)
   end
 
-  defp scrape_and_upsert(all_quests, db_index) do
-    all_quests = Enum.map(all_quests, &Dump.build_quest(&1, db_index))
-
+  defp scrape_and_upsert(all_quests) do
     # One batched `prop=revisions` query per fifty pages tells us which pages
     # have actually been edited since we last stored them. Everything else is
     # skipped without fetching a single section.

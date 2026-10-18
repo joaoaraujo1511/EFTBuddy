@@ -158,7 +158,10 @@ defmodule EftBuddy.Chapters.Sync do
   # editor put an icon in one of its headings, and losing a walkthrough
   # to a cosmetic wiki edit is not a trade worth making to avoid naming
   # one slug.
-  defp prune_sections(%{normalized_name: @endgame_slug}, sections) do
+  @doc false
+  # Public so the keep-rule can be tested on the real page's sections; nothing
+  # else should call it.
+  def prune_sections(%{normalized_name: @endgame_slug}, sections) do
     case Enum.filter(sections, &endgame_section?/1) do
       [] ->
         # The page was restructured and the rule now matches nothing.
@@ -176,7 +179,7 @@ defmodule EftBuddy.Chapters.Sync do
     end
   end
 
-  defp prune_sections(_chapter, sections), do: sections
+  def prune_sections(_chapter, sections), do: sections
 
   # The lead carries the infobox banner; a `tmpl:` section is one of the
   # transcluded branch guides; and a section whose own heading carries
