@@ -101,6 +101,81 @@ defmodule EftBuddy.CacheSourceMapTest do
     end
   end
 
+  describe "the map detail read (audit L23)" do
+    test "is cached, and dropped by both feeds whose rows it preloads" do
+      Fixtures.game_map(%{name: "Customs", normalized_name: "customs"})
+
+      assert %{name: "Customs"} = EftBuddy.Maps.get_map_by_slug("customs", :pvp)
+
+      sources = sources_for({EftBuddy.Maps, :map_by_slug, "customs", "regular"})
+      assert "MapsSync" in sources
+      assert "ItemsSync" in sources
+
+      assert Cache.invalidate_source("ItemsSync") >= 1
+
+      refute Enum.any?(
+               Cache.entries(),
+               &(&1.key == {EftBuddy.Maps, :map_by_slug, "customs", "regular"})
+             )
+    end
+
+    test "a slug that names no map is not cached" do
+      # Caching by whatever slug a URL carries would let anyone fill the cache.
+      assert EftBuddy.Maps.get_map_by_slug("no-such-map-#{System.unique_integer()}", :pvp) == nil
+
+      refute Enum.any?(Cache.entries(), &match?({EftBuddy.Maps, :map_by_slug, _, _}, &1.key))
+    end
+  end
+
+  describe "chapter lookups (audit L25)" do
+    setup do
+      content = %{
+        "normalized_name" => "boreas",
+        "chapter_name" => "Boreas",
+        "wiki_title" => "Boreas",
+        "sections" => [
+          %{
+            "slug" => "guide",
+            "level" => 2,
+            "index" => "1",
+            "heading" => "Guide",
+            "wikitext" => "{|\n! Item Name\n! Amount\n|-\n| [[Bottle of Vodka]]\n| 2\n|}",
+            "files" => []
+          }
+        ]
+      }
+
+      %EftBuddy.Chapters.ChapterPage{}
+      |> EftBuddy.Chapters.ChapterPage.changeset(%{
+        normalized_name: "boreas",
+        chapter_name: "Boreas",
+        content: content
+      })
+      |> EftBuddy.Repo.insert!()
+
+      :ok
+    end
+
+    test "a chapter is served from its own entry, not the whole list" do
+      assert %{normalized_name: "boreas"} = EftBuddy.Chapters.get_chapter("boreas")
+      assert sources_for({EftBuddy.Chapters, :chapter, "boreas"}) == ["ChaptersSync"]
+    end
+
+    test "a slug that names no chapter creates no entry" do
+      # The path param must not become a cache key space.
+      assert EftBuddy.Chapters.get_chapter("no-such-chapter") == nil
+      refute Enum.any?(Cache.entries(), &match?({EftBuddy.Chapters, :chapter, _}, &1.key))
+    end
+
+    test "an item's chapters come from one small index" do
+      assert [%{slug: "boreas", title: "Boreas"}] =
+               EftBuddy.Chapters.chapters_for_item(%{name: "Bottle of Vodka"})
+
+      assert EftBuddy.Chapters.chapters_for_item(%{name: "Nothing Here"}) == []
+      assert sources_for({EftBuddy.Chapters, :item_chapters}) == ["ChaptersSync"]
+    end
+  end
+
   describe "the ammo split" do
     test "ballistics and availability are separate entries with different owners" do
       EftBuddy.Ammo.list_rounds()

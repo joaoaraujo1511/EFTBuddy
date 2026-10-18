@@ -47,4 +47,32 @@ defmodule EftBuddyWeb.Plugs.OperatorSessionTest do
       refute get_session(conn, SessionPlug.prefs_key())
     end
   end
+
+  describe "the session cookie (audit L24)" do
+    @session_cookie "_eft_buddy_key"
+
+    test "is not rewritten on a request that changed nothing", %{conn: conn} do
+      raw = encoded(%{"modes" => %{"pvp" => %{"pmc_level" => 12}}})
+
+      first = conn |> with_prefs_cookie(raw) |> get(~p"/tasks")
+      assert Map.has_key?(first.resp_cookies, @session_cookie), "the first visit mints a token"
+
+      second = first |> recycle() |> with_prefs_cookie(raw) |> get(~p"/tasks")
+
+      refute Map.has_key?(second.resp_cookies, @session_cookie),
+             "an unchanged session must not be re-signed and re-sent on every response"
+    end
+
+    test "is rewritten when the prefs did change", %{conn: conn} do
+      first =
+        conn
+        |> with_prefs_cookie(encoded(%{"modes" => %{"pvp" => %{"pmc_level" => 12}}}))
+        |> get(~p"/tasks")
+
+      changed = encoded(%{"modes" => %{"pvp" => %{"pmc_level" => 30}}})
+      second = first |> recycle() |> with_prefs_cookie(changed) |> get(~p"/tasks")
+
+      assert Map.has_key?(second.resp_cookies, @session_cookie)
+    end
+  end
 end

@@ -283,9 +283,15 @@ defmodule EftBuddy.Chapters do
     # walking a few thousand URLs would evict the whole table. Deriving from the
     # already-warm list removes the key rather than trying to guard it.
     #
-    # `Enum.find` over ~13 materialised projections is not worth turning into a
-    # map; that would just be a second copy of the same data in ETS.
-    Enum.find(list_chapters(), &(&1.normalized_name == slug))
+    # Reading `list_chapters/0` copies every chapter's projection out of ETS
+    # into the caller just to keep one (audit L25). So each chapter gets its own
+    # entry, built from that list, but only for slugs that exist: the guard is
+    # what keeps the path param from becoming a key space again.
+    if MapSet.member?(chapter_slugs(), slug) do
+      Cache.fetch({__MODULE__, :chapter, slug}, ["ChaptersSync"], fn ->
+        Enum.find(list_chapters(), &(&1.normalized_name == slug))
+      end)
+    end
   end
 
   def get_chapter(_), do: nil
@@ -303,18 +309,34 @@ defmodule EftBuddy.Chapters do
   """
   @spec chapters_for_item(%{optional(any) => any}) :: [%{slug: String.t(), title: String.t()}]
   def chapters_for_item(%{name: name}) when is_binary(name) and name != "" do
-    target = normalize_item_name(name)
-
-    list_chapters()
-    |> Enum.filter(fn chapter ->
-      Enum.any?(chapter.items, fn item ->
-        normalize_item_name(item.page) == target or normalize_item_name(item.name) == target
-      end)
-    end)
-    |> Enum.map(fn chapter -> %{slug: chapter.normalized_name, title: chapter.chapter_name} end)
+    Map.get(item_chapters(), normalize_item_name(name), [])
   end
 
   def chapters_for_item(_), do: []
+
+  # `%{normalized item name => [%{slug, title}]}`, in narrative order. One small
+  # cached index instead of copying and scanning every chapter projection on
+  # every item panel that opens (audit L25).
+  defp item_chapters do
+    Cache.fetch({__MODULE__, :item_chapters}, ["ChaptersSync"], fn ->
+      for chapter <- list_chapters(),
+          item <- chapter.items,
+          key <- Enum.uniq([normalize_item_name(item.page), normalize_item_name(item.name)]),
+          reduce: %{} do
+        acc ->
+          link = %{slug: chapter.normalized_name, title: chapter.chapter_name}
+          Map.update(acc, key, [link], &if(link in &1, do: &1, else: &1 ++ [link]))
+      end
+    end)
+  end
+
+  # Every chapter slug, the gate on which per-chapter entries `get_chapter/1`
+  # may create.
+  defp chapter_slugs do
+    Cache.fetch({__MODULE__, :chapter_slugs}, ["ChaptersSync"], fn ->
+      list_chapters() |> Enum.map(& &1.normalized_name) |> MapSet.new()
+    end)
+  end
 
   # ── Private ────────────────────────────────────────────────────────
 

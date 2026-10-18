@@ -97,9 +97,18 @@ defmodule EftBuddyWeb.Plugs.OperatorSession do
   # The `eft_prefs` cookie is the single durable source for prefs: when it is
   # absent or unreadable we DROP any previously bridged copy rather than
   # leaving stale values behind, so clearing it client-side really does reset.
+  #
+  # Written only when the value differs. Any `put_session`/`delete_session`
+  # marks the session changed, and Plug then re-signs and re-sends the session
+  # cookie, which it did on every single response because this ran
+  # unconditionally (audit L24).
   defp bridge_client_prefs(conn) do
+    current = get_session(conn, prefs_key())
+
     case decode_prefs(conn.cookies[prefs_key()]) do
+      nil when is_nil(current) -> conn
       nil -> delete_session(conn, prefs_key())
+      ^current -> conn
       prefs -> put_session(conn, prefs_key(), prefs)
     end
   end
