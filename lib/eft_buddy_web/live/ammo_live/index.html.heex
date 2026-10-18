@@ -2,7 +2,6 @@
      this page, so it counts as loaded once either has rows. While not loaded
      the controls + search are hidden and a single shared standby shows, so
      the not-loaded screen is identical to every other page. --%>
-<% load_state = EftBuddyWeb.LoadState.resolve(@rounds != [] or @plates != [], :ammo) %>
 <Layouts.app
   flash={@flash}
   active={@active}
@@ -13,7 +12,7 @@
   page_title="Ballistics"
   search_query={@query}
   search_placeholder={
-    if load_state == :loaded do
+    if @load_state == :loaded do
       if @view == :ammo, do: "Search ammo or caliber...", else: "Search plates or material..."
     end
   }
@@ -24,7 +23,7 @@
          where every other page's tab strip does, with the search field in
          its standard right-hand slot. The search box is always present (it
          filters whichever view is active), matching the rest of the app. --%>
-    <.controls :if={load_state == :loaded}>
+    <.controls :if={@load_state == :loaded}>
       <:tabs>
         <.tabs
           active={@view}
@@ -52,14 +51,14 @@
 
     <%!-- Shared not-loaded screen (loading spinner, or a fault + Retry when
          the ammo/armor sync last failed). Identical across every page. --%>
-    <.standby :if={load_state != :loaded} state={load_state} retry_to={~p"/ammo"} />
+    <.standby :if={@load_state != :loaded} state={@load_state} retry_to={~p"/ammo"} />
 
     <%!-- ═══════════════ AMMO VIEW ═══════════════ --%>
     <%!-- The `PenScale` hook shows a floating penetration-effectiveness key
          (0 → 6) when the operator hovers any C1–C6 matrix cell, replacing the
          always-on legend panel with an on-demand popup. --%>
     <div
-      :if={load_state == :loaded and @view == :ammo}
+      :if={@load_state == :loaded and @view == :ammo}
       id="ammo-view"
       phx-hook="PenScale"
       class="space-y-6"
@@ -84,7 +83,7 @@
     </div>
 
     <%!-- ═══════════════ PLATES VIEW ═══════════════ --%>
-    <div :if={load_state == :loaded and @view == :plates} class="space-y-6">
+    <div :if={@load_state == :loaded and @view == :plates} class="space-y-6">
       <%!-- Once the page is loaded, an empty plate set only happens if ammo
            synced but armor hasn't yet; keep a scoped standby for that case. --%>
       <.standby :if={@plates == []} />

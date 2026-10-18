@@ -49,11 +49,48 @@ defmodule EftBuddyWeb.LoadState do
   `feed` is either a page key (atom, e.g. `:tasks`) or an explicit list of
   base sync labels.
   """
-  @spec resolve(boolean(), atom() | [binary()]) :: t()
-  def resolve(true, _feed), do: :loaded
+  #
+  # `db_error?` is true when the page's own read failed (the database is
+  # unreachable). That is an error with a Retry, not "still syncing": the Maps
+  # page rescued exactly that into an empty list, so a database outage showed the
+  # standby spinner forever with no way to retry (audit L18).
+  @spec resolve(boolean(), atom() | [binary()], boolean()) :: t()
+  def resolve(has_data?, feed, db_error? \\ false)
+  def resolve(true, _feed, _db_error?), do: :loaded
+  def resolve(false, _feed, true), do: :error
 
-  def resolve(false, feed) do
+  def resolve(false, feed, false) do
     if any_failed?(feed_labels(feed)), do: :error, else: :loading
+  end
+
+  @doc """
+  Assign `:load_state` for a page, so templates read `@load_state` instead of
+  computing it in a template-local variable, which disables LiveView's change
+  tracking for everything below it (audit M17).
+  """
+  @spec assign_load_state(Phoenix.LiveView.Socket.t(), boolean(), atom() | [binary()], boolean()) ::
+          Phoenix.LiveView.Socket.t()
+  def assign_load_state(socket, has_data?, feed, db_error? \\ false) do
+    Phoenix.Component.assign(socket, :load_state, resolve(has_data?, feed, db_error?))
+  end
+
+  @doc """
+  When each base sync label last succeeded, as `%{"PricesSync" => DateTime.t()}`.
+  A label with mode-suffixed runs reports its most recent success across modes;
+  a label that has not succeeded since boot is absent.
+  """
+  @spec last_ok_at() :: %{binary() => DateTime.t()}
+  def last_ok_at do
+    Reporter.status()
+    |> Enum.flat_map(fn {label, s} ->
+      case Map.get(s, :last_ok_at) do
+        %DateTime{} = at -> [{base_label(label), at}]
+        _ -> []
+      end
+    end)
+    |> Enum.reduce(%{}, fn {base, at}, acc ->
+      Map.update(acc, base, at, &Enum.max([&1, at], DateTime))
+    end)
   end
 
   @doc "Base sync labels that feed a page key (or the list passed through)."

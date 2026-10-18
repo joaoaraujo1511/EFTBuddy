@@ -26,7 +26,7 @@ defmodule EftBuddyWeb.FleaMarketLive.Index do
       |> assign(:page_title, "Flea Market")
       |> assign(
         :page_description,
-        "Live Escape from Tarkov flea market prices with 48h trends across every tradable item, grouped by category."
+        "Escape from Tarkov flea market prices, refreshed every few minutes from tarkov.dev, with 48h trends across every tradable item, grouped by category."
       )
       |> assign(:active, :flea_market)
       |> assign(:query, "")
@@ -73,6 +73,7 @@ defmodule EftBuddyWeb.FleaMarketLive.Index do
     socket
     |> assign(:category_groups, groups_with_counts)
     |> assign(:total_flea_count, total_count)
+    |> EftBuddyWeb.LoadState.assign_load_state(total_count > 0, :flea_market)
   end
 
   # Per-status counts (All / Buyable / Locked) for the options bar,
@@ -127,6 +128,16 @@ defmodule EftBuddyWeb.FleaMarketLive.Index do
     {:noreply,
      socket
      |> assign(:favorite_slugs, read_favorite_slugs(socket))
+     |> assign_flea_status_counts()
+     |> reset_items()}
+  end
+
+  # A feed this page waits on finished while it had nothing to show (see
+  # `EftBuddyWeb.SyncAware`): count and list what the sync wrote.
+  def handle_info(:reload_after_sync, socket) do
+    {:noreply,
+     socket
+     |> assign_category_counts()
      |> assign_flea_status_counts()
      |> reset_items()}
   end
@@ -222,7 +233,9 @@ defmodule EftBuddyWeb.FleaMarketLive.Index do
     # floats favourites to the top (see `apply_flea_favorites_first/3`), so a
     # freshly-starred item jumps to the front of the results, matching the
     # Items tab and the "jumps to the top" promise in the empty-state copy.
-    socket = reset_items(socket)
+    # In place: as many cards as were loaded stay loaded, rather than a reset to
+    # the first page on every star.
+    socket = refresh_items_in_place(socket)
 
     {:noreply, socket}
   end
@@ -318,6 +331,34 @@ defmodule EftBuddyWeb.FleaMarketLive.Index do
   # `:active_group_id` assigns, replacing any items already on screen.
   # Used by mount and every event that changes a filter so the items list
   # is always in sync with the active filters.
+  # The listing re-run after a star, keeping as many cards loaded as before (up
+  # to the unfiltered preview's cap) instead of returning to the first page.
+  defp refresh_items_in_place(socket) do
+    %{query: query, active_group_id: active_group_id, items_loaded: loaded} = socket.assigns
+
+    limit =
+      if filtered?(query, active_group_id, socket.assigns.flea_status),
+        do: max(loaded, @page_size),
+        else: min(max(loaded, @page_size), @max_items)
+
+    items =
+      EftBuddy.Items.list_flea_market_items(
+        limit: limit,
+        offset: 0,
+        query: query,
+        category_names: category_names_for(active_group_id),
+        game_mode: socket.assigns.mode,
+        flea_status: socket.assigns.flea_status,
+        pmc_level: socket.assigns.pmc_level,
+        favorite_slugs: socket.assigns.favorite_slugs
+      )
+
+    socket
+    |> stream(:items, items, reset: true)
+    |> assign(:items_loaded, length(items))
+    |> assign(:end_of_items?, end_of_items?(items, limit))
+  end
+
   defp reset_items(socket) do
     %{query: query, active_group_id: active_group_id} = socket.assigns
 
@@ -355,7 +396,10 @@ defmodule EftBuddyWeb.FleaMarketLive.Index do
     end
   end
 
-  defp filtered?(query, active_group_id, flea_status),
+  # Also read by the template (end-of-list note), where a call on the assigns is
+  # change-tracked and the template-local variable it replaced was not.
+  @doc false
+  def filtered?(query, active_group_id, flea_status),
     do: query != "" or active_group_id != nil or flea_status != :all
 
   # The DB returned fewer rows than we asked for, so there's no next page.

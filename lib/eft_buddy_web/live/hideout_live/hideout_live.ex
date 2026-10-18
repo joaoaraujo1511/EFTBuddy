@@ -40,7 +40,8 @@ defmodule EftBuddyWeb.HideoutLive.Index do
       # progress blob) below, so ticks and station levels are already correct in
       # the first render on every navigation.
       |> then(&assign(&1, :checked, read_checks(&1)))
-      |> assign(:modules, modules)
+      |> assign_modules(modules)
+      |> EftBuddyWeb.LoadState.assign_load_state(modules != [], :hideout)
       # Active filter from the top options bar. One of:
       #   :all (default), :available, :locked, :maxed
       # Actually set by handle_params/3 below; we initialise to :all
@@ -74,7 +75,8 @@ defmodule EftBuddyWeb.HideoutLive.Index do
     {:noreply,
      socket
      |> assign(:filter, parse_filter(params["view"]))
-     |> assign(:query, query)}
+     |> assign(:query, query)
+     |> assign_visible_modules()}
   end
 
   defp parse_filter("all"), do: :all
@@ -180,7 +182,7 @@ defmodule EftBuddyWeb.HideoutLive.Index do
       {:noreply,
        socket
        |> assign(:checked, checked)
-       |> assign(:modules, modules)
+       |> assign_modules(modules)
        |> ClientBridge.put_progress(%{@checks_key => MapSet.to_list(checked)})}
     else
       _ -> {:noreply, socket}
@@ -237,6 +239,19 @@ defmodule EftBuddyWeb.HideoutLive.Index do
   # board from the other mode's slice.
   def handle_info({:sidebar_state_changed, :mode, _value}, socket) do
     socket = then(socket, &assign(&1, :checked, read_checks(&1)))
+
+    {:noreply, apply_hideout_levels(socket, read_levels(socket))}
+  end
+
+  # A feed this page waits on finished while it had nothing to show (see
+  # `EftBuddyWeb.SyncAware`): build the board from what the sync wrote.
+  def handle_info(:reload_after_sync, socket) do
+    modules = build_initial_modules()
+
+    socket =
+      socket
+      |> assign_modules(modules)
+      |> EftBuddyWeb.LoadState.assign_load_state(modules != [], :hideout)
 
     {:noreply, apply_hideout_levels(socket, read_levels(socket))}
   end
@@ -311,7 +326,7 @@ defmodule EftBuddyWeb.HideoutLive.Index do
     changed = modules |> Enum.find(&(&1.slug == slug)) |> Map.fetch!(:current)
 
     socket
-    |> assign(:modules, modules)
+    |> assign_modules(modules)
     |> ClientBridge.put_progress(%{@levels_key => Map.put(saved, slug, changed)})
   end
 
@@ -339,7 +354,7 @@ defmodule EftBuddyWeb.HideoutLive.Index do
       |> recompute_statuses(socket.assigns.checked)
       |> sort_by_status()
 
-    assign(socket, :modules, modules)
+    assign_modules(socket, modules)
   end
 
   # No persisted levels (a fresh visitor, or a reset that emptied the blob), so
@@ -359,7 +374,7 @@ defmodule EftBuddyWeb.HideoutLive.Index do
       |> recompute_statuses(socket.assigns.checked)
       |> reorder_locking_expanded(socket.assigns.expanded)
 
-    assign(socket, :modules, modules)
+    assign_modules(socket, modules)
   end
 
   # Pull the active game mode's ticked-requirement set out of the progress blob,
@@ -389,7 +404,7 @@ defmodule EftBuddyWeb.HideoutLive.Index do
 
     socket
     |> assign(:expanded, new_expanded)
-    |> assign(:modules, modules)
+    |> assign_modules(modules)
   end
 
   defp clamp(value, min, _max) when value < min, do: min
@@ -1021,5 +1036,31 @@ defmodule EftBuddyWeb.HideoutLive.Index do
 
       Enum.reverse(result)
     end
+  end
+
+  # Every change to the module list goes through here, so the lists the template
+  # shows are assigns rather than template-local computations (audit M17): a
+  # local disables change tracking for everything below it, and this page re-ran
+  # its search and four status filters on every render.
+  defp assign_modules(socket, modules) do
+    socket |> assign(:modules, modules) |> assign_visible_modules()
+  end
+
+  # The search-filtered set behind the tab counts, and the filtered + searched set
+  # the grid shows. `filter`/`query` default while mount is still assigning them.
+  defp assign_visible_modules(socket) do
+    %{modules: modules} = socket.assigns
+    filter = Map.get(socket.assigns, :filter, :all)
+    query = Map.get(socket.assigns, :query, "")
+    searched = search_modules(modules, query)
+
+    socket
+    |> assign(:module_counts, %{
+      all: length(searched),
+      available: length(filter_modules(searched, :available)),
+      locked: length(filter_modules(searched, :locked)),
+      maxed: length(filter_modules(searched, :maxed))
+    })
+    |> assign(:visible_modules, modules |> filter_modules(filter) |> search_modules(query))
   end
 end

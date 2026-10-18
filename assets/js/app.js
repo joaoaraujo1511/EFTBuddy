@@ -2278,6 +2278,24 @@ const FitList = {
 // =============================================================================
 // LiveSocket
 // =============================================================================
+// Keeps an "updated N min ago" line current on an open page (`UI.data_age/1`).
+// Same wording as `EftBuddyWeb.UI.relative_time/2`, which renders the first text.
+const RelativeTime = {
+  mounted() { this.render(); this.timer = setInterval(() => this.render(), 30000) },
+  updated() { this.render() },
+  destroyed() { clearInterval(this.timer) },
+  render() {
+    const at = Date.parse(this.el.getAttribute("datetime"))
+    if (Number.isNaN(at)) return
+    const minutes = Math.max(Math.floor((Date.now() - at) / 60000), 0)
+    this.el.textContent =
+      minutes < 1 ? "just now"
+        : minutes < 60 ? `${minutes} min ago`
+          : minutes < 48 * 60 ? `${Math.floor(minutes / 60)} h ago`
+            : `${Math.floor(minutes / 1440)} d ago`
+  },
+}
+
 const liveSocket = new LiveSocket("/live", Socket, {
   // How long a WebSocket upgrade may take before the client falls back to
   // long-polling. At 2.5 s, 74% of connections on the Pi ended up long-polling:
@@ -2288,7 +2306,7 @@ const liveSocket = new LiveSocket("/live", Socket, {
   hooks: {
     ...colocatedHooks,
     Hud, Shell, TacMap, LevelInput, NumberCap, KarmaSlider, PenScale, Backup,
-    FitList,
+    FitList, RelativeTime,
   },
 })
 

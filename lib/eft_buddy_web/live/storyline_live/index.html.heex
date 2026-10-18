@@ -1,9 +1,3 @@
-<%!-- Storyline has two views (chapters / endings); the page counts as loaded
-     once the active view has its data. While not loaded the controls + search
-     hide and the shared standby shows, matching every other page. --%>
-<% active_loaded? =
-  (@view == "chapters" and @chapters != []) or (@view == "endings" and @branch_objectives != []) %>
-<% load_state = EftBuddyWeb.LoadState.resolve(active_loaded?, :storyline) %>
 <Layouts.app
   flash={@flash}
   active={@active}
@@ -13,11 +7,11 @@
   scav_karma={@scav_karma}
   page_title="Storyline"
   search_query={@query}
-  search_placeholder={if load_state == :loaded, do: "Search chapters..."}
+  search_placeholder={if @load_state == :loaded, do: "Search chapters..."}
   rail_collapsed={@rail_collapsed}
 >
   <div class="max-w-[1800px] mx-auto px-4 sm:px-6 py-8 space-y-6">
-    <.controls :if={load_state == :loaded}>
+    <.controls :if={@load_state == :loaded}>
       <:tabs>
         <.tabs
           active={@view}
@@ -75,7 +69,7 @@
       />
     </div>
 
-    <.standby :if={load_state != :loaded} state={load_state} retry_to={~p"/storyline"} />
+    <.standby :if={@load_state != :loaded} state={@load_state} retry_to={~p"/storyline"} />
 
     <.no_results
       :if={@view == "chapters" && @chapters != [] && @visible_chapters == []}

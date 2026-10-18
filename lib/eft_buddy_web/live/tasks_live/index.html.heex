@@ -1,4 +1,3 @@
-<% load_state = EftBuddyWeb.LoadState.resolve(@all_tasks != [], :tasks) %>
 <Layouts.app
   flash={@flash}
   active={@active}
@@ -8,11 +7,11 @@
   scav_karma={@scav_karma}
   page_title="Quest Tracker"
   search_query={@query}
-  search_placeholder={if load_state == :loaded, do: "Search tasks..."}
+  search_placeholder={if @load_state == :loaded, do: "Search tasks..."}
   rail_collapsed={@rail_collapsed}
 >
   <div class="max-w-[1800px] mx-auto px-4 sm:px-6 py-8 space-y-6">
-    <.controls :if={load_state == :loaded}>
+    <.controls :if={@load_state == :loaded}>
       <:tabs>
         <.tabs
           active={if @filter == :wip, do: :all, else: @filter}
@@ -90,7 +89,7 @@
     <%!-- Standby (data still loading, or a fault + Retry when the tasks sync
          last failed) vs. no-match are distinct states, rendered at the top
          level so they match every other browse page. --%>
-    <.standby :if={load_state != :loaded} state={load_state} retry_to={~p"/tasks"} />
+    <.standby :if={@load_state != :loaded} state={@load_state} retry_to={~p"/tasks"} />
     <.watchlist_empty
       :if={@all_tasks != [] && @filtered_tasks == [] && @filter == :watchlist}
       noun="quest"
