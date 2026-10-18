@@ -13,7 +13,6 @@ defmodule EftBuddy.Maps.Hazard do
   """
 
   use Ecto.Schema
-  import Ecto.Changeset
 
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
@@ -34,13 +33,5 @@ defmodule EftBuddy.Maps.Hazard do
     field :pos_z, :float
 
     timestamps()
-  end
-
-  def changeset(hazard, attrs) do
-    hazard
-    |> cast(attrs, [:map_id, :hazard_type, :name, :count, :positions, :pos_x, :pos_y, :pos_z])
-    |> validate_required([:map_id])
-    |> unique_constraint([:map_id, :hazard_type, :name])
-    |> foreign_key_constraint(:map_id)
   end
 end

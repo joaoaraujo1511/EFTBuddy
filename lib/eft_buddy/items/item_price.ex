@@ -14,7 +14,6 @@ defmodule EftBuddy.Items.ItemPrice do
   """
 
   use Ecto.Schema
-  import Ecto.Changeset
 
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
@@ -34,23 +33,5 @@ defmodule EftBuddy.Items.ItemPrice do
     belongs_to :item, EftBuddy.Items.Item
 
     timestamps()
-  end
-
-  def changeset(item_price, attrs) do
-    item_price
-    |> cast(attrs, [
-      :game_mode,
-      :base_price,
-      :last_low_price,
-      :avg_24h_price,
-      :low_24h_price,
-      :high_24h_price,
-      :item_id
-    ])
-    |> validate_required([:game_mode, :item_id])
-    |> unique_constraint([:item_id, :game_mode],
-      name: :item_prices_item_id_game_mode_index
-    )
-    |> foreign_key_constraint(:item_id)
   end
 end

@@ -6,7 +6,6 @@ defmodule EftBuddy.Maps.AccessKey do
   """
 
   use Ecto.Schema
-  import Ecto.Changeset
 
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
@@ -17,14 +16,5 @@ defmodule EftBuddy.Maps.AccessKey do
     belongs_to :item, EftBuddy.Items.Item
 
     timestamps()
-  end
-
-  def changeset(access_key, attrs) do
-    access_key
-    |> cast(attrs, [:map_id, :item_id])
-    |> validate_required([:map_id, :item_id])
-    |> unique_constraint([:map_id, :item_id])
-    |> foreign_key_constraint(:map_id)
-    |> foreign_key_constraint(:item_id)
   end
 end

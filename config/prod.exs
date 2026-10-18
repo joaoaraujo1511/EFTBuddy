@@ -31,9 +31,6 @@ config :eft_buddy, EftBuddyWeb.Endpoint, cache_static_manifest: "priv/static/cac
 # that wrong is silent: the probe simply collects a 301 and the readiness check reads
 # as permanently unhealthy. `test/eft_buddy_web/prod_config_test.exs` asserts this
 # list matches the router's health routes exactly, in both directions.
-#
-# Note `/dev/dashboard` is deliberately NOT here: basic auth sends its password on
-# every request, so it must stay HTTPS-only.
 config :eft_buddy, EftBuddyWeb.Endpoint,
   force_ssl: [
     rewrite_on: [:x_forwarded_proto],

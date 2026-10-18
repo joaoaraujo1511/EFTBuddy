@@ -6,7 +6,6 @@ defmodule EftBuddy.Tasks.TaskRequirement do
   """
 
   use Ecto.Schema
-  import Ecto.Changeset
 
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
@@ -17,16 +16,5 @@ defmodule EftBuddy.Tasks.TaskRequirement do
     belongs_to :prerequisite_task, EftBuddy.Tasks.Task, foreign_key: :prerequisite_task_id
 
     timestamps()
-  end
-
-  def changeset(req, attrs) do
-    req
-    |> cast(attrs, [:status, :task_id, :prerequisite_task_id])
-    |> validate_required([:task_id, :prerequisite_task_id])
-    |> unique_constraint([:task_id, :prerequisite_task_id],
-      name: :task_task_reqs_task_prereq_index
-    )
-    |> foreign_key_constraint(:task_id)
-    |> foreign_key_constraint(:prerequisite_task_id)
   end
 end

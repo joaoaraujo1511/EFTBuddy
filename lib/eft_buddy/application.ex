@@ -57,6 +57,10 @@ defmodule EftBuddy.Application do
       # Started BEFORE `Sync.Bootstrap` below so its completion casts land on
       # running processes.
       if(start_sync?, do: EftBuddy.Sync.Registry.children(), else: []),
+      # Inert unless DNS_CLUSTER_QUERY is set, and the app runs on one node, so
+      # nothing connects. Kept for a future multi-node setup, which would need
+      # more than this: operator sessions are node-local, and the `{:global, _}`
+      # sync singletons pick one node but do not fail over to another.
       {DNSCluster, query: Application.get_env(:eft_buddy, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: EftBuddy.PubSub},
       # Per-operator live state (HUD prefs + progress), authoritative for the

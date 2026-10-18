@@ -78,24 +78,25 @@ defmodule EftBuddy.Items.Sync do
   #
   # The cost is 50% more calls to an endpoint we do not own, for a refresh that
   # writes only the volatile price columns and only for rows whose prices
-  # actually changed. If that ever needs backing off, set `:price_interval` in
-  # config rather than editing this — `normalize_ms/2` below already reads it.
+  # actually changed. If that ever needs backing off, change this attribute.
+  # (`init/1` accepts a `:price_interval` start option, but nothing passes one
+  # and no config key feeds it.)
   @default_price_interval 10 * 60 * 1_000
 
-  # Cluster-wide lock used by every public `run/*` entry point so a
-  # Bootstrap-driven cold-start run can't race with a periodic
-  # GenServer tick (or a manual call from another node). Tasks.Sync
-  # uses the same `:global.set_lock/3` pattern; we mirror it here so
-  # all three syncers behave the same way.
+  # Lock taken by every public `run/*` entry point so a Bootstrap-driven
+  # cold-start run can't race with a periodic GenServer tick or a manual call
+  # from IEx. It is a `:global` lock, the same one `EftBuddy.Sync.Scheduler`
+  # takes for every other feed.
   @lock_id {__MODULE__, :running}
 
   # ── Client API ─────────────────────────────────────────
 
-  # Cluster-wide singleton: only one node in the cluster runs the
-  # GenServer at a time. The losing nodes simply :ignore start_link,
-  # so their supervisor leaves the slot empty. If the winning node
-  # dies, the next supervisor restart on any node will register
-  # globally and take over.
+  # Registered `{:global, _}`, so on several connected nodes only one would run
+  # it: the others `:ignore` start_link and leave their supervisor slot empty.
+  # That is all it does. Nothing restarts it elsewhere if the winning node dies,
+  # because the other supervisors have already ignored it, so this is not
+  # failover. The app runs on one node (see the DNSCluster child in
+  # `EftBuddy.Application`), where the global name is just a name.
   #
   # Note: cold-start data population is owned by
   # `EftBuddy.Sync.Bootstrap`. This GenServer is responsible only
@@ -882,9 +883,9 @@ defmodule EftBuddy.Items.Sync do
         # And quest items are an expensive thing to delete: `items.id` is referenced
         # with `on_delete: :delete_all` by `task_item_rewards` and
         # `task_offer_unlocks`, and the questItem UUIDs are baked into task objective
-        # payloads as JSONB — which no FK protects and only `Tasks.Sync` rebuilds, at
-        # boot. So a truncated quest-item fetch silently strips task rewards and
-        # dangles objective references until the next full boot sequence.
+        # payloads as JSONB — which no FK protects and only `Tasks.Sync` rebuilds,
+        # every 6h. So a truncated quest-item fetch silently strips task rewards and
+        # dangles objective references until the next Tasks run.
         case cleanup_safe?(reference, length(valid_external_ids)) do
           {:skip, reason} ->
             Logger.error(
@@ -1650,8 +1651,8 @@ defmodule EftBuddy.Items.Sync do
     # because sync_quest_items re-inserts them afterwards with
     # freshly generated UUIDs (the rows no longer exist to conflict
     # on), the resolved questItem UUIDs that Tasks.Sync baked into
-    # objective payloads would all dangle. Tasks.Sync only runs at
-    # boot / manually (not on the periodic items tick), so the
+    # objective payloads would all dangle. Tasks.Sync runs on its own
+    # 6h timer, not on the items tick, so until it next runs the
     # payloads keep the old UUIDs and the Tasks page's required-items
     # query stops resolving them — the "quest items vanish after the
     # next sync / on refresh" bug. Quest-item pruning is owned by
@@ -1675,7 +1676,7 @@ defmodule EftBuddy.Items.Sync do
 
   # ── Barters ────────────────────────────────────────────
   #
-  # `sync_barters/0` and `sync_crafts/0` follow the same shape:
+  # `sync_barters/1` and `sync_crafts/0` follow the same shape:
   #
   #   1. Fetch the full snapshot from the API.
   #   2. Build resolution maps (item-external-id → uuid, etc.) from
@@ -1824,7 +1825,7 @@ defmodule EftBuddy.Items.Sync do
   #
   # `parent_map_or_traders` is either the traders map (for
   # barters) or the station_level map (for crafts). We only
-  # peek at it via `parent_resolution_problem/3`, which
+  # peek at it via `drop_reason/4`, which
   # branches on the parent kind to phrase the reason
   # appropriately. No-ops cleanly when nothing was dropped.
   defp log_dropped(_kind, [], _items_map, _parent_map), do: :ok
@@ -2172,7 +2173,7 @@ defmodule EftBuddy.Items.Sync do
   # The DB ids of only those parents the current upstream snapshot carried.
   #
   # `id_map` is an `external_id => id` map read back from the WHOLE table (see
-  # `fetch_barter_id_map/2` / `fetch_craft_id_map/1`), so it necessarily includes
+  # `Resolvers.barter_id_map/2` / `Resolvers.craft_id_map/1`), so it necessarily includes
   # parents upstream did not mention this run. Handing that straight to
   # `replace_children/4` is the bug this function exists to prevent: it deleted
   # every parent's children, including those of the parents `cleanup_safe?/2` then

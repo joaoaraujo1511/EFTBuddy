@@ -57,30 +57,6 @@ defmodule EftBuddy.OperatorTest do
       assert Operator.parse(:scav_karma, 10 ** 400) == 600
       assert Operator.parse(:scav_karma, "1e400") == nil
     end
-
-    test "repeated stepping does not accumulate float drift" do
-      # The whole reason karma is integral internally: doing this with floats
-      # yields 0.30000000000000004 and renders as a jittering HUD value.
-      cents =
-        Enum.reduce(1..3, 0, fn _i, acc -> Operator.step_karma(acc, :up) end)
-
-      assert cents == 30
-      assert Operator.karma_to_float(cents) === 0.3
-
-      # A full sweep down and back up must land exactly on zero.
-      down = Enum.reduce(1..60, 0, fn _i, acc -> Operator.step_karma(acc, :down) end)
-      assert down == -600
-      assert Operator.karma_to_float(down) === -6.0
-
-      back = Enum.reduce(1..60, down, fn _i, acc -> Operator.step_karma(acc, :up) end)
-      assert back == 0
-      assert Operator.karma_to_float(back) === 0.0
-    end
-
-    test "stepping saturates at the bounds rather than overflowing" do
-      assert Operator.step_karma(600, :up) == 600
-      assert Operator.step_karma(-600, :down) == -600
-    end
   end
 
   describe "parse_all/1" do

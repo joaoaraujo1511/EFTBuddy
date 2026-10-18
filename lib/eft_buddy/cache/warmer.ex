@@ -72,7 +72,7 @@ defmodule EftBuddy.Cache.Warmer do
   * **The repair tick** bounds *coldness*, for the cases a TTL cannot cover: a
     warm that failed, a warm killed by a timeout, an entry evicted by the cap, a
     spec added mid-cycle. It is cheap because it PROBES before it runs — see
-    `warm_one/1`.
+    `warm_one/2`.
 
   Raising the TTL alone would have been the wrong fix: it weakens the backstop
   that exists for "the invalidation signal never arrived". Looping a rebuild
@@ -92,8 +92,8 @@ defmodule EftBuddy.Cache.Warmer do
   @handler_id {__MODULE__, :warm}
 
   # Collect source names for this long before flushing. Sized to swallow the
-  # per-mode pairs that arrive together (`PricesSync:regular` then
-  # `PricesSync:pve`) without meaningfully extending the window in which a read
+  # per-mode pairs that arrive together (`TasksSync:regular` then
+  # `TasksSync:pve`) without meaningfully extending the window in which a read
   # would miss — the cache is already empty during it either way.
   #
   # Overridable so the test suite does not spend a real five seconds per
@@ -213,21 +213,8 @@ defmodule EftBuddy.Cache.Warmer do
         {EftBuddy.Tasks, :traders_with_tasks, []},
         keys: [{EftBuddy.Tasks, :traders_with_tasks, nil}]
       ),
-
-      # The app's most expensive read. `list_rounds/0` builds both halves of the
-      # split (see `EftBuddy.Ammo`), so warming it covers the ten-minute price
-      # tick that drops the availability half without also making a visitor pay
-      # to rebuild the ballistics half.
-      #
-      # Two keys, and they have DIFFERENT owners — ballistics is
-      # AmmoSync/ItemsSync, availability adds the price and recipe feeds. The
-      # spec lists the union, which is why a price tick rebuilds the cheap half
-      # and finds the expensive one already live.
-      spec(
-        "ammo.rounds",
-        ["AmmoSync", "ItemsSync", "PricesSync", "BartersSync", "CraftsSync"],
-        {EftBuddy.Ammo, :list_rounds, []},
-        keys: [{EftBuddy.Ammo, :ballistics}, {EftBuddy.Ammo, :availability}]
+      spec("ammo.rounds", ["AmmoSync", "ItemsSync"], {EftBuddy.Ammo, :list_rounds, []},
+        keys: [{EftBuddy.Ammo, :list_rounds}]
       ),
       spec("armor.plates", ["ArmorSync", "ItemsSync"], {EftBuddy.Armor, :list_plates, []},
         keys: [{EftBuddy.Armor, :list_plates}]

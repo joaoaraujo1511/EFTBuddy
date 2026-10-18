@@ -13,7 +13,6 @@ defmodule EftBuddy.Items.Craft do
   """
 
   use Ecto.Schema
-  import Ecto.Changeset
 
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
@@ -38,15 +37,5 @@ defmodule EftBuddy.Items.Craft do
     )
 
     timestamps()
-  end
-
-  def changeset(craft, attrs) do
-    craft
-    |> cast(attrs, [:external_id, :duration, :station_level_id, :task_unlock_id])
-    |> validate_required([:external_id, :duration, :station_level_id])
-    |> validate_number(:duration, greater_than_or_equal_to: 0)
-    |> unique_constraint(:external_id)
-    |> foreign_key_constraint(:station_level_id)
-    |> foreign_key_constraint(:task_unlock_id)
   end
 end

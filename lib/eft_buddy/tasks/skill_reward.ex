@@ -5,7 +5,6 @@ defmodule EftBuddy.Tasks.SkillReward do
   """
 
   use Ecto.Schema
-  import Ecto.Changeset
 
   @reward_phases ~w(start finish)a
 
@@ -19,16 +18,5 @@ defmodule EftBuddy.Tasks.SkillReward do
     belongs_to :skill, EftBuddy.Hideout.Skill
 
     timestamps()
-  end
-
-  def changeset(record, attrs) do
-    record
-    |> cast(attrs, [:level, :reward_phase, :task_id, :skill_id])
-    |> validate_required([:level, :reward_phase, :task_id, :skill_id])
-    |> unique_constraint([:task_id, :skill_id, :reward_phase],
-      name: :task_skill_rewards_task_skill_phase_index
-    )
-    |> foreign_key_constraint(:task_id)
-    |> foreign_key_constraint(:skill_id)
   end
 end

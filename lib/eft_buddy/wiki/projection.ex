@@ -33,8 +33,7 @@ defmodule EftBuddy.Wiki.Projection do
           objectives_text: [%{index: integer(), text: String.t()}],
           objective_images: %{integer() => [map()]},
           karma_requirement: {:gte | :lte, integer()} | nil,
-          banner: %{url: String.t()} | nil,
-          file_count: non_neg_integer()
+          banner: %{url: String.t()} | nil
         }
 
   @doc """
@@ -76,8 +75,7 @@ defmodule EftBuddy.Wiki.Projection do
       objectives_text: extract_objectives_text(sections),
       objective_images: extract_objective_images(sections),
       karma_requirement: extract_karma_requirement(sections),
-      banner: extract_banner(sections),
-      file_count: sections |> Enum.flat_map(fn s -> s["files"] || [] end) |> length()
+      banner: extract_banner(sections)
     }
   end
 

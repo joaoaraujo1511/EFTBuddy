@@ -4,9 +4,9 @@ defmodule EftBuddy.Hideout do
   requirements (items, prerequisite stations, skills, traders) for
   the LiveView to render the hideout grid.
 
-  Data is populated by `EftBuddy.Hideout.Sync` from the Tarkov.dev
-  GraphQL API once at boot (via `EftBuddy.Sync.Bootstrap`) and on
-  demand when a dev calls `EftBuddy.Hideout.Sync.run/0` manually.
+  Data is populated by `EftBuddy.Hideout.Sync` from the tarkov.dev JSON API:
+  at boot (via `EftBuddy.Sync.Bootstrap`), every 12h after that, and on demand
+  when a dev calls `EftBuddy.Hideout.Sync.run/0`.
   """
 
   import Ecto.Query

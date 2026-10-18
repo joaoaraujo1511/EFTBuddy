@@ -1,6 +1,5 @@
 defmodule EftBuddy.Items.Item do
   use Ecto.Schema
-  import Ecto.Changeset
 
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
@@ -92,78 +91,5 @@ defmodule EftBuddy.Items.Item do
     belongs_to :contains_item, EftBuddy.Items.Item, foreign_key: :contains_item_id
 
     timestamps()
-  end
-
-  @doc """
-  Creates a changeset for item creation from API data.
-
-  ## Examples
-      Item.changeset(%Item{}, %{
-        external_id: "5ac66cb05acfc400192632fc",
-        name: "AK-74",
-        base_price: 50000
-      })
-  """
-  def changeset(item, attrs) do
-    item
-    |> cast(attrs, [
-      :external_id,
-      :name,
-      :short_name,
-      :normalized_name,
-      :description,
-      :base_price,
-      :last_low_price,
-      :avg_24h_price,
-      :low_24h_price,
-      :high_24h_price,
-      :wiki_link,
-      :link,
-      :icon_link,
-      :grid_image_link,
-      :base_image_link,
-      :inspect_image_link,
-      :image_512px_link,
-      :image_8x_link,
-      :background_color,
-      :min_level_for_flea,
-      :is_quest_item,
-      :category_id,
-      :contains_item_id
-    ])
-    |> validate_required([:external_id, :name, :base_price])
-    |> unique_constraint(:external_id)
-  end
-
-  @doc """
-  Creates a changeset for updating existing items.
-  More permissive than create changeset.
-  """
-  def update_changeset(item, attrs) do
-    item
-    |> cast(attrs, [
-      :name,
-      :short_name,
-      :normalized_name,
-      :description,
-      :base_price,
-      :last_low_price,
-      :avg_24h_price,
-      :low_24h_price,
-      :high_24h_price,
-      :wiki_link,
-      :link,
-      :icon_link,
-      :grid_image_link,
-      :base_image_link,
-      :inspect_image_link,
-      :image_512px_link,
-      :image_8x_link,
-      :background_color,
-      :min_level_for_flea,
-      :is_quest_item,
-      :category_id,
-      :contains_item_id
-    ])
   end
 end

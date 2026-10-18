@@ -254,6 +254,8 @@ if config_env() == :prod do
     """
   end
 
+  # Unset on the single-node deployment, which leaves DNSCluster inert (see
+  # `EftBuddy.Application`).
   config :eft_buddy, :dns_cluster_query, System.get_env("DNS_CLUSTER_QUERY")
 
   # Optional rotation of the LiveView signing salt without a rebuild. Not a

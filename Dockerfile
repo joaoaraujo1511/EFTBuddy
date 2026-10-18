@@ -143,7 +143,8 @@ USER eftbuddy
 ARG GIT_SHA=""
 ENV GIT_SHA=${GIT_SHA}
 
-# Bandit binds this; config/runtime.exs reads PORT and defaults to 4000.
+# Bandit binds PORT, which config/runtime.exs requires (there is no default).
+# `.env` sets it to 4000 to match this and the compose port mapping.
 EXPOSE 4000
 
 # PHX_SERVER is what actually starts the endpoint under a release — without it

@@ -95,7 +95,7 @@ redistributed by this repository.
 
 ### Game-derived images that ARE vendored here, under no grant
 
-**65 image files in `priv/static/images/` are derived from Battlestate Games'
+**56 image files in `priv/static/images/` are derived from Battlestate Games'
 own artwork and are covered by no licence from anyone**, including this NOTICE:
 
 | Directory | Files | What they are |
@@ -103,7 +103,6 @@ own artwork and are covered by no licence from anyone**, including this NOTICE:
 | `ranks/` | 16 | PMC rank emblems |
 | `hideout/` | 26 | Hideout station icons |
 | `chapters/` | 10 | Storyline chapter art |
-| `items/missing/` | 9 | Item placeholder art |
 | `icons/` | 4 | Faction / game-mode icons |
 
 They are stated here rather than omitted because omitting them, next to the

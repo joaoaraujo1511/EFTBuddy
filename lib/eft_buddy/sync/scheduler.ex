@@ -52,9 +52,10 @@ defmodule EftBuddy.Sync.Scheduler do
       zero would immediately re-sync the whole snapshot for nothing.
     * `:released` — Bootstrap only *releases* this feed; it has never run. The
       first run is its stagger away, which for the first slot means "now".
-    * `:chained` — armed by another module's cast rather than by Bootstrap
-      (`EftBuddy.Wiki.Sync` off `EftBuddy.Events.Sync`'s `:events_complete`). It
-      still keeps its own recurring timer.
+    * `:chained` — armed by another module's cast rather than by Bootstrap. It
+      still keeps its own recurring timer. No feed uses it today: `EftBuddy.Wiki.Sync`
+      was the example, and it now runs in the cold start (`:ran`) and is only
+      re-armed by `EftBuddy.Events.Sync`'s `:events_complete` cast.
     * `:none` — no cast wiring at all.
 
   ## Two hooks, so no module has to override a GenServer callback
@@ -307,7 +308,8 @@ defmodule EftBuddy.Sync.Scheduler do
 
       @doc false
       # Cluster-wide singleton: only one node registers the GenServer, the rest
-      # `:ignore` their start_link and leave the supervisor slot empty.
+      # `:ignore` their start_link and leave the supervisor slot empty. Not
+      # failover: if that node dies, no other node restarts the feed.
       def start_link(opts \\ []) do
         case GenServer.start_link(__MODULE__, opts, name: {:global, __MODULE__}) do
           {:ok, pid} ->

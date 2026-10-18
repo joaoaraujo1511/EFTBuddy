@@ -242,8 +242,9 @@ defmodule EftBuddyWeb.ItemsLive.Index do
   # panel) are mode-specific, so a PVP/PVE flip re-runs the listing for
   # the active mode and drops the detail cache (cached panels hold the
   # previous mode's prices/recipes). Faction / PMC level / collapse don't
-  # affect the items view, and the localStorage restore message carries
-  # no item state - both fall through to the no-op clause.
+  # affect the items view and fall through to the no-op clause. The
+  # localStorage restore does carry item state (the watchlist), and has its
+  # own clause below.
   @impl true
   def handle_info({:sidebar_state_changed, :mode, _value}, socket) do
     # The scope-tab counts are now mode-aware too (Quest/Barter track

@@ -230,8 +230,8 @@ defmodule EftBuddy.Events.Sync do
   defp upsert_event_quests(%Event{id: event_id}, event, walkthroughs) do
     slugs = Enum.map(event.quests, & &1.slug)
 
-    # Drop quests this event no longer lists (the cross-event prune in
-    # `prune_events/1` only deletes rows for whole vanished events).
+    # Drop quests this event no longer lists (the cross-event prune,
+    # `Api.prune(Event, _)`, only deletes rows for whole vanished events).
     Repo.delete_all(
       from(eq in EventQuest,
         where: eq.event_id == ^event_id and eq.normalized_name not in ^slugs

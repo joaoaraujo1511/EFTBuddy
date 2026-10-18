@@ -1,7 +1,7 @@
 defmodule EftBuddy.Sync.Helpers do
   @moduledoc """
   Small stateless helpers shared by the Items / Tasks / Hideout sync
-  pipelines: timestamp generation, numeric coercion of GraphQL values,
+  pipelines: timestamp generation, numeric coercion of upstream values,
   slug derivation, and the destructive-cleanup safety guard. Imported
   by each `*.Sync` module.
   """
@@ -268,7 +268,7 @@ defmodule EftBuddy.Sync.Helpers do
 
   ## Why
 
-  tarkov.dev's GraphQL endpoint sits behind Cloudflare. When its Worker
+  tarkov.dev's API sits behind Cloudflare. When its Worker
   exceeds its CPU/memory budget Cloudflare returns **HTTP 503 with an
   "error 1102" body** that carries `"retryable" => false` (and
   `"cloudflare_error" => true`). Retrying is futile — the same request

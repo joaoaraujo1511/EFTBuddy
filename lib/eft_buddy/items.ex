@@ -162,7 +162,7 @@ defmodule EftBuddy.Items do
   # `:watchlist` isn't a catalog subset like the structured scopes — it cuts
   # across every category, narrowing the listing to the operator's favourited
   # slugs (matched on the stable `normalized_name`). Routed here so the
-  # `apply_scope/2` chain stays focused on the structured scopes. Reuses the
+  # `apply_scope/3` chain stays focused on the structured scopes. Reuses the
   # same `apply_favorites/2` the flea listing uses.
   defp apply_item_scope(query, :watchlist, favorite_slugs, _game_mode),
     do: apply_favorites(query, favorite_slugs)
@@ -721,7 +721,7 @@ defmodule EftBuddy.Items do
   #     array; omitting this arm silently dropped every such item.
   #
   # The `t.name not in @task_name_blacklist` filter mirrors
-  # `needed_by_tasks/2` so items referenced *only* by a blacklisted
+  # `needed_by_tasks_rows/2` so items referenced *only* by a blacklisted
   # task (Key Partner / Building Foundations / Circulate) don't leak
   # in. Selecting a `%{uuid: ...}` map (rather than a bare column) lets
   # callers wrap this in a subquery and both filter on and re-select
@@ -1959,7 +1959,7 @@ defmodule EftBuddy.Items do
   # twice in the `IN` list.
   defp parent_ids(rows, key), do: rows |> Enum.map(&Map.fetch!(&1, key)) |> Enum.uniq()
 
-  # Same shape as `obtained_from_barters/1` but joining through
+  # Same shape as `obtained_from_barters_rows/2` but joining through
   # crafts → station_level → station so the UI can show
   # "Workbench level 2 (45m)".
   defp obtained_from_crafts_rows(subject) do
@@ -2002,7 +2002,7 @@ defmodule EftBuddy.Items do
   end
 
   # Crafts that *consume* this item as an input. Mirror of
-  # `obtained_from_crafts/1` — same shape (station / duration /
+  # `obtained_from_crafts_rows/1` — same shape (station / duration /
   # task gate), same recipe-row layout in the UI — but the join
   # starts at `CraftRequiredItem` filtered by `item_id`, so we
   # find every craft whose ingredient list includes this item.
@@ -2069,7 +2069,7 @@ defmodule EftBuddy.Items do
 
   # Barters whose `requiredItems` contains this item — i.e. the
   # ways the user can SPEND this item at a trader. Mirror image
-  # of `obtained_from_barters/1`: same parent + child shape, but
+  # of `obtained_from_barters_rows/2`: same parent + child shape, but
   # we pivot the outer query on `BarterRequiredItem` instead of
   # `BarterRewardItem`.
   #
@@ -2077,7 +2077,7 @@ defmodule EftBuddy.Items do
   #
   #   * the full required-items list (`:required`) so the recipe
   #     row can render every input tile and highlight the *current*
-  #     item among them, mirroring how `needed_for_crafts/1`
+  #     item among them, mirroring how `needed_for_crafts_rows/1`
   #     highlights its input.
   #   * the barter's primary reward (`:output`) so the row reads
   #     "<inputs> → <output>" identically to the crafts side.

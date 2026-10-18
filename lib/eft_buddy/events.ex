@@ -65,7 +65,6 @@ defmodule EftBuddy.Events do
           status: String.t(),
           banner_url: String.t() | nil,
           description: String.t() | nil,
-          wiki_link: String.t() | nil,
           availability_note: String.t() | nil,
           gameplay_changes: [%{level: integer(), text: String.t()}],
           quests: [
@@ -183,12 +182,6 @@ defmodule EftBuddy.Events do
       status: event.status,
       banner_url: event.banner_url,
       description: event.description,
-      # The wiki page the description / availability note / gameplay changes
-      # were scraped from. Rendered as the event card's `source_credit` line
-      # (see events_live/index.html.heex), which is what satisfies the wiki's
-      # CC BY-NC-SA attribution condition for the event's own prose. The event
-      # *quests* carry their own credit, each pointing at its own page.
-      wiki_link: EftBuddy.Wiki.Url.normalize(get_in(event.content, ["wiki_link"])),
       availability_note: get_in(event.content, ["availability_note"]),
       gameplay_changes: parse_changes(event.content),
       quests: quests

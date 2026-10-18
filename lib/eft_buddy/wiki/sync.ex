@@ -76,8 +76,8 @@ defmodule EftBuddy.Wiki.Sync do
       (`EftBuddy.Wiki.Api.scrape_result/3`), which `/health/sync` can see.
   """
 
-  # `bootstrap: :chained` — this one is not armed by Bootstrap at all.
-  # `EftBuddy.Events.Sync` casts `:events_complete` here when its run finishes
+  # `bootstrap: :ran` — the cold start runs this scrape (see the moduledoc), and
+  # after that `EftBuddy.Events.Sync` casts `:events_complete` here when its run finishes
   # and the scrape starts a short gap later, because this scrape reads the
   # `event_quests` blacklist that one writes. Chaining on completion rather than
   # using a fixed offset guarantees the blacklist is fully populated first (it
@@ -129,7 +129,7 @@ defmodule EftBuddy.Wiki.Sync do
   @impl EftBuddy.Sync.Scheduler
   # The events sync finished its run and refreshed the `event_quests` blacklist
   # this scrape honours: (re)arm the scrape a short gap later, cancelling the
-  # standing fallback/daily timer. If a scrape is somehow already running, the
+  # standing fallback/6h timer. If a scrape is somehow already running, the
   # global lock makes the armed run a no-op.
   def handle_extra_cast(:events_complete, state) do
     {:noreply, arm_first_run(state, @post_events_gap)}

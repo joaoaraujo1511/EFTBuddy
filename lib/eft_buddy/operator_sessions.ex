@@ -19,7 +19,7 @@ defmodule EftBuddy.OperatorSessions do
 
   ## Session creation is gated on a live socket
 
-  `snapshot/3` only *creates* a session when told to (`create: true`), which
+  `snapshot/2` only *creates* a session when told to (`create: true`), which
   `EftBuddyWeb.OperatorState` does exclusively on the connected mount. A
   disconnected (static) render can read the `eft_prefs` cookie directly, so it
   needs no process - and a crawler or health-check GET therefore allocates
@@ -274,9 +274,10 @@ defmodule EftBuddy.OperatorSessions do
   #
   # `:seed_progress` is the load-bearing half for DATA LOSS, not just for UI
   # staleness: the browser's `localStorage` is the only durable copy of progress,
-  # and `ClientBridge.put_progress/2` pushes the session's answer back over it as
-  # a full replacement. A session that came back empty would therefore erase the
-  # operator's entire history. See `EftBuddyWeb.ClientBridge.put_progress/2`.
+  # and `ClientBridge.put_progress/2` pushes the session's answer back into it.
+  # The browser merges per mode, but each list in the answer replaces its copy, so
+  # a session that came back empty would overwrite the operator's history with a
+  # list holding only this write. See `EftBuddyWeb.ClientBridge.put_progress/2`.
   defp write(token, message, opts) do
     case ensure_started(token, opts) do
       {:ok, _pid} -> call(token, message, :unchanged)

@@ -129,13 +129,6 @@ defmodule EftBuddy.Sync.SchedulerTest do
       GenServer.stop(pid)
     end
 
-    test "seconds_until_next_run is nil for a feed that has never armed a timer" do
-      # Not zero. "No timer at all" and "firing right now" are opposite
-      # conditions, and a supervised feed with no armed timer means its `init/1`
-      # never ran — worse than any delay.
-      refute Reporter.seconds_until_next_run("ProbeNeverStartedSync")
-    end
-
     test "arming does NOT create a run record, which :never_run depends on" do
       # THE SHARP EDGE OF PUTTING THIS IN ETS.
       #

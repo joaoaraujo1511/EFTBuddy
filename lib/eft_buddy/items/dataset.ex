@@ -64,7 +64,7 @@ defmodule EftBuddy.Items.Dataset do
 
   ## Failing back rather than failing
 
-  `ready?/0` gates every read. It is false before the first build, during a
+  `ready?/1` gates every read. It is false before the first build, during a
   rebuild, and once a layer is older than its refresh cadence allows. In all
   three cases callers fall through to the original SQL path.
 

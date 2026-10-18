@@ -51,7 +51,10 @@ defmodule EftBuddy.TarkovApi do
       fetch the English locale alongside each translatable endpoint and
       substitute (`translate/2`). A translatable fetch fails outright if
       its locale can't be loaded, so the sync never writes placeholder
-      text or prunes good rows against a half-resolved snapshot.
+      text or prunes good rows against a half-resolved snapshot. Maps are
+      the one deliberate exception: losing every map until the next run is
+      worse than a few untranslated zone names, so `maps/1` degrades
+      instead (see the comment there).
 
   ## Game mode
 
@@ -685,7 +688,7 @@ defmodule EftBuddy.TarkovApi do
   end
 
   # JSON attributes are a flat map (`%{"minLevel" => 39}`); GraphQL gave a
-  # `[%{"name", "value"}]` list, which `Items.Sync.encode_attributes/1`
+  # `[%{"name", "value"}]` list, which `Items.Sync.Resolvers.encode_attributes/1`
   # collapses back to a flat map. Values are stringified to match the
   # GraphQL `String` type.
   defp attributes_list(attrs) when is_map(attrs) do
@@ -1212,7 +1215,7 @@ defmodule EftBuddy.TarkovApi do
   # `%{placeholder_key => translated_value}` dictionary). A translatable
   # endpoint MUST have a usable locale — failing here surfaces as a failed
   # fetch so the sync never writes placeholder strings or prunes against a
-  # half-translated snapshot.
+  # half-translated snapshot. (`maps/1` deliberately does not use this.)
   defp fetch_locale(path) do
     case get_json(path) do
       {:ok, %{"data" => locale}} when is_map(locale) -> {:ok, locale}

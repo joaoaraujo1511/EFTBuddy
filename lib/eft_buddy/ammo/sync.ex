@@ -4,8 +4,8 @@ defmodule EftBuddy.Ammo.Sync do
   API (via `EftBuddy.TarkovApi.ammo/1`) into the `ammo` table.
 
   Ammo ballistics only change on wipes / patches, so this runs on a slow
-  daily cadence: the cold-start `EftBuddy.Sync.Bootstrap` runs it once on
-  boot, and thereafter this GenServer re-runs it every 24h. A dev can also
+  cadence: the cold-start `EftBuddy.Sync.Bootstrap` runs it once on boot, and
+  thereafter this GenServer re-runs it every 12h. A dev can also
   trigger it on demand from IEx:
 
       EftBuddy.Ammo.Sync.run()       # synchronous, in the caller
@@ -19,7 +19,7 @@ defmodule EftBuddy.Ammo.Sync do
 
   It must run **after** `EftBuddy.Items.Sync.run_items/0` because every
   round links back to its `items` row (`ammo.item_id`) for the display
-  name, icon and availability. Rounds whose item isn't in the snapshot
+  name and icon. Rounds whose item isn't in the snapshot
   yet are still inserted with a null `item_id` and re-linked on the next
   run.
 

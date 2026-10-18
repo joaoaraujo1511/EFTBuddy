@@ -197,12 +197,9 @@ defmodule EftBuddy.Wiki.LiveSnapshotsTest do
   end
 
   describe "credit links" do
-    test "profile and uploads links are encoded wiki URLs" do
+    test "a profile link is an encoded wiki URL" do
       assert Credits.profile_url("Lady Botris") ==
                "https://escapefromtarkov.fandom.com/wiki/UserProfile:Lady_Botris"
-
-      assert Credits.uploads_url("R3dHacKeR-gpuser") ==
-               "https://escapefromtarkov.fandom.com/wiki/Special:ListFiles/R3dHacKeR-gpuser"
     end
 
     test "a contributor's colour is stable and in range" do

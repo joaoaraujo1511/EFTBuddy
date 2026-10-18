@@ -8,7 +8,6 @@ defmodule EftBuddy.Maps.Extract do
   """
 
   use Ecto.Schema
-  import Ecto.Changeset
 
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
@@ -30,24 +29,5 @@ defmodule EftBuddy.Maps.Extract do
     field :pos_z, :float
 
     timestamps()
-  end
-
-  def changeset(extract, attrs) do
-    extract
-    |> cast(attrs, [
-      :map_id,
-      :external_id,
-      :name,
-      :faction,
-      :transfer_item_id,
-      :transfer_item_count,
-      :pos_x,
-      :pos_y,
-      :pos_z
-    ])
-    |> validate_required([:map_id, :external_id, :name])
-    |> unique_constraint([:map_id, :external_id])
-    |> foreign_key_constraint(:map_id)
-    |> foreign_key_constraint(:transfer_item_id)
   end
 end

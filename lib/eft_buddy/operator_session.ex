@@ -115,10 +115,12 @@ defmodule EftBuddy.OperatorSession do
     # `seed_progress` is the equivalent for the progress blob, and exists for a
     # sharper reason than prefs do. A write that RESURRECTS a session (idle
     # timeout, crash, or a `reset` in another tab) has its result pushed straight
-    # back to the browser, where it REPLACES `localStorage` — the only durable
-    # copy of the operator's progress. Coming back as `Progress.empty()` there
-    # silently destroyed everything they had tracked. The writer therefore hands
-    # over what it still knows; see `EftBuddyWeb.ClientBridge.put_progress/2`.
+    # back to the browser, into `localStorage` — the only durable copy of the
+    # operator's progress. The browser merges per mode, but every list the push
+    # carries replaces its copy, so a session back as `Progress.empty()` would
+    # send a completed list holding only this write's tick, over the operator's
+    # whole history. The writer therefore hands over what it still knows; see
+    # `EftBuddyWeb.ClientBridge.put_progress/2`.
     #
     # `progress_seeded?` is deliberately left `false`: this is the SERVER's guess
     # restored from a socket, not the browser having spoken, so the one-shot

@@ -7,9 +7,8 @@ defmodule EftBuddy.Chapters.SectionParser do
   are far richer than the per-quest Guide section: a leaf section mixes
   bulleted objective lists, prose paragraphs, sub-headings, and
   `<gallery>` screenshot rows, all of which carry meaning *in document
-  order*. The dump's structured `objectives` array only captures the
-  bullet lines (it drops prose, headings and gallery placement), so we
-  re-walk the retained `wikitext` here to reproduce the page faithfully.
+  order*. A stored section keeps only its raw `wikitext`, with nothing
+  pre-parsed, so this walks it to reproduce the page faithfully.
 
   This is deliberately a self-contained sibling of
   `EftBuddy.Wiki.Projection`'s quest-guide parser rather than a shared

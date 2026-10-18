@@ -5,7 +5,6 @@ defmodule EftBuddy.Tasks.TraderUnlock do
   """
 
   use Ecto.Schema
-  import Ecto.Changeset
 
   @reward_phases ~w(start finish)a
 
@@ -18,16 +17,5 @@ defmodule EftBuddy.Tasks.TraderUnlock do
     belongs_to :trader, EftBuddy.Hideout.Trader
 
     timestamps()
-  end
-
-  def changeset(record, attrs) do
-    record
-    |> cast(attrs, [:reward_phase, :task_id, :trader_id])
-    |> validate_required([:reward_phase, :task_id, :trader_id])
-    |> unique_constraint([:task_id, :trader_id, :reward_phase],
-      name: :task_trader_unlocks_task_trader_phase_index
-    )
-    |> foreign_key_constraint(:task_id)
-    |> foreign_key_constraint(:trader_id)
   end
 end

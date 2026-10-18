@@ -16,7 +16,6 @@ defmodule EftBuddy.Tasks.Objective do
   """
 
   use Ecto.Schema
-  import Ecto.Changeset
 
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
@@ -37,23 +36,5 @@ defmodule EftBuddy.Tasks.Objective do
     has_many :maps, through: [:objective_maps, :map]
 
     timestamps()
-  end
-
-  def changeset(objective, attrs) do
-    objective
-    |> cast(attrs, [
-      :external_id,
-      :type,
-      :description,
-      :optional,
-      :payload,
-      :position,
-      :task_id
-    ])
-    |> validate_required([:external_id, :type, :task_id])
-    |> unique_constraint([:task_id, :external_id],
-      name: :task_objectives_task_external_id_index
-    )
-    |> foreign_key_constraint(:task_id)
   end
 end

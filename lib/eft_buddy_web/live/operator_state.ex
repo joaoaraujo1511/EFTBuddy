@@ -59,7 +59,7 @@ defmodule EftBuddyWeb.OperatorState do
   ## Events handled (attached as a `handle_event` hook)
 
     * `"pmc_level_inc"` / `"pmc_level_dec"` / `"set_pmc_level"`
-    * `"scav_karma_inc"` / `"scav_karma_dec"` / `"set_scav_karma"`
+    * `"set_scav_karma"`
     * `"set_mode"` / `"set_faction"`
     * `"toggle_rail"`
 
@@ -170,14 +170,6 @@ defmodule EftBuddyWeb.OperatorState do
     {:halt, put_pref(socket, :pmc_level, value)}
   end
 
-  defp handle_event("scav_karma_inc", _params, socket) do
-    {:halt, put_pref(socket, :scav_karma, step_karma(socket, :up))}
-  end
-
-  defp handle_event("scav_karma_dec", _params, socket) do
-    {:halt, put_pref(socket, :scav_karma, step_karma(socket, :down))}
-  end
-
   defp handle_event("set_scav_karma", %{"scav_karma" => value}, socket) do
     {:halt, put_pref(socket, :scav_karma, value)}
   end
@@ -195,15 +187,6 @@ defmodule EftBuddyWeb.OperatorState do
   end
 
   defp handle_event(_event, _params, socket), do: {:cont, socket}
-
-  # The assign is a float; stepping happens in canonical hundredths so repeated
-  # nudges can't drift.
-  defp step_karma(socket, direction) do
-    socket.assigns.scav_karma
-    |> then(&Operator.parse(:scav_karma, &1))
-    |> Operator.step_karma(direction)
-    |> Operator.karma_to_float()
-  end
 
   # Write through to the authority, then reflect the canonical result locally.
   # An invalid or unchanged value (a cleared input mid-type, a repeated click at
@@ -224,8 +207,8 @@ defmodule EftBuddyWeb.OperatorState do
   #
   # It is the same shape as the progress bug that `EftBuddyWeb.ClientBridge` now
   # guards against, but bounded to five small values the operator can re-set in a
-  # click, and self-healing on the next full page load (which reads the real
-  # cookie). It is NOT fixed the same way because prefs have no equivalent of
+  # click. It does not heal on the next page load: that load reads the cookie this
+  # function just reverted. It is NOT fixed the same way because prefs have no equivalent of
   # `:progress_seeded?`: a session found alive may legitimately never have been
   # spoken to by the browser, so the progress flag is not a sound proxy for "these
   # prefs may be stale", and suppressing the cookie write on that signal would
