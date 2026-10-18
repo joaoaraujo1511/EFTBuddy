@@ -48,6 +48,21 @@ defmodule EftBuddyWeb.UI do
     """
   end
 
+  @doc """
+  The Items page, searched for `name`.
+
+  Every item link goes through here. Building them as `"/items?q=" <>
+  URI.encode(name)` left `#`, `&` and `+` unescaped, because `URI.encode/1`
+  keeps reserved characters: "#FireKlean gun lube" became a fragment and
+  linked to the unfiltered catalogue (audit M14).
+
+      iex> EftBuddyWeb.UI.item_search_url("#FireKlean gun lube")
+      "/items?q=%23FireKlean+gun+lube"
+  """
+  @spec item_search_url(String.t() | nil) :: String.t()
+  def item_search_url(name) when is_binary(name), do: "/items?" <> URI.encode_query(q: name)
+  def item_search_url(_), do: "/items"
+
   @doc "A thin stencil section eyebrow with an amber tick + trailing rule."
   attr :class, :any, default: nil
   slot :inner_block, required: true
@@ -758,7 +773,7 @@ defmodule EftBuddyWeb.UI do
     ~H"""
     <%= if @link and @item do %>
       <.link
-        navigate={"/items?q=" <> URI.encode(@item.name)}
+        navigate={item_search_url(@item.name)}
         class={[
           "relative flex items-center justify-center overflow-hidden shrink-0 border transition-colors hover:border-amber",
           @size,
@@ -800,7 +815,7 @@ defmodule EftBuddyWeb.UI do
         decoding="async"
         class="img-fallback w-full h-full object-contain"
       />
-      <span style="display:none;" class="absolute inset-0" aria-hidden="true">
+      <span class="hidden absolute inset-0" aria-hidden="true">
         <span class="absolute inset-0 flex items-center justify-center">
           <.icon name="hero-cube" class="w-5 h-5 text-line-strong" />
         </span>

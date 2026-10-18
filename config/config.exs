@@ -54,7 +54,7 @@ config :eft_buddy, EftBuddyWeb.Endpoint,
   # environment for rotation without a rebuild.
   live_view: [signing_salt: "YFkgry97"]
 
-# The operator dashboard's endpoint (see `EftBuddyWeb.AdminEndpoint`). This block
+# The admin endpoint (see `EftBuddyWeb.AdminEndpoint`). This block
 # only makes the module compilable — `server: false` means nothing here starts
 # it. `EftBuddy.Application` starts it ONLY when `:admin_dashboard` is set, which
 # `config/runtime.exs` does only when ADMIN_DASHBOARD_PORT is present. Unset in

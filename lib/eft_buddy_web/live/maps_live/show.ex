@@ -165,7 +165,7 @@ defmodule EftBuddyWeb.MapsLive.Show do
   # ── View helpers ───────────────────────────────────────
 
   @doc "URL-safe link into the Items tab for an item name."
-  def item_link(name) when is_binary(name), do: "/items?q=" <> URI.encode_www_form(name)
+  def item_link(name) when is_binary(name), do: EftBuddyWeb.UI.item_search_url(name)
   def item_link(_), do: nil
 
   @doc """

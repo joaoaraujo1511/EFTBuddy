@@ -620,7 +620,7 @@ defmodule EftBuddyWeb.HideoutLive.Index do
         label={"Mark #{@item.name} collected"}
       />
       <.link
-        navigate={"/items?q=" <> URI.encode_www_form(@item.name)}
+        navigate={item_search_url(@item.name)}
         class="flex items-center justify-between text-xs px-2 py-1 flex-1 min-w-0 hover:bg-ink-900 transition-colors group/item"
       >
         <span class="flex items-center gap-2 min-w-0 flex-1">
@@ -676,8 +676,7 @@ defmodule EftBuddyWeb.HideoutLive.Index do
           />
           <span
             :if={@req.image}
-            style="display:none;"
-            class="absolute inset-0 flex items-center justify-center"
+            class="hidden absolute inset-0 flex items-center justify-center"
           >
             <.icon name={@req.fallback} class="w-4 h-4 text-fog-400" />
           </span>

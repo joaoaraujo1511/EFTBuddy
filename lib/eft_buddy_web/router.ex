@@ -29,7 +29,10 @@ defmodule EftBuddyWeb.Router do
            "font-src 'self'",
            "style-src 'self' 'unsafe-inline'",
            "script-src 'self'",
-           "connect-src 'self'"
+           "connect-src 'self'",
+           # Forms submit only to this site (L29). Every form here is a LiveView
+           # form or `POST /session/reset`; nothing posts elsewhere.
+           "form-action 'self'"
          ],
          "; "
        )
@@ -158,35 +161,11 @@ defmodule EftBuddyWeb.Router do
   # end
 
   if Application.compile_env(:eft_buddy, :dev_routes) do
-    # LiveDashboard, mounted exactly as `mix phx.new` generates it: inside the
-    # `:dev_routes` guard, through the plain `:browser` pipeline, with no auth.
-    #
-    # `:dev_routes` is set only in config/dev.exs, so this whole block is
-    # compiled AWAY in a production release — the route does not exist to be
-    # found, guessed at, or accidentally enabled by an environment variable.
-    # That is the entire security argument, and it is stronger than any gate
-    # placed in front of a route that does exist.
-    #
-    # No auth is needed here because config/dev.exs binds the dev server to
-    # 127.0.0.1. If you set `DEV_BIND_ALL=1` to test on a phone, be aware you
-    # are also exposing this page to your local network — LiveDashboard shows
-    # the process list, ETS contents and can kill processes.
-    #
-    # Upstream's advice, if this is ever wanted in production, is to put it
-    # behind real authentication over SSL. Prefer not to: see the note where
-    # the dashboard pipelines used to live, above.
-    import Phoenix.LiveDashboard.Router
-
-    scope "/dev" do
-      pipe_through :browser
-
-      # The cache page is carried here too, not just on the admin endpoint, so
-      # the surface an operator uses in production is one someone has already
-      # looked at in development. `CACHE_ENABLED=1` makes it show real entries.
-      live_dashboard "/dashboard",
-        metrics: EftBuddyWeb.Telemetry,
-        additional_pages: [cache: EftBuddyWeb.CacheDashboardPage]
-    end
+    # LiveDashboard is not mounted here any more. It was never finished or used,
+    # a fuller operator dashboard is planned, and under this router's CSP
+    # (`script-src 'self'`) its inline bootstrap script was blocked, so the page
+    # never connected anyway. The dashboard pages stay in the tree; see
+    # `EftBuddyWeb.AdminRouter` for how to restore it.
 
     # Preview the themed error pages locally (dev only). `debug_errors: true`
     # otherwise hides them behind Phoenix's debug page. e.g. /dev/errors/404.

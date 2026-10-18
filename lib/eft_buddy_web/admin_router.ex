@@ -1,6 +1,13 @@
 defmodule EftBuddyWeb.AdminRouter do
   @moduledoc """
-  Routes for `EftBuddyWeb.AdminEndpoint`. LiveDashboard and nothing else.
+  Routes for `EftBuddyWeb.AdminEndpoint`: the full readiness payload, and
+  nothing else.
+
+  It used to serve LiveDashboard. That was never finished or used, and a fuller
+  operator dashboard is planned, so the route is gone while the dashboard pages
+  (`EftBuddyWeb.CacheDashboardPage`, `EftBuddyWeb.SyncDashboardPage`) stay in the
+  tree for it to reuse. What remains is the detailed `/health/sync`, trimmed from
+  the public one because the public one is reachable by anyone.
 
   Deliberately separate from `EftBuddyWeb.Router`: that router serves the public
   site and must never gain an operator surface, which is a property worth keeping
@@ -15,7 +22,6 @@ defmodule EftBuddyWeb.AdminRouter do
   import Plug.Conn
   import Phoenix.Controller
   import Phoenix.LiveView.Router
-  import Phoenix.LiveDashboard.Router
 
   pipeline :admin do
     plug :accepts, ["html"]
@@ -37,32 +43,27 @@ defmodule EftBuddyWeb.AdminRouter do
     plug :put_secure_browser_headers
   end
 
-  scope "/" do
-    pipe_through :admin
-
-    # `metrics:` wires the summaries and counters declared in
-    # `EftBuddyWeb.Telemetry` into the Metrics page — including this app's own
-    # `eft_buddy.sync.*`, `operator_sessions.*` and `progress.*` series, which
-    # are the ones worth watching. Metrics are IN-MEMORY and reset when the node
-    # restarts; this is a live view of a running node, not a time-series store.
-    live_dashboard "/dashboard",
-      metrics: EftBuddyWeb.Telemetry,
-      ecto_repos: [EftBuddy.Repo],
-      # The read cache is the one subsystem here that can be wrong without
-      # failing: it returns an answer either way, and a stale or badly-keyed one
-      # is indistinguishable from a correct one at every other observation
-      # point. See `EftBuddyWeb.CacheDashboardPage`.
-      additional_pages: [
-        cache: EftBuddyWeb.CacheDashboardPage,
-        # The feeds are the app's only source of content, and a stopped one
-        # breaks nothing visible — the pages keep rendering, with older data. See
-        # `EftBuddyWeb.SyncDashboardPage`, and in particular why it shows when
-        # each feed plans to run NEXT and not only when it last did.
-        syncs: EftBuddyWeb.SyncDashboardPage
-      ]
-
-    # Anything else on this endpoint redirects to the dashboard, so a bare
-    # `http://localhost:4001` lands somewhere useful over the tunnel.
-    get "/", EftBuddyWeb.RedirectController, to: "/dashboard"
+  # The detailed readiness payload. JSON, no session: the same shape of route as
+  # the public probes, on an endpoint that is not reachable off the host.
+  pipeline :probe do
+    plug :accepts, ["json"]
   end
+
+  scope "/", EftBuddyWeb do
+    pipe_through :probe
+
+    get "/health/sync", HealthController, :sync_detail
+  end
+
+  # LiveDashboard, disabled: never finished or used, and to be replaced by a
+  # fuller dashboard. Restoring it is these lines, plus
+  # `import Phoenix.LiveDashboard.Router` above:
+  #
+  #     scope "/" do
+  #       pipe_through :admin
+  #       live_dashboard "/dashboard", metrics: EftBuddyWeb.Telemetry,
+  #         ecto_repos: [EftBuddy.Repo],
+  #         additional_pages: [cache: EftBuddyWeb.CacheDashboardPage,
+  #                            syncs: EftBuddyWeb.SyncDashboardPage]
+  #     end
 end

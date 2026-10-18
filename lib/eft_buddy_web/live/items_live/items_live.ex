@@ -603,18 +603,6 @@ defmodule EftBuddyWeb.ItemsLive.Index do
     "/hideout?" <> URI.encode_query(q: name)
   end
 
-  # Link an item icon back to the Items page, search-pre-filtered
-  # to that name. Used by the recipe-row tiles inside the
-  # barter / craft sections - the user clicks the icon and lands
-  # on the Items page row for that item, mirroring how the quest
-  # / hideout links work in the rest of the panel.
-  @doc false
-  def item_search_url(name) when is_binary(name) do
-    "/items?" <> URI.encode_query(q: name)
-  end
-
-  def item_search_url(_), do: "/items"
-
   # Pretty-print a hideout module reference for the inline link
   # text - e.g. "Lavatory level 2".
   @doc false
@@ -738,9 +726,9 @@ defmodule EftBuddyWeb.ItemsLive.Index do
       rel="noopener"
       class={[
         "relative w-16 h-16 border flex items-center justify-center overflow-hidden shrink-0 hover:border-amber transition-colors",
-        if(@highlight, do: "border-amber", else: "border-line")
+        if(@highlight, do: "border-amber", else: "border-line"),
+        BackgroundColor.class(@item && @item.background_color)
       ]}
-      style={"background-color: #{BackgroundColor.css(@item && @item.background_color)}"}
       title={if @item, do: @item.name, else: "Unknown quest item"}
       aria-label={unless @item, do: "Unknown quest item"}
     >
@@ -752,7 +740,7 @@ defmodule EftBuddyWeb.ItemsLive.Index do
           decoding="async"
           class="img-fallback w-full h-full object-contain"
         />
-        <span style="display:none;" class="absolute inset-0" aria-hidden="true">
+        <span class="hidden absolute inset-0" aria-hidden="true">
           <span class="absolute inset-0 flex items-center justify-center">
             <.icon name="hero-cube" class="w-5 h-5 text-line-strong" />
           </span>

@@ -1,6 +1,13 @@
 defmodule EftBuddyWeb.AdminEndpoint do
   @moduledoc """
-  A SECOND HTTP endpoint, on its own port, serving only LiveDashboard.
+  A SECOND HTTP endpoint, on its own port, serving the detailed readiness payload
+  (`/health/sync` with budgets, run records and cache state).
+
+  It was built for LiveDashboard, which is disabled: never finished or used, and
+  to be replaced by a fuller dashboard. The socket, session and request logger
+  below are what LiveDashboard needs, kept so restoring it is only the route in
+  `EftBuddyWeb.AdminRouter`. What follows about access control applies to
+  whatever this endpoint serves.
 
   ## Why a separate endpoint rather than a route on the main one
 

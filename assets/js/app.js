@@ -907,7 +907,7 @@ const TacMap = {
     this.mode = mode
     this.closePopup()
     const interactive = this.isInteractive()
-    if (this.svg) this.svg.style.display = interactive && this.cfg.projection === "svg" ? "block" : "none"
+    if (this.baseEl) this.baseEl.style.display = interactive && this.cfg.projection === "svg" ? "block" : "none"
     if (this.tileWrap) this.tileWrap.style.display = interactive && this.cfg.projection === "tile" ? "block" : "none"
     this.layer.style.display = interactive ? "" : "none"
     // Docked, hiding the column changes the flex layout — the viewport grows or
@@ -1174,28 +1174,61 @@ const TacMap = {
     this.pins.forEach((p) => { p._off = p._m ? !this.onActiveLevel(p._m) : false })
   },
 
+  // A vendored SVG (same origin) is fetched and inlined, which is what lets a
+  // floor highlight its `<g>` layers. A map we have not vendored points at the
+  // upstream host, and `fetch()` there is blocked by the CSP's
+  // `connect-src 'self'`, so those maps never loaded at all (audit M16). They
+  // load as an `<img>` instead, which `img-src` allows: the map and its markers
+  // work, only the SVG floor highlighting waits until the file is vendored.
   loadSvg() {
     const url = this.cfg.svgUrl
     if (!url) { this.setStatus("No map available.", true); return }
+    if (new URL(url, window.location.href).origin !== window.location.origin) {
+      this.loadSvgImage(url)
+      return
+    }
     fetch(url, { signal: this.abort.signal, credentials: "same-origin" })
       .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.text() })
       .then((t) => this.injectSvg(t))
       .catch((err) => { if (err && err.name === "AbortError") return; this.setStatus("Map failed to load.", true) })
+  },
+  loadSvgImage(url) {
+    const img = new Image()
+    img.decoding = "async"
+    img.alt = ""
+    img.draggable = false
+    img.onload = () => {
+      if (this.abort.signal.aborted) return
+      // An SVG with only a viewBox reports a small natural size (Customs:
+      // 298x150) in its own aspect ratio, which is all the marker maths needs:
+      // markers are placed in proportion to the base's width and height.
+      // Measured against the inline SVG, every marker lands in the same place.
+      this.placeBase(img, img.naturalWidth || 1000, img.naturalHeight || 1000)
+    }
+    img.onerror = () => { if (!this.abort.signal.aborted) this.setStatus("Map failed to load.", true) }
+    img.src = url
   },
   injectSvg(text) {
     const doc = new DOMParser().parseFromString(text, "image/svg+xml")
     const svg = doc.querySelector("svg")
     if (!svg) { this.setStatus("Map failed to load.", true); return }
     const vb = (svg.getAttribute("viewBox") || "").split(/[ ,]+/).map(Number)
-    this.vbW = vb.length === 4 && vb[2] > 0 ? vb[2] : svg.clientWidth || 1000
-    this.vbH = vb.length === 4 && vb[3] > 0 ? vb[3] : svg.clientHeight || 1000
+    const w = vb.length === 4 && vb[2] > 0 ? vb[2] : svg.clientWidth || 1000
+    const h = vb.length === 4 && vb[3] > 0 ? vb[3] : svg.clientHeight || 1000
     svg.removeAttribute("width"); svg.removeAttribute("height")
-    Object.assign(svg.style, {
+    // Only an inlined SVG has layers a floor can highlight.
+    this.svg = svg
+    this.placeBase(svg, w, h)
+  },
+  // Put the map's base image in the scene, inline SVG or `<img>` alike.
+  placeBase(el, w, h) {
+    this.vbW = w; this.vbH = h
+    Object.assign(el.style, {
       display: this.isInteractive() ? "block" : "none",
       width: `${this.vbW}px`, height: `${this.vbH}px`,
     })
-    this.svg = svg
-    this.content.appendChild(svg)
+    this.baseEl = el
+    this.content.appendChild(el)
     this.baseW = this.vbW; this.baseH = this.vbH
     this.sceneW = this.vbW; this.sceneH = this.vbH
     this.baseReady = true
@@ -1318,9 +1351,9 @@ const TacMap = {
     this.position()
   },
   applyScale(scale) {
-    if (this.svg) {
-      this.svg.style.width = `${this.vbW * scale}px`
-      this.svg.style.height = `${this.vbH * scale}px`
+    if (this.baseEl) {
+      this.baseEl.style.width = `${this.vbW * scale}px`
+      this.baseEl.style.height = `${this.vbH * scale}px`
     }
     if (this.tileWrap) {
       this.tileWrap.style.transformOrigin = "0 0"
@@ -2246,7 +2279,11 @@ const FitList = {
 // LiveSocket
 // =============================================================================
 const liveSocket = new LiveSocket("/live", Socket, {
-  longPollFallbackMs: 2500,
+  // How long a WebSocket upgrade may take before the client falls back to
+  // long-polling. At 2.5 s, 74% of connections on the Pi ended up long-polling:
+  // the upgrade through the Cloudflare tunnel is routinely slower than that, and
+  // a client that falls back stays on long-poll for the session (audit M27).
+  longPollFallbackMs: 8000,
   params: { _csrf_token: csrfToken },
   hooks: {
     ...colocatedHooks,

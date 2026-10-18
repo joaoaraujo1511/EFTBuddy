@@ -775,7 +775,7 @@ defmodule EftBuddyWeb.Layouts do
         alt={"Rank emblem for level #{@level}"}
         class={["object-contain img-fallback", @size]}
       />
-      <div style="display:none;" class="absolute inset-0">
+      <div class="hidden absolute inset-0">
         <svg viewBox="0 0 60 60" class="w-full h-full">
           <polygon
             points="30,3 54,16 54,44 30,57 6,44 6,16"

@@ -47,6 +47,8 @@ defmodule EftBuddyWeb.TasksLiveTest do
       # row rendered an empty 112x48 placeholder while every other row had a
       # thumbnail. The banner was scraped and stored the whole time — it just was
       # not reachable at list time until it became a column.
+      task(%{name: "Debut"})
+
       EftBuddy.Repo.insert!(%EftBuddy.Wiki.QuestPage{
         normalized_name: "wiki-only-quest",
         name: "Wiki Only Quest",
@@ -64,6 +66,8 @@ defmodule EftBuddyWeb.TasksLiveTest do
     end
 
     test "a wiki-only quest without a banner renders without one", %{conn: conn} do
+      task(%{name: "Debut"})
+
       EftBuddy.Repo.insert!(%EftBuddy.Wiki.QuestPage{
         normalized_name: "bannerless-quest",
         name: "Bannerless Quest",
@@ -74,6 +78,42 @@ defmodule EftBuddyWeb.TasksLiveTest do
       {:ok, _view, html} = live(conn, ~p"/tasks")
 
       assert html =~ "Bannerless Quest"
+    end
+  end
+
+  describe "with no tarkov.dev tasks for the mode (audit M18)" do
+    test "wiki quests are not all shown as WIP; the page waits for the Tasks sync",
+         %{conn: conn} do
+      # A fresh database, or a failing Tasks sync: nothing to match the wiki
+      # quests against. Every one of them used to render as a WIP quest
+      # "recently added to the wiki", under a page that reported itself loaded.
+      EftBuddy.Repo.insert!(%EftBuddy.Wiki.QuestPage{
+        normalized_name: "golden-swag",
+        name: "Golden Swag",
+        wip: true,
+        content: %{}
+      })
+
+      {:ok, _view, html} = live(conn, ~p"/tasks")
+
+      refute html =~ "Golden Swag"
+      assert html =~ ~s(aria-busy="true")
+    end
+
+    test "once tasks exist, wiki-only quests show as WIP again", %{conn: conn} do
+      task(%{name: "Debut"})
+
+      EftBuddy.Repo.insert!(%EftBuddy.Wiki.QuestPage{
+        normalized_name: "golden-swag",
+        name: "Golden Swag",
+        wip: true,
+        content: %{}
+      })
+
+      {:ok, _view, html} = live(conn, ~p"/tasks")
+
+      assert html =~ "Golden Swag"
+      assert html =~ "Debut"
     end
   end
 end
