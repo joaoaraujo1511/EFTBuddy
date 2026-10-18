@@ -57,6 +57,13 @@ The suite uses its own `TEST_DB_*` variables, never the `DB_*` ones, and refuses
 to run against a non-local database. If your local Postgres isn't the stock
 `postgres`/`postgres`, export `TEST_DB_PASSWORD` first.
 
+The browser-side progress helpers have their own tests, run with Node's built-in
+runner (no `npm install`):
+
+```sh
+node --test "assets/js/*.test.mjs"
+```
+
 ### Before you push
 
 ```sh
@@ -65,6 +72,9 @@ mix precommit
 
 This runs the dependency audits, a warnings-as-errors compile, the formatter
 check, Sobelow and the test suite.
+
+CI runs the same steps plus two more, and both block a merge: `mix credo`
+(against `.credo.exs`) and the JavaScript tests. Run them before pushing too.
 
 ## Configuration
 
@@ -86,7 +96,9 @@ Cloudflare Tunnel, so the host opens no inbound ports:
 Browser → Cloudflare → cloudflared → app :4000 → db :5432
 ```
 
-You need `TUNNEL_TOKEN` in `.env` for the `cloudflared` service.
+You need `TUNNEL_TOKEN` in `.env` for the `cloudflared` service; Compose
+refuses to start without it. Copy it from the tunnel's page in the Cloudflare
+Zero Trust dashboard, and treat it like a private key.
 
 ```sh
 git pull
@@ -106,10 +118,26 @@ docker compose up -d < /dev/null
 | Endpoint | Meaning |
 |---|---|
 | `/health` | The app and database are up. `version` is the deployed commit, so check it after a deploy |
-| `/health/sync` | Every data feed is fresh. Returns 503 when any feed is stale, failing or blocked by a safety guard |
+| `/health/sync` | Every data feed is fresh. Returns 503 when any feed is stale, failing or blocked by a safety guard. Shows only each feed's state and age |
 
 Point an uptime monitor at `/health/sync`. Stale game data still renders fine,
 so this is the only place it shows.
+
+### Admin endpoint
+
+The full readiness detail (staleness budgets, next planned runs, refused prunes,
+run records, cache state) is on a separate endpoint that is off unless
+`ADMIN_DASHBOARD_PORT` is set. Compose publishes it to loopback only, so reach
+it over an SSH tunnel from your workstation:
+
+```sh
+ssh -N -L 4001:127.0.0.1:4001 user@host
+curl http://localhost:4001/health/sync
+```
+
+Your SSH key is the access control; there is no login. Phoenix LiveDashboard
+used to run here and is disabled for now: its pages are kept for a fuller
+dashboard that will replace it.
 
 ## Project layout
 
