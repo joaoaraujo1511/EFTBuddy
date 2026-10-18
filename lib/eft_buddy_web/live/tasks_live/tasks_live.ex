@@ -141,6 +141,54 @@ defmodule EftBuddyWeb.TasksLive.Index do
     socket
     |> then(&assign(&1, :watchlist_slugs, read_watchlist_slugs(&1)))
     |> apply_progress_from_client_state()
+    |> migrate_wip_progress()
+  end
+
+  # A quest ticked or starred while it was WIP was saved under its wiki slug.
+  # When tarkov.dev adds it, the real task's slug is usually the same, but not
+  # always (a disambiguated wiki title, an event-zone tag), and a slug no task
+  # carries renders as nothing: the visitor's tick was effectively lost.
+  #
+  # The page already knows which wiki slugs a real task stands for, because the
+  # same slugs hide the WIP row (`task_dedup_slugs/1`). A saved slug that names
+  # no task but is one of those is moved to the task's own slug and written back
+  # to localStorage through `ClientBridge` (your decision: migrate in the
+  # browser's copy, no server state). A slug that is some task's own slug is
+  # never moved, and nothing is written when nothing changed.
+  defp migrate_wip_progress(%{assigns: %{all_tasks: []}} = socket), do: socket
+
+  defp migrate_wip_progress(socket) do
+    renames = wip_renames(socket.assigns.all_tasks)
+    {completed, completed_moved?} = rename_slugs(socket.assigns.completed_slugs, renames)
+    {watchlist, watchlist_moved?} = rename_slugs(socket.assigns.watchlist_slugs, renames)
+
+    socket =
+      if completed_moved?,
+        do: socket |> assign_completed(completed) |> persist_tasks_progress(),
+        else: socket
+
+    if watchlist_moved?,
+      do: socket |> assign(:watchlist_slugs, watchlist) |> persist_watchlist(),
+      else: socket
+  end
+
+  # `%{wiki_slug => task_slug}` for the API-backed tasks.
+  @doc false
+  def wip_renames(all_tasks) do
+    own = MapSet.new(all_tasks, & &1.normalized_name)
+
+    for task <- all_tasks,
+        not Map.get(task, :wip?, false),
+        alias_slug <- task_dedup_slugs(task),
+        alias_slug != task.normalized_name,
+        not MapSet.member?(own, alias_slug),
+        into: %{},
+        do: {alias_slug, task.normalized_name}
+  end
+
+  defp rename_slugs(slugs, renames) do
+    renamed = MapSet.new(slugs, &Map.get(renames, &1, &1))
+    {renamed, renamed != slugs}
   end
 
   # Heavy data load - guarded to the connected mount only. The

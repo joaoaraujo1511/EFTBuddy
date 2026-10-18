@@ -96,4 +96,53 @@ defmodule EftBuddyWeb.TasksLiveProgressTest do
     assert render_click(view, "toggle_complete", %{"id" => %{"nested" => "map"}})
     assert render(view) =~ "Debut"
   end
+
+  describe "a quest completed while it was WIP (your decision: migrate it)" do
+    # While the quest was wiki-only, the tick was saved under the wiki's slug.
+    # tarkov.dev then added it as "Stick to It [PVP ZONE]", whose own slug
+    # differs, so the saved tick named no task and rendered as nothing.
+    setup do
+      task(%{name: "Stick to It [PVP ZONE]", normalized_name: "stick-to-it-pvp-zone"})
+      :ok
+    end
+
+    test "moves to the real task's slug and is written back", %{conn: conn} do
+      {:ok, view, _html} = live(conn_for(conn, new_token()), ~p"/tasks")
+
+      render_hook(
+        view,
+        "eft:restore",
+        pvp_blob(%{"completed_tasks" => ["stick-to-it"], "tasks_watchlist" => ["stick-to-it"]})
+      )
+
+      # One write for the completion set, one for the watchlist; the second
+      # carries both, as the merged blob.
+      assert_push_event(view, "eft:store", _first)
+      assert_push_event(view, "eft:store", pushed)
+      slice = Progress.slice(pushed, :pvp)
+
+      assert slice["completed_tasks"] == ["stick-to-it-pvp-zone"]
+      assert slice["tasks_watchlist"] == ["stick-to-it-pvp-zone"]
+
+      html = render_patch(view, ~p"/tasks?status=completed")
+      assert html =~ "Stick to It"
+    end
+
+    test "a slug that is some task's own slug is never moved" do
+      tasks = [
+        %{normalized_name: "debut", name: "Debut", wip?: false},
+        %{normalized_name: "debut-pvp-zone", name: "Debut [PVP ZONE]", wip?: false}
+      ]
+
+      refute Map.has_key?(EftBuddyWeb.TasksLive.Index.wip_renames(tasks), "debut")
+    end
+
+    test "nothing is written when nothing needs moving", %{conn: conn} do
+      {:ok, view, _html} = live(conn_for(conn, new_token()), ~p"/tasks")
+
+      render_hook(view, "eft:restore", pvp_blob(%{"completed_tasks" => ["stick-to-it-pvp-zone"]}))
+
+      refute_push_event(view, "eft:store", _)
+    end
+  end
 end
