@@ -1,0 +1,50 @@
+name: Bug report
+description: Something on the site is broken or wrong.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. For a **security** issue, please use the Security tab's
+        "Report a vulnerability" instead, so it stays private.
+
+        Wrong game data (a quest, an item, a price) often comes from upstream: the
+        site is rebuilt from tarkov.dev and the Escape from Tarkov Wiki. It is still
+        worth reporting here if you are not sure.
+  - type: input
+    id: page
+    attributes:
+      label: Page
+      description: Which page, and the URL if you have it.
+      placeholder: Tasks, /tasks?q=Gunsmith
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Game mode
+      options:
+        - PVP
+        - PVE
+        - Both / not mode-specific
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open the Tasks page
+        2. Tick "Debut"
+        3. ...
+  - type: input
+    id: browser
+    attributes:
+      label: Browser and device
+      placeholder: Firefox 131, Windows 11
