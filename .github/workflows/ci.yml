@@ -17,6 +17,11 @@ on:
 permissions:
   contents: read
 
+# Every action is pinned to a commit SHA, with its release in a comment. A tag
+# can be moved to point at different code; a SHA cannot, so a compromised or
+# re-tagged action cannot change what runs here. Dependabot (`.github/
+# dependabot.yml`) proposes the bumps, SHA and comment together.
+
 # A PR branch now matches both triggers, so it gets two runs — one on the branch
 # tip, one on the merge commit. They test different things, so neither is
 # dropped; this just stops superseded runs from piling up when you push several
@@ -45,7 +50,9 @@ jobs:
 
     services:
       db:
-        image: postgres:16
+        # The same minor production runs (`docker-compose.yml`), so the migration
+        # and rollback steps below test the server they will run against.
+        image: postgres:17.11
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -62,16 +69,16 @@ jobs:
       MIX_ENV: test
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Set up Elixir/OTP
-        uses: erlef/setup-beam@v1
+        uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
         with:
           otp-version: ${{ env.OTP_VERSION }}
           elixir-version: ${{ env.ELIXIR_VERSION }}
 
       - name: Cache deps and _build
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
             deps
@@ -127,7 +134,7 @@ jobs:
       # this repo needs no Node (esbuild and tailwind are standalone binaries),
       # and adding it to the alias would make Node a requirement for everyone.
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
 
@@ -140,15 +147,14 @@ jobs:
       - name: Migration rollback smoke test
         run: mix ecto.rollback --all && mix ecto.migrate
 
-      # NO CREDO STEP, deliberately. There used to be a `mix credo --strict` step
-      # marked `continue-on-error: true`, with a comment saying to flip that "once
-      # the backlog is cleared". There is no `.credo.exs` in the project, so it ran
-      # on stock defaults against a codebase with a known nesting/complexity
-      # backlog: permanently red, permanently ignored, with no baseline to clear and
-      # no owner. A step that cannot fail is not a check, it is decoration that
-      # trains readers to ignore the annotations next to it. Bring it back with a
-      # `.credo.exs` tuned to this codebase and `continue-on-error: false`, or not at
-      # all.
+      # Blocking, against `.credo.exs`, which is tuned to this codebase: it passes
+      # today, so a failure here is new code over the limits, never the old
+      # backlog. (There was once a `--strict` step on stock defaults marked
+      # `continue-on-error`; permanently red and ignored, it checked nothing.)
+      #
+      # Deliberately in CI and not in `mix precommit`: locally it is advisory.
+      - name: Credo
+        run: mix credo
 
   # Builds the production container image. The project IS deployed as a container
   # now (Dockerfile at the repository root), and until this existed the entire prod
@@ -179,18 +185,18 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
         with:
           platforms: arm64
 
       - name: Set up Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
       - name: Build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           platforms: linux/amd64,linux/arm64

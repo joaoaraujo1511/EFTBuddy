@@ -162,39 +162,37 @@ defmodule EftBuddy.Wiki.Sync do
   defp run_pipeline do
     db_rows = load_db_rows()
 
-    cond do
-      db_rows == [] ->
-        Logger.warning(
-          "[#{prefix()}] tasks table is empty; skipping scrape so we don't write a table of mis-keyed WIP quests. Will retry shortly."
-        )
+    if db_rows == [] do
+      Logger.warning(
+        "[#{prefix()}] tasks table is empty; skipping scrape so we don't write a table of mis-keyed WIP quests. Will retry shortly."
+      )
 
-        {:error, :no_tasks}
+      {:error, :no_tasks}
+    else
+      db_index = Dump.build_db_index(db_rows)
 
-      true ->
-        db_index = Dump.build_db_index(db_rows)
+      case Api.category_members(@category) do
+        {:error, reason} ->
+          Logger.error(
+            "[#{prefix()}] could not enumerate #{@category} (#{inspect(reason)}); keeping existing rows."
+          )
 
-        case Api.category_members(@category) do
-          {:error, reason} ->
-            Logger.error(
-              "[#{prefix()}] could not enumerate #{@category} (#{inspect(reason)}); keeping existing rows."
-            )
+          {:error, {:enumeration_failed, reason}}
 
-            {:error, {:enumeration_failed, reason}}
+        {:ok, []} ->
+          Logger.error(
+            "[#{prefix()}] enumerated 0 quests from #{@category} (category renamed?); keeping existing rows."
+          )
 
-          {:ok, []} ->
-            Logger.error(
-              "[#{prefix()}] enumerated 0 quests from #{@category} (category renamed?); keeping existing rows."
-            )
+          {:error, :empty_enumeration}
 
-            {:error, :empty_enumeration}
-
-          {:ok, titles} ->
-            titles
-            |> Enum.filter(&Dump.quest_title?/1)
-            |> Enum.map(&Dump.build_quest(&1, db_index))
-            |> drop_event_only_quests()
-            |> scrape_and_upsert()
-        end
+        {:ok, titles} ->
+          titles
+          |> Enum.filter(&Dump.quest_title?/1)
+          |> Enum.map(&Dump.build_quest(&1, db_index))
+          |> drop_event_only_quests()
+          |> scrape_and_upsert()
+      end
     end
   end
 

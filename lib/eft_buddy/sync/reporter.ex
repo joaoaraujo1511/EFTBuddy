@@ -482,14 +482,12 @@ defmodule EftBuddy.Sync.Reporter do
   # modes that succeeded and, for each that failed, recurse into its reason.
   def describe_error({:partial, successes, failures}) do
     ok_part =
-      successes
-      |> Enum.map(fn {mode, counts} -> "#{mode} ok#{task_count(counts)}" end)
-      |> Enum.join(", ")
+      Enum.map_join(successes, ", ", fn {mode, counts} -> "#{mode} ok#{task_count(counts)}" end)
 
     fail_part =
-      failures
-      |> Enum.map(fn {mode, reason} -> "#{mode} failed (#{describe_error(reason)})" end)
-      |> Enum.join("; ")
+      Enum.map_join(failures, "; ", fn {mode, reason} ->
+        "#{mode} failed (#{describe_error(reason)})"
+      end)
 
     [ok_part, fail_part] |> Enum.reject(&(&1 == "")) |> Enum.join("; ")
   end

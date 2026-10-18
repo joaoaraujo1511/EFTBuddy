@@ -235,15 +235,21 @@ defmodule EftBuddy.Maps do
       mode = GameMode.to_db(game_mode)
 
       Cache.fetch({__MODULE__, :map_by_slug, slug, mode}, ["MapsSync", "ItemsSync"], fn ->
-        from(m in GameMap, where: m.normalized_name == ^slug)
-        |> preload(^detail_preloads(mode))
-        |> Repo.one()
-        |> then(fn map -> if map && visible?(map), do: overlay_mode_details(map), else: nil end)
+        load_map_by_slug(slug, mode)
       end)
     end
   end
 
   def get_map_by_slug(_, _), do: nil
+
+  defp load_map_by_slug(slug, mode) do
+    map =
+      from(m in GameMap, where: m.normalized_name == ^slug)
+      |> preload(^detail_preloads(mode))
+      |> Repo.one()
+
+    if map && visible?(map), do: overlay_mode_details(map)
+  end
 
   # Every map slug in the catalogue, the gate on what `get_map_by_slug/2` caches.
   defp known_slugs do

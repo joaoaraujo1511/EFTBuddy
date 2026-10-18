@@ -36,7 +36,10 @@ services:
   #
   #     docker compose exec db psql -U eftbuddy -d eft_buddy_prod
   db:
-    image: postgres:17
+    # A full minor, not `17`: the floating tag moved the database to a new minor
+    # on whatever `pull` happened next, untested. CI runs the same version. A
+    # minor bump needs no dump/restore; a major one (18) does.
+    image: postgres:17.11
     restart: unless-stopped
     # Postgres uses shared memory for parallel query workers; Docker's 64MB
     # default is small enough to make them fail under load.

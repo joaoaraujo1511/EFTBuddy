@@ -41,6 +41,38 @@ require_env = fn name, hint ->
   end
 end
 
+# The optional numeric variables (POOL_SIZE, MAX_OPERATOR_SESSIONS,
+# CACHE_MAX_ENTRIES, ITEM_DETAILS_MAX_MB, ADMIN_DASHBOARD_PORT). Unset or blank
+# is `nil`, so the caller's default applies: compose hands a container
+# `NAME=` for anything listed in `.env` without a value, and
+# `String.to_integer("")` used to crash the boot with a bare ArgumentError that
+# named no variable (audit L16). Anything that is not a whole number still stops
+# the boot, now saying which variable and what it held: a typo'd limit that fell
+# back to the default silently is how a box ends up without the headroom it was
+# configured for.
+optional_int = fn name ->
+  case System.get_env(name) do
+    nil ->
+      nil
+
+    value ->
+      case String.trim(value) do
+        "" ->
+          nil
+
+        trimmed ->
+          case Integer.parse(trimmed) do
+            {n, ""} when n >= 0 ->
+              n
+
+            _ ->
+              raise "environment variable #{name} must be a whole number, got #{inspect(value)}. " <>
+                      "Leave it unset (or blank) for the default."
+          end
+      end
+  end
+end
+
 # `PORT` is required, exactly like every other variable this file reads: no
 # fallback, and a missing value stops the app rather than letting it listen on
 # a number nobody chose. A default is worse than an error here — it is what
@@ -210,7 +242,7 @@ if config_env() == :prod do
     # lives. Note this is the `ssl:` key and NOT the deprecated `ssl_opts:` —
     # see the same note in config/dev.exs.
     ssl: db_ssl,
-    pool_size: String.to_integer(System.get_env("POOL_SIZE") || "10"),
+    pool_size: optional_int.("POOL_SIZE") || 10,
     # For machines with several cores, consider starting multiple pools of `pool_size`
     # pool_count: 4,
     socket_options: maybe_ipv6
@@ -274,8 +306,8 @@ if config_env() == :prod do
   # An OVERRIDE, not a default with its own copy of the number - unlike POOL_SIZE
   # above. `EftBuddy.OperatorSessions.ceiling/0` owns the default and the
   # arithmetic behind it, and two modules read it.
-  if max_sessions = System.get_env("MAX_OPERATOR_SESSIONS") do
-    config :eft_buddy, :max_operator_sessions, String.to_integer(max_sessions)
+  if max_sessions = optional_int.("MAX_OPERATOR_SESSIONS") do
+    config :eft_buddy, :max_operator_sessions, max_sessions
   end
 
   # The read cache, ON unless explicitly disabled. This is a KILL SWITCH, not a
@@ -299,7 +331,7 @@ if config_env() == :prod do
   # set below the warm set's size is an error message, not a memory bound.
   config :eft_buddy,
          :cache_max_entries,
-         String.to_integer(System.get_env("CACHE_MAX_ENTRIES") || "20000")
+         optional_int.("CACHE_MAX_ENTRIES") || 20_000
 
   # The in-memory item catalogue, OFF unless ITEM_DATASET is set.
   #
@@ -341,11 +373,11 @@ if config_env() == :prod do
   # the two could be seen to disagree is the very log line that prints the
   # effective ceiling.
   #
-  # A non-integer raises at boot, deliberately. A typo'd ceiling that silently
-  # fell back to the default on a box without the headroom is the OOM crashloop
-  # this budget exists to prevent.
-  if max_mb = System.get_env("ITEM_DETAILS_MAX_MB") do
-    config :eft_buddy, :item_details_max_bytes, String.to_integer(max_mb) * 1_048_576
+  # A non-integer raises at boot, deliberately (see `optional_int` above). A
+  # typo'd ceiling that silently fell back to the default on a box without the
+  # headroom is the OOM crashloop this budget exists to prevent.
+  if max_mb = optional_int.("ITEM_DETAILS_MAX_MB") do
+    config :eft_buddy, :item_details_max_bytes, max_mb * 1_048_576
   end
 
   # The admin endpoint (the detailed `/health/sync`; LiveDashboard, which used to
@@ -363,12 +395,12 @@ if config_env() == :prod do
   #
   # See `EftBuddyWeb.AdminEndpoint` for why this is a separate endpoint and why
   # the SSH key is the access control.
-  if admin_port = System.get_env("ADMIN_DASHBOARD_PORT") do
+  if admin_port = optional_int.("ADMIN_DASHBOARD_PORT") do
     config :eft_buddy, :admin_dashboard, true
 
     config :eft_buddy, EftBuddyWeb.AdminEndpoint,
       server: true,
-      http: [ip: {0, 0, 0, 0}, port: String.to_integer(admin_port)],
+      http: [ip: {0, 0, 0, 0}, port: admin_port],
       secret_key_base: secret_key_base
   end
 

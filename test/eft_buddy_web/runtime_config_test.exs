@@ -27,7 +27,8 @@ defmodule EftBuddyWeb.RuntimeConfigTest do
   # Optional variables the prod branch reads. Tracked here purely so `on_exit`
   # restores them: a test that switches DB_SSL on must not leak it into the next
   # one, which would silently change what that test is asserting about.
-  @optional ~w(DB_SSL DB_SSL_INSECURE DB_CACERTFILE)
+  @optional ~w(DB_SSL DB_SSL_INSECURE DB_CACERTFILE POOL_SIZE MAX_OPERATOR_SESSIONS
+               CACHE_MAX_ENTRIES ITEM_DETAILS_MAX_MB ADMIN_DASHBOARD_PORT)
 
   setup do
     original = Map.new(Map.keys(@valid) ++ @optional, &{&1, System.get_env(&1)})
@@ -256,6 +257,49 @@ defmodule EftBuddyWeb.RuntimeConfigTest do
       # outcome: TLS requested, nothing checked, no signal.
       assert_raise RuntimeError, ~r/no hostname could be parsed/, fn ->
         read_prod(%{"DB_SSL" => "true", "DATABASE_URL" => "ecto:///eft_buddy_shape_test"})
+      end
+    end
+  end
+
+  describe "optional numeric variables (audit L16)" do
+    @numeric ~w(POOL_SIZE MAX_OPERATOR_SESSIONS CACHE_MAX_ENTRIES ITEM_DETAILS_MAX_MB
+                ADMIN_DASHBOARD_PORT)
+
+    test "blank means unset, so each falls back to its default" do
+      # Compose passes `NAME=` for a variable listed in .env without a value.
+      config = read_prod(Map.new(@numeric, &{&1, "  "}))
+
+      assert get_in(config, [:eft_buddy, EftBuddy.Repo, :pool_size]) == 10
+      assert get_in(config, [:eft_buddy, :cache_max_entries]) == 20_000
+      refute get_in(config, [:eft_buddy, :max_operator_sessions])
+      refute get_in(config, [:eft_buddy, :item_details_max_bytes])
+      refute get_in(config, [:eft_buddy, :admin_dashboard])
+    end
+
+    test "a whole number is used" do
+      config =
+        read_prod(%{
+          "POOL_SIZE" => "4",
+          "MAX_OPERATOR_SESSIONS" => " 800 ",
+          "CACHE_MAX_ENTRIES" => "500",
+          "ITEM_DETAILS_MAX_MB" => "100",
+          "ADMIN_DASHBOARD_PORT" => "4001"
+        })
+
+      assert get_in(config, [:eft_buddy, EftBuddy.Repo, :pool_size]) == 4
+      assert get_in(config, [:eft_buddy, :max_operator_sessions]) == 800
+      assert get_in(config, [:eft_buddy, :cache_max_entries]) == 500
+      assert get_in(config, [:eft_buddy, :item_details_max_bytes]) == 100 * 1_048_576
+      assert get_in(config, [:eft_buddy, EftBuddyWeb.AdminEndpoint, :http, :port]) == 4001
+    end
+
+    test "anything else stops the boot and names the variable" do
+      for name <- @numeric, bad <- ["ten", "4.5", "-1"] do
+        # The others unset, so the error can only come from `name`.
+        overrides = @numeric |> Map.new(&{&1, nil}) |> Map.put(name, bad)
+        error = assert_raise RuntimeError, fn -> read_prod(overrides) end
+        assert error.message =~ name
+        assert error.message =~ inspect(bad)
       end
     end
   end

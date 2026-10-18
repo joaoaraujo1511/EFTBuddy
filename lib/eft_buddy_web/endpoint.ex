@@ -62,16 +62,15 @@ defmodule EftBuddyWeb.Endpoint do
   # applies the same number to its request bodies.
   @max_frame_size 1024 * 1024
 
-  @socket_options [
-    connect_info: [session: @session_options],
-    max_frame_size: @max_frame_size
-  ]
-
   @doc false
   def max_frame_size, do: @max_frame_size
 
+  # The websocket options are written out here rather than kept in an attribute:
+  # Sobelow cannot see inside one, so it reported the socket as possibly missing
+  # `check_origin` (Config.CSWH). It isn't: the endpoint's default applies, which
+  # checks the Origin against the configured host.
   socket "/live", Phoenix.LiveView.Socket,
-    websocket: @socket_options,
+    websocket: [connect_info: [session: @session_options], max_frame_size: @max_frame_size],
     longpoll: [connect_info: [session: @session_options]]
 
   # Serve at "/" the static files from "priv/static" directory.
