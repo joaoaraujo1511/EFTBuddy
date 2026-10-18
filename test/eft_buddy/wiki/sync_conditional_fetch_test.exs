@@ -22,14 +22,16 @@ defmodule EftBuddy.Wiki.SyncConditionalFetchTest do
     %{normalized_name: slug, wiki_title: title || slug, name: slug, wip: true, id: nil}
   end
 
-  defp stored(slug, revision_id) do
-    Repo.insert!(%QuestPage{
+  defp stored(slug, revision_id), do: Repo.insert!(stored_page(slug, revision_id))
+
+  defp stored_page(slug, revision_id) do
+    %QuestPage{
       normalized_name: slug,
       name: slug,
       wip: true,
       revision_id: revision_id,
       content: %{}
-    })
+    }
   end
 
   describe "partition_by_revision/2" do
@@ -88,6 +90,43 @@ defmodule EftBuddy.Wiki.SyncConditionalFetchTest do
 
       {scrape, unchanged} =
         Sync.partition_by_revision([q], %{"The Punisher - Part 1" => 100})
+
+      assert scrape == []
+      assert length(unchanged) == 1
+    end
+
+    test "an unedited page whose quest tarkov.dev has since added is scraped" do
+      # Stored as WIP and unmatched; today the same slug matches a real task.
+      # Skipping it on the revision alone left it WIP until the page was edited.
+      stored("debut", 100)
+      task = EftBuddy.Fixtures.task(%{normalized_name: "debut", name: "Debut"})
+
+      {scrape, unchanged} =
+        Sync.partition_by_revision([%{quest("debut") | id: task.id, wip: false}], %{
+          "debut" => 100
+        })
+
+      assert [%{normalized_name: "debut"}] = scrape
+      assert unchanged == []
+    end
+
+    test "an unedited page whose matched task went away is scraped" do
+      task = EftBuddy.Fixtures.task(%{normalized_name: "debut", name: "Debut"})
+      Repo.insert!(%QuestPage{stored_page("debut", 100) | task_id: task.id, wip: false})
+
+      {scrape, _} = Sync.partition_by_revision([quest("debut")], %{"debut" => 100})
+
+      assert [%{normalized_name: "debut"}] = scrape
+    end
+
+    test "an unedited page still matched to the same task is skipped" do
+      task = EftBuddy.Fixtures.task(%{normalized_name: "debut", name: "Debut"})
+      Repo.insert!(%QuestPage{stored_page("debut", 100) | task_id: task.id, wip: false})
+
+      {scrape, unchanged} =
+        Sync.partition_by_revision([%{quest("debut") | id: task.id, wip: false}], %{
+          "debut" => 100
+        })
 
       assert scrape == []
       assert length(unchanged) == 1
