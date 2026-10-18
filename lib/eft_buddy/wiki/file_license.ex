@@ -25,8 +25,6 @@ defmodule EftBuddy.Wiki.FileLicense do
   CC, so claiming it did would assert a grant nobody made.
   """
 
-  require Logger
-
   alias EftBuddy.Wiki.DumpScript
 
   @batch 50
@@ -132,10 +130,11 @@ defmodule EftBuddy.Wiki.FileLicense do
   @doc """
   Fetch licence declarations for `file_titles` (each `"File:Name.ext"`).
 
-  Returns `%{title => license}` containing only files that declared
-  something recognised. A file with no template is simply absent.
+  Returns `{licenses, failed_batches}`: `%{title => license}` containing only
+  files that declared something recognised (a file with no template is simply
+  absent), and how many batches failed, whose files' licences are unknown.
   """
-  @spec fetch([String.t()], keyword()) :: %{String.t() => license()}
+  @spec fetch([String.t()], keyword()) :: {%{String.t() => license()}, non_neg_integer()}
   def fetch(file_titles, http_opts) when is_list(file_titles) and is_list(http_opts) do
     titles =
       file_titles
@@ -145,27 +144,29 @@ defmodule EftBuddy.Wiki.FileLicense do
     ensure_cache()
     {cached, missing} = split_cached(titles)
 
-    fetched =
+    {fetched, failed} =
       missing
       |> Enum.chunk_every(@batch)
-      |> Enum.reduce(%{}, fn batch, acc ->
+      |> Enum.reduce({%{}, 0}, fn batch, {acc, failed} ->
         case fetch_batch(batch, http_opts) do
           {:ok, results} ->
             # Remember the misses too, so the next run does not re-read the
             # same thousands of file pages that declare nothing. This is only
             # safe on a successful response — see the :error clause.
             cache_put(batch, results)
-            Map.merge(acc, results)
+            {Map.merge(acc, results), failed}
 
           :error ->
             # Nothing is cached for a failed batch. Caching an empty result
             # here would turn one transient 503 into a week of missing
             # credits on those files, which is the opposite of the point.
-            acc
+            # That includes an HTTP 200 carrying an API error, which
+            # `DumpScript.api_get/2` now reports as an error (audit M19).
+            {acc, failed + 1}
         end
       end)
 
-    Map.merge(cached, fetched)
+    {Map.merge(cached, fetched), failed}
   end
 
   @doc """
@@ -403,8 +404,9 @@ defmodule EftBuddy.Wiki.FileLicense do
       {:error, reason} ->
         # A failed batch costs a credit on at most a handful of images and
         # must not sink the scrape. Signalled distinctly from an empty
-        # success so the caller knows not to cache it.
-        Logger.warning("[FileLicense] batch failed: #{inspect(reason)}")
+        # success so the caller knows not to cache it, and counted on the
+        # run's `warnings=` rather than logged per batch.
+        EftBuddy.Sync.Reporter.silent_warn("[FileLicense] batch failed: #{inspect(reason)}")
         :error
     end
   end

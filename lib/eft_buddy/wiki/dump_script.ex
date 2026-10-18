@@ -3,15 +3,12 @@ defmodule EftBuddy.Wiki.DumpScript do
   Shared support for the wiki scrapers: the chapter sync
   (`EftBuddy.Chapters.Sync`) and the quest sync (`EftBuddy.Wiki.Sync`).
 
-  Both need the same CLI/HTTP plumbing — a per-process throttle, SSL
-  options, the MediaWiki API call with retries, and category-member
-  enumeration — so it lives here in one place rather than being
+  Both need the same HTTP plumbing — a per-process throttle, SSL options and
+  the MediaWiki API call with retries — so it lives here in one place rather than being
   copy-pasted (which is how the old quest + chapter scripts drifted
   apart). Dependency-light (only `Req` + `Jason`) so it still works under
   `mix run --no-start` in any ad-hoc script as well as inside the app.
   """
-
-  require Logger
 
   # MediaWiki's user-agent policy asks automated clients to identify
   # themselves and give a way to be contacted about their traffic. This
@@ -160,88 +157,59 @@ defmodule EftBuddy.Wiki.DumpScript do
     url = Keyword.fetch!(opts, :url)
     user_agent = Keyword.fetch!(opts, :user_agent)
     receive_timeout = Keyword.get(opts, :receive_timeout, 30_000)
-    throttle_ms = Keyword.get(opts, :throttle_ms, @api_throttle_ms)
+
+    throttle_ms =
+      Keyword.get(
+        opts,
+        :throttle_ms,
+        Application.get_env(:eft_buddy, :wiki_throttle_ms, @api_throttle_ms)
+      )
+
     max_retries = Keyword.get(opts, :max_retries, @api_max_retries)
 
     throttle(throttle_ms)
 
-    result =
-      Req.get(url,
-        params: params,
-        headers: [{"user-agent", user_agent}, {"accept", "application/json"}],
-        receive_timeout: receive_timeout,
-        connect_options: ssl_connect_options(),
-        retry: :transient,
-        max_retries: max_retries,
-        retry_log_level: :debug
+    req_options =
+      Keyword.merge(
+        [
+          params: params,
+          headers: [{"user-agent", user_agent}, {"accept", "application/json"}],
+          receive_timeout: receive_timeout,
+          connect_options: ssl_connect_options(),
+          retry: :transient,
+          max_retries: max_retries,
+          retry_log_level: :debug
+        ],
+        # Test only: routes every wiki request to a `Req.Test` stub
+        # (see config/test.exs), the way `:tarkov_req_options` does for tarkov.dev.
+        Application.get_env(:eft_buddy, :wiki_req_options, [])
       )
 
-    case result do
-      {:ok, %{status: 200, body: body}} when is_map(body) ->
-        {:ok, body}
+    url |> Req.get(req_options) |> interpret()
+  end
 
-      {:ok, %{status: 200, body: body}} when is_binary(body) ->
-        {:ok, Jason.decode!(body)}
-
-      {:ok, %{status: status, body: body}} ->
-        {:error, {:http, status, body}}
-
-      {:error, reason} ->
-        {:error, reason}
+  # MediaWiki reports a failed request as HTTP 200 with an `error` body
+  # (`missingtitle`, `ratelimited`, `internal_api_error_*`). Those used to count
+  # as successful empty results, and the licence lookup then cached "this file
+  # declares no licence" for seven days (audit M19). Decided once, here, so no
+  # caller has to remember to look.
+  defp interpret({:ok, %{status: 200, body: body}}) when is_binary(body) do
+    case Jason.decode(body) do
+      {:ok, decoded} when is_map(decoded) -> interpret({:ok, %{status: 200, body: decoded}})
+      _ -> {:error, {:invalid_body, String.slice(body, 0, 200)}}
     end
   end
 
-  # ── Category enumeration ────────────────────────────────────────────
+  defp interpret({:ok, %{status: 200, body: %{"error" => error}}}) when is_map(error),
+    do: {:error, {:api, error["code"], error["info"]}}
 
-  @doc """
-  Walk a MediaWiki category and return the de-duplicated, sorted list of
-  member page titles.
+  defp interpret({:ok, %{status: 200, body: body}}) when is_map(body), do: {:ok, body}
 
-  Uses `cmtype=page` so subcategories are excluded, and follows
-  `cmcontinue` pagination (categories are small today, but this won't
-  silently truncate if one grows). On a failed request it returns
-  whatever was collected so far — an **empty** list is the agreed "could
-  not enumerate" signal, which both sync callers turn into a loud "keep
-  existing rows" rather than pruning everything.
-  """
-  @spec enumerate_category_members(String.t(), keyword()) :: [String.t()]
-  def enumerate_category_members(category, http_opts)
-      when is_binary(category) and is_list(http_opts) do
-    category
-    |> fetch_category_members(nil, MapSet.new(), http_opts)
-    |> MapSet.to_list()
-    |> Enum.sort()
-  end
+  defp interpret({:ok, %{status: 200, body: body}}),
+    do: {:error, {:invalid_body, inspect(body, limit: 20)}}
 
-  defp fetch_category_members(category, cmcontinue, acc, http_opts) do
-    params = %{
-      "action" => "query",
-      "list" => "categorymembers",
-      "cmtitle" => category,
-      "cmlimit" => "500",
-      "cmtype" => "page",
-      "format" => "json",
-      "formatversion" => "2"
-    }
-
-    params = if cmcontinue, do: Map.put(params, "cmcontinue", cmcontinue), else: params
-
-    case api_get(params, http_opts) do
-      {:ok, body} ->
-        acc =
-          (get_in(body, ["query", "categorymembers"]) || [])
-          |> Enum.reduce(acc, fn %{"title" => title}, set -> MapSet.put(set, title) end)
-
-        case get_in(body, ["continue", "cmcontinue"]) do
-          nil -> acc
-          next -> fetch_category_members(category, next, acc, http_opts)
-        end
-
-      {:error, reason} ->
-        Logger.warning("[DumpScript] enumeration of #{category} failed: #{inspect(reason)}")
-        acc
-    end
-  end
+  defp interpret({:ok, %{status: status, body: body}}), do: {:error, {:http, status, body}}
+  defp interpret({:error, reason}), do: {:error, reason}
 
   @doc """
   The user-agent every wiki request identifies itself with.
