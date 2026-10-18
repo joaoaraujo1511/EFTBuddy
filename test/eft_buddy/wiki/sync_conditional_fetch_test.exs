@@ -119,6 +119,25 @@ defmodule EftBuddy.Wiki.SyncConditionalFetchTest do
       assert [%{normalized_name: "debut"}] = scrape
     end
 
+    test "an unedited page matched to the other game mode's task row is skipped" do
+      # One task row per mode under the same slug, and the index may adopt
+      # either; that is not a change in what the page is.
+      regular = EftBuddy.Fixtures.task(%{normalized_name: "debut", name: "Debut"})
+
+      pve =
+        EftBuddy.Fixtures.task(%{normalized_name: "debut", name: "Debut", game_mode: "pve"})
+
+      Repo.insert!(%QuestPage{stored_page("debut", 100) | task_id: regular.id, wip: false})
+
+      {scrape, unchanged} =
+        Sync.partition_by_revision([%{quest("debut") | id: pve.id, wip: false}], %{
+          "debut" => 100
+        })
+
+      assert scrape == []
+      assert length(unchanged) == 1
+    end
+
     test "an unedited page still matched to the same task is skipped" do
       task = EftBuddy.Fixtures.task(%{normalized_name: "debut", name: "Debut"})
       Repo.insert!(%QuestPage{stored_page("debut", 100) | task_id: task.id, wip: false})
