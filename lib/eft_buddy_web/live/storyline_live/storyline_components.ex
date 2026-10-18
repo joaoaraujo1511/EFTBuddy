@@ -30,20 +30,40 @@ defmodule EftBuddyWeb.StorylineComponents do
   def chapter_icon_src(chapter) do
     slug = Map.get(chapter, :normalized_name)
 
-    if is_binary(slug) and local_chapter_image?(slug) do
+    if is_binary(slug) and MapSet.member?(local_chapter_icons(), slug) do
       "/images/chapters/#{slug}.webp"
     end
   end
 
-  defp local_chapter_image?(slug) do
+  # The vendored icons, listed once per boot. This was a `File.exists?` per
+  # chapter per render, a disk read on the Pi's SD card for every card on the
+  # storyline page (audit L31), for a set that only changes in a deploy.
+  defp local_chapter_icons do
+    case :persistent_term.get({__MODULE__, :chapter_icons}, nil) do
+      nil ->
+        icons = list_chapter_icons()
+        :persistent_term.put({__MODULE__, :chapter_icons}, icons)
+        icons
+
+      icons ->
+        icons
+    end
+  end
+
+  # `mix phx.digest` adds a `<name>-<md5>.webp` copy beside each icon; those
+  # are not slugs.
+  defp list_chapter_icons do
     case :code.priv_dir(:eft_buddy) do
       {:error, _} ->
-        false
+        MapSet.new()
 
       priv ->
         priv
-        |> Path.join("static/images/chapters/#{slug}.webp")
-        |> File.exists?()
+        |> Path.join("static/images/chapters/*.webp")
+        |> Path.wildcard()
+        |> Enum.map(&Path.basename(&1, ".webp"))
+        |> Enum.reject(&Regex.match?(~r/-[0-9a-f]{32}$/, &1))
+        |> MapSet.new()
     end
   end
 

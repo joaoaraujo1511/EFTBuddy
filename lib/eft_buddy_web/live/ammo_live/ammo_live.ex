@@ -467,7 +467,10 @@ defmodule EftBuddyWeb.AmmoLive.Index do
                   class="inline-flex items-center justify-center w-7 h-7 t-num text-[11px] text-fog-50 border border-black/25 cursor-help"
                   style={"background-color: #{class_pen_color(a, c)}"}
                   data-pen-rating={class_rating(a, c)}
-                  aria-label={"Class #{c}: #{rating_label(class_rating(a, c))}"}
+                  role="img"
+                  aria-label={
+                    "Class #{c}: #{class_rating(a, c)} of 6, #{rating_label(class_rating(a, c))}"
+                  }
                 >
                   {class_rating(a, c)}
                 </span>
@@ -903,18 +906,21 @@ defmodule EftBuddyWeb.AmmoLive.Index do
   def rating_label(_), do: "Pointless"
 
   @doc "Background hex colour for a 0–6 rating, red (low) → green (high)."
-  # A single continuous red → green ramp. Every swatch shares the same
-  # saturation and lightness (HSL S≈52% L≈37%) and only the hue rotates
-  # (~4° red → ~132° green in even steps), so the scale reads as one smooth
-  # gradient with no swatch — 4 and 5 included — jumping brighter or duller
-  # than its neighbours.
-  def rating_color(6), do: "#2d8f41"
-  def rating_color(5), do: "#4e8f2d"
-  def rating_color(4), do: "#7c8f2d"
-  def rating_color(3), do: "#8f7f2d"
-  def rating_color(2), do: "#8f632d"
-  def rating_color(1), do: "#8f4b2d"
-  def rating_color(_), do: "#8f342d"
+  # A single continuous red → green ramp: the hue rotates in even steps
+  # (~4° red → ~132° green) at one saturation (HSL S≈52%), and the lightness
+  # is set per hue so every swatch has the same luminance. That is what keeps
+  # the scale from reading as a swatch jumping brighter or duller than its
+  # neighbours: the old equal-HSL-lightness ramp made the yellows the
+  # brightest, and their white rating digits fell to 3.2:1. At equal luminance
+  # every digit is 4.6:1 and every swatch 3.6:1 against the page (audit L30).
+  # `PEN_SCALE` in app.js repeats these for the hover key.
+  def rating_color(6), do: "#277c38"
+  def rating_color(5), do: "#427926"
+  def rating_color(4), do: "#647324"
+  def rating_color(3), do: "#7a6c26"
+  def rating_color(2), do: "#90632d"
+  def rating_color(1), do: "#a55734"
+  def rating_color(_), do: "#bc443b"
 
   @doc "Background colour for a round's penetration vs a given armor class."
   def class_pen_color(round, class), do: rating_color(class_rating(round, class))
@@ -930,7 +936,7 @@ defmodule EftBuddyWeb.AmmoLive.Index do
   # green / pure red.
   @grad_good {0x6C, 0xAE, 0x5A}
   @grad_mid {0xD8, 0xB5, 0x3F}
-  @grad_bad {0xC0, 0x53, 0x3C}
+  @grad_bad {0xDA, 0x76, 0x62}
 
   @doc false
   # `{min, max}` of a numeric field across a round list, ignoring non-numbers.

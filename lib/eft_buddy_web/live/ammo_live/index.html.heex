@@ -56,13 +56,26 @@
     <%!-- ═══════════════ AMMO VIEW ═══════════════ --%>
     <%!-- The `PenScale` hook shows a floating penetration-effectiveness key
          (0 → 6) when the operator hovers any C1–C6 matrix cell, replacing the
-         always-on legend panel with an on-demand popup. --%>
+         always-on legend panel with an on-demand popup. Hover alone left the
+         key out of reach of a keyboard (audit L30), so the button below opens
+         it too, on focus or click. --%>
     <div
       :if={@load_state == :loaded and @view == :ammo}
       id="ammo-view"
       phx-hook="PenScale"
       class="space-y-6"
     >
+      <div :if={@rounds != [] and @total > 0} class="flex justify-end">
+        <button
+          type="button"
+          data-pen-key
+          aria-expanded="false"
+          class="inline-flex items-center gap-1.5 px-2 py-1 t-label text-[10px] text-fog-400 hover:text-amber border border-line transition-colors hud-focus"
+        >
+          <.icon name="hero-information-circle" class="w-3.5 h-3.5" /> Penetration key
+        </button>
+      </div>
+
       <%!-- Once the page is loaded, an empty ammo set only happens if armor
            synced but ammo hasn't yet; keep a scoped standby for that case. --%>
       <.standby :if={@rounds == []} />

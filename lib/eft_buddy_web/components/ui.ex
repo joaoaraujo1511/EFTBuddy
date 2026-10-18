@@ -256,7 +256,8 @@ defmodule EftBuddyWeb.UI do
   defp pill_tone(:amber), do: "bg-amber/15 text-amber border-amber/40"
   defp pill_tone(:go), do: "bg-go/15 text-go border-go/40"
   defp pill_tone(:warn), do: "bg-warn/15 text-warn border-warn/40"
-  defp pill_tone(:rust), do: "bg-rust/15 text-rust border-rust/40"
+  # A 10% tint, not 15%: rust text on a 15% rust tint falls under 4.5:1.
+  defp pill_tone(:rust), do: "bg-rust/10 text-rust border-rust/40"
   defp pill_tone(:signal), do: "bg-signal/15 text-signal border-signal/40"
   defp pill_tone(:olive), do: "bg-olive/15 text-olive-bright border-olive/40"
   defp pill_tone(:purple), do: "bg-purple/15 text-purple border-purple/40"
