@@ -26,7 +26,7 @@ defmodule EftBuddyWeb.FleaMarketLive.Index do
       |> assign(:page_title, "Flea Market")
       |> assign(
         :page_description,
-        "Live Escape from Tarkov flea market prices with 24h trends across every tradable item, grouped by category."
+        "Live Escape from Tarkov flea market prices with 48h trends across every tradable item, grouped by category."
       )
       |> assign(:active, :flea_market)
       |> assign(:query, "")
@@ -397,78 +397,20 @@ defmodule EftBuddyWeb.FleaMarketLive.Index do
   end
 
   @doc false
-  # 24h price fluctuation as a percentage. tarkov.dev exposes no
-  # ready-made "24h change %" field, so we derive it from the
-  # `historical_prices` series the price tick accumulates
-  # (`%{"price", "timestamp" => ms}` points, oldest first): compare the
-  # most recent flea low against the data point closest to 24h earlier -
+  # tarkov.dev's own 48-hour flea price change (`changeLast48hPercent`), rounded
+  # to one decimal, or nil when upstream has none for the item.
   #
-  #     pct = (latest − price_24h_ago) / price_24h_ago × 100
-  #
-  # which is the item's *actual* movement over the trailing day. For a
-  # freshly-tracked item whose series doesn't yet span a full day, we
-  # fall back to the latest low vs the rolling 24h average (the same two
-  # figures the old arrow used) so the card still shows a meaningful
-  # number. Returns a float rounded to 1 decimal, or nil when there's
-  # nothing to compare.
-  @day_ms 86_400_000
+  # This replaced a "24h change" computed from our own price history. That
+  # history spans only about 32 hours and the calculation fell back to its
+  # oldest point, so the label rarely matched the window it measured.
+  def price_change_pct(%{change_last_48h_percent: pct}) when is_number(pct),
+    do: Float.round(pct * 1.0, 1)
 
-  def price_change_24h_pct(item) do
-    raw =
-      case change_from_history(item.historical_prices) do
-        nil -> change_from_avg(item.last_low_price, item.avg_24h_price)
-        pct -> pct
-      end
-
-    if is_number(raw), do: Float.round(raw, 1), else: nil
-  end
-
-  defp change_from_history(points) when is_list(points) do
-    numeric =
-      Enum.filter(points, fn p ->
-        is_number(Map.get(p, "price")) and is_number(Map.get(p, "timestamp"))
-      end)
-
-    case numeric do
-      [] -> nil
-      [_only] -> nil
-      _ -> change_over_day(numeric)
-    end
-  end
-
-  defp change_from_history(_), do: nil
-
-  defp change_over_day(numeric) do
-    latest = List.last(numeric)
-    cutoff = latest["timestamp"] - @day_ms
-
-    # The most recent point that's at least 24h old (the price "as of"
-    # a day ago); the oldest point we have if the whole series is
-    # younger than a day. `numeric` is oldest-first, so we walk it in
-    # reverse to find the newest qualifying point.
-    baseline =
-      Enum.find(Enum.reverse(numeric), List.first(numeric), &(&1["timestamp"] <= cutoff))
-
-    pct_change(baseline["price"], latest["price"])
-  end
-
-  defp change_from_avg(last_low, avg_24h)
-       when is_integer(last_low) and is_integer(avg_24h),
-       do: pct_change(avg_24h, last_low)
-
-  defp change_from_avg(_last_low, _avg_24h), do: nil
-
-  # Signed percentage change from `from` → `to`. Nil for a missing or
-  # non-positive baseline (can't divide by it meaningfully).
-  defp pct_change(from, to) when is_number(from) and is_number(to) and from > 0 do
-    (to - from) / from * 100
-  end
-
-  defp pct_change(_from, _to), do: nil
+  def price_change_pct(_item), do: nil
 
   @doc false
   # Up / down / flat for the card arrow + colour, driven by the sign of
-  # the (already rounded) 24h fluctuation percentage so the arrow and the
+  # the (already rounded) 48h change percentage so the arrow and the
   # number always agree.
   def change_trend(pct) when is_number(pct) do
     cond do
@@ -481,7 +423,7 @@ defmodule EftBuddyWeb.FleaMarketLive.Index do
   def change_trend(_pct), do: :flat
 
   @doc false
-  # Render the 24h fluctuation as a signed percentage: "+3.4%", "-1.2%",
+  # Render the 48h change as a signed percentage: "+3.4%", "-1.2%",
   # "0.0%". "-" when there's nothing to compare.
   def format_change_pct(nil), do: "-"
 

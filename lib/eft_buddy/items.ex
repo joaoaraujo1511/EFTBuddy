@@ -614,7 +614,8 @@ defmodule EftBuddy.Items do
         avg_24h_price: p.avg_24h_price,
         low_24h_price: p.low_24h_price,
         high_24h_price: p.high_24h_price,
-        historical_prices: p.historical_prices
+        historical_prices: p.historical_prices,
+        change_last_48h_percent: p.change_last_48h_percent
       }
     )
     |> Repo.all()
@@ -634,7 +635,8 @@ defmodule EftBuddy.Items do
         avg_24h_price: nil,
         low_24h_price: nil,
         high_24h_price: nil,
-        historical_prices: nil
+        historical_prices: nil,
+        change_last_48h_percent: nil
     }
   end
 
@@ -646,7 +648,8 @@ defmodule EftBuddy.Items do
         avg_24h_price: price.avg_24h_price,
         low_24h_price: price.low_24h_price,
         high_24h_price: price.high_24h_price,
-        historical_prices: price.historical_prices
+        historical_prices: price.historical_prices,
+        change_last_48h_percent: price.change_last_48h_percent
     }
   end
 
@@ -807,7 +810,8 @@ defmodule EftBuddy.Items do
       avg_24h_price: p.avg_24h_price,
       low_24h_price: p.low_24h_price,
       high_24h_price: p.high_24h_price,
-      historical_prices: p.historical_prices
+      historical_prices: p.historical_prices,
+      change_last_48h_percent: p.change_last_48h_percent
     })
   end
 
@@ -1705,7 +1709,8 @@ defmodule EftBuddy.Items do
         station_name: s.name,
         station_slug: s.normalized_name,
         level: l.level,
-        quantity: r.quantity
+        quantity: r.quantity,
+        found_in_raid: r.found_in_raid
       },
       # `asc: r.id` makes the order TOTAL. Without it two requirements on the
       # same station and level tie, and a globally-ordered query can break that

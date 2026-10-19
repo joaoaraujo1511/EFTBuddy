@@ -129,7 +129,8 @@ defmodule EftBuddy.TarkovApi do
             "avg24hPrice",
             "low24hPrice",
             "high24hPrice",
-            "lastLowPrice"
+            "lastLowPrice",
+            "changeLast48hPercent"
           ])
         end)
 
@@ -1085,7 +1086,11 @@ defmodule EftBuddy.TarkovApi do
             "itemRequirements" =>
               Enum.map(List.wrap(level["itemRequirements"]), fn req ->
                 # JSON uses `count`; GraphQL used `quantity`.
-                %{"quantity" => req["count"], "item" => id_ref(req["item"])}
+                %{
+                  "quantity" => req["count"],
+                  "item" => id_ref(req["item"]),
+                  "foundInRaid" => get_in(req, ["attributes", "foundInRaid"]) == true
+                }
               end),
             "stationLevelRequirements" =>
               Enum.map(List.wrap(level["stationLevelRequirements"]), fn req ->
