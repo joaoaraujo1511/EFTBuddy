@@ -167,6 +167,23 @@ defmodule EftBuddyWeb.OperatorStateTest do
     end
   end
 
+  test "the HUD forms are not replayed on reconnect", %{conn: conn} do
+    {:ok, view, _html} = live(conn_for(conn, new_token()), ~p"/tasks")
+
+    forms =
+      view
+      |> render()
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.query("form[phx-change^=set_]")
+
+    assert Enum.count(forms) >= 3
+
+    for form <- forms do
+      assert [_id] = LazyHTML.attribute(form, "id")
+      assert LazyHTML.attribute(form, "phx-auto-recover") == ["ignore"]
+    end
+  end
+
   describe "session identity" do
     test "the plug mints an operator token on a plain request", %{conn: conn} do
       conn = get(conn, ~p"/tasks")
