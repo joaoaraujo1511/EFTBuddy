@@ -41,7 +41,7 @@ defmodule EftBuddy.Items.Sync do
     CraftRewardItem,
     Item,
     ItemPrice,
-    SellFor,
+    ItemPricePoint,
     Vendor
   }
 
@@ -175,19 +175,17 @@ defmodule EftBuddy.Items.Sync do
   def run_barters_and_crafts, do: with_global_lock(&do_run_barters_and_crafts/0)
 
   @doc """
-  Lightweight price refresh: updates the volatile flea-market price
-  columns (`avg/low/high_24h_price`, `last_low_price`) on items whose
-  prices actually changed since the last run, and appends a point to
-  each item's `historical_prices`
-  series (the JSON API carries no time series of its own, so the price
-  graphs are built from these accumulated snapshots).
+  Lightweight price refresh: updates each mode's volatile flea columns in
+  `item_prices` (`last_low_price` and the 24h figures), and records a point in
+  `item_price_points` for every price that changed (the JSON API carries no
+  time series of its own, so the price graphs are built from these).
 
   Unlike `run/0` this does NOT touch the structural columns, the entity
-  `items` rows beyond the legacy price mirror, barters, crafts, quest
-  items, or run stale-cleanup — so it can run frequently without the
-  catalog-wide write churn the full pipeline incurs. Returns
-  `{:ok, %{checked: n, updated: m}}` or `{:error, reason}`. Returns
-  `{:error, :already_running}` if another `run*/0` from this module
+  `items` rows, barters, crafts, quest items, or run stale-cleanup — so it
+  can run frequently without the catalog-wide write churn the full pipeline
+  incurs. Returns `{:ok, %{item_prices: %{mode => summary}}}`, or
+  `{:error, {:partial, succeeded, failed}}` when a mode's fetch failed.
+  Returns `{:error, :already_running}` if another `run*/0` from this module
   holds the cluster lock.
   """
   def run_prices, do: with_global_lock(&do_run_prices/0)
@@ -376,16 +374,6 @@ defmodule EftBuddy.Items.Sync do
 
   # ── Price refresh (lightweight, frequent) ──────────────
 
-  @price_compare_keys [
-    :avg_24h_price,
-    :low_24h_price,
-    :high_24h_price,
-    :last_low_price
-  ]
-
-  # Columns the price tick is allowed to overwrite on conflict.
-  @price_replace_fields @price_compare_keys ++ [:updated_at]
-
   # Each mode is fetched and written on its own. Both fetches used to sit in one
   # `with`, so a PVE document that failed to download also skipped the PVP
   # write, though PVP had arrived fine. A failed mode now makes the run a
@@ -395,31 +383,16 @@ defmodule EftBuddy.Items.Sync do
     Reporter.with_run("PricesSync", fn ->
       fetched = Map.new(EftBuddy.GameMode.all(), &{&1, fetch_flea_prices(&1)})
 
-      # Legacy regular mirror on the `items` table itself
-      # (change-detected, to avoid catalog-wide write churn).
-      items_summary =
-        case fetched[EftBuddy.GameMode.default()] do
-          {:ok, raw} ->
-            {:ok, summary} = refresh_prices(Repo, raw)
-            summary
-
-          {:error, _} ->
-            :skipped
-        end
-
-      # Per-mode `item_prices` flea columns — the source of truth the
-      # flea market and item-detail reads go through. Full upsert (no
-      # change-detection); the row set is bounded (~5k per mode) so the
-      # churn is acceptable and the code stays simple. This pass also
-      # appends a point to each item's `historical_prices` series (the
-      # JSON API has no time series of its own), powering the graphs.
+      # Per-mode `item_prices` flea columns, the source of truth the flea market
+      # and item-detail reads go through, plus a history point for every price
+      # that changed. See `refresh_item_prices_flea/3`.
       item_prices =
         Map.new(fetched, fn
           {mode, {:ok, raw}} -> {mode, refresh_item_prices_flea(Repo, raw, mode)}
           {mode, {:error, reason}} -> {mode, {:error, reason}}
         end)
 
-      summary = %{items: items_summary, item_prices: item_prices}
+      summary = %{item_prices: item_prices}
 
       # The `{:partial, successes, failures}` shape `Reporter.describe_error/1`
       # and Bootstrap already read for Tasks: per-mode lists on both sides.
@@ -441,134 +414,33 @@ defmodule EftBuddy.Items.Sync do
     EftBuddy.TarkovApi.flea_prices(game_mode)
   end
 
-  # Change-detecting price update: load the current price columns for
-  # every regular item, compare against the snapshot, and bulk-upsert
-  # ONLY the rows whose prices actually moved. New items the full sync
-  # hasn't created yet are skipped (we never insert here — the next full
-  # tick owns creation). Returns `{:ok, %{checked: n, updated: m}}`.
-  defp refresh_prices(repo, raw) do
-    incoming = Enum.filter(raw, &match?(%{"id" => id} when is_binary(id), &1))
+  # The columns a price tick owns, and the ones compared to decide whether a
+  # row changed.
+  @flea_fields [
+    :last_low_price,
+    :avg_24h_price,
+    :low_24h_price,
+    :high_24h_price,
+    :change_last_48h_percent
+  ]
 
-    existing =
-      from(i in Item,
-        where: i.is_quest_item == false,
-        select:
-          {i.external_id,
-           %{
-             id: i.id,
-             name: i.name,
-             normalized_name: i.normalized_name,
-             avg_24h_price: i.avg_24h_price,
-             low_24h_price: i.low_24h_price,
-             high_24h_price: i.high_24h_price,
-             last_low_price: i.last_low_price
-           }}
-      )
-      |> repo.all()
-      |> Map.new()
-
-    now = now_naive()
-
-    rows =
-      Enum.flat_map(incoming, fn item ->
-        case Map.get(existing, item["id"]) do
-          nil ->
-            []
-
-          current ->
-            new_prices = %{
-              avg_24h_price: item["avg24hPrice"],
-              low_24h_price: item["low24hPrice"],
-              high_24h_price: item["high24hPrice"],
-              last_low_price: item["lastLowPrice"]
-            }
-
-            if prices_changed?(current, new_prices) do
-              # Re-supply the NOT NULL identity columns so the (never
-              # taken) insert branch of ON CONFLICT is still valid; on
-              # conflict only @price_replace_fields are overwritten.
-              [
-                Map.merge(new_prices, %{
-                  id: current.id,
-                  external_id: item["id"],
-                  name: current.name,
-                  normalized_name: current.normalized_name,
-                  inserted_at: now,
-                  updated_at: now
-                })
-              ]
-            else
-              []
-            end
-        end
-      end)
-
-    # Guarded too, even though the flea read path no longer consults these
-    # columns. `prices_changed?/2` treats `nil != 123` as a change, so a
-    # null-stripped document writes the nulls here exactly as it would to
-    # `item_prices` — and leaving a known catalogue-nulling write unguarded
-    # because "nothing reads it today" is how it gets read again.
-    #
-    # The counts are free here: `existing` already selected `last_low_price`.
-    current_priced = Enum.count(existing, fn {_ext, cur} -> cur.last_low_price != nil end)
-    incoming_priced = Enum.count(incoming, &(&1["lastLowPrice"] != nil))
-
-    case prices_safe?(current_priced, incoming_priced) do
-      {:skip, reason} ->
-        Logger.error(
-          "[#{Reporter.colorize_label("PricesSync")}] Refusing the legacy items-table " <>
-            "price mirror: #{reason}. Keeping existing prices."
-        )
-
-        {:ok, %{checked: length(incoming), updated: 0, refused: true}}
-
-      :ok ->
-        updated =
-          rows
-          |> Enum.chunk_every(2_000)
-          |> Enum.reduce(0, fn chunk, acc ->
-            {count, _} =
-              repo.insert_all(Item, chunk,
-                on_conflict: {:replace, @price_replace_fields},
-                conflict_target: :external_id
-              )
-
-            acc + count
-          end)
-
-        {:ok, %{checked: length(incoming), updated: updated}}
-    end
-  end
-
-  defp prices_changed?(current, new_prices) do
-    Enum.any?(@price_compare_keys, fn key ->
-      Map.get(current, key) != Map.get(new_prices, key)
-    end)
-  end
-
-  # Bounded window of price-history points kept per item per mode. The
-  # price tick appends one point each run (~15 min by default), so this
-  # is ~48h of history at the default cadence — enough for the flea-card
-  # sparkline and the item-detail graph without unbounded column growth.
-  @max_history_points 192
-
-  # Upsert the volatile flea columns of `item_prices` for one game mode
-  # AND append a price-history point built from this same JSON snapshot.
+  # Upsert the volatile flea columns of `item_prices` for one game mode, and
+  # record a history point for every item whose price changed.
   #
-  # tarkov.dev's JSON API carries only the *spot* flea fields — there is
-  # no time series anywhere in it — so we accumulate the history
-  # ourselves: each run appends a `%{"price" => lastLowPrice,
-  # "timestamp" => now_ms}` point to the item's `historical_prices` array
-  # and trims it to the most recent `@max_history_points`. Items without
-  # a `lastLowPrice` this run keep their existing series untouched. This
-  # is what powers the flea-card sparkline / item-detail graph now that
-  # we're JSON-only (it fills in over time rather than back-filling).
+  # tarkov.dev's JSON API carries only the *spot* flea fields, with no time
+  # series anywhere in it, so the history is accumulated here, in
+  # `item_price_points`: one row per price change, plus each item's first
+  # price. A price holds until the next point, so that is all the sparkline
+  # needs. This replaced a JSONB array on every `item_prices` row that each
+  # tick read back and rewrote in full, around 6.5 GB a day of writes to the
+  # Pi's microSD card for a 125 MB database.
   #
   # Resolves each API item id to its local item UUID; items the entity
   # sync hasn't created yet are skipped (we never want a dangling FK).
-  # On conflict we replace the flea columns + `historical_prices` +
-  # `updated_at`, leaving `base_price` (owned by the 6-hourly full pass)
-  # untouched. Returns `%{checked: n, upserted: m}`.
+  # Only rows whose flea columns differ from the stored ones are written; on
+  # conflict those columns + `updated_at` are replaced, leaving `base_price`
+  # (owned by the 12-hourly full pass) untouched. Returns
+  # `%{checked: n, upserted: m, points: p}`.
   #
   # Guarded by `prices_safe?/2`, because that replace list makes this write
   # destructive: a nil `lastLowPrice` goes over a live price as a NULL, so a
@@ -580,9 +452,7 @@ defmodule EftBuddy.Items.Sync do
   # reason.
   def refresh_item_prices_flea(repo, raw, game_mode) do
     item_map = Resolvers.item_map(repo)
-    history_map = fetch_history_map(repo, game_mode)
     now = now_naive()
-    now_ms = System.system_time(:millisecond)
 
     rows =
       Enum.flat_map(raw, fn item ->
@@ -591,8 +461,6 @@ defmodule EftBuddy.Items.Sync do
             []
 
           item_id ->
-            prev = Map.get(history_map, item_id)
-
             [
               %{
                 id: Ecto.UUID.generate(),
@@ -603,7 +471,6 @@ defmodule EftBuddy.Items.Sync do
                 avg_24h_price: item["avg24hPrice"],
                 low_24h_price: item["low24hPrice"],
                 high_24h_price: item["high24hPrice"],
-                historical_prices: append_history(prev, item["lastLowPrice"], now_ms),
                 change_last_48h_percent: to_float(item["changeLast48hPercent"]),
                 inserted_at: now,
                 updated_at: now
@@ -612,24 +479,26 @@ defmodule EftBuddy.Items.Sync do
         end
       end)
 
-    replace = [
-      :last_low_price,
-      :avg_24h_price,
-      :low_24h_price,
-      :high_24h_price,
-      :historical_prices,
-      :change_last_48h_percent,
-      :updated_at
-    ]
+    replace = @flea_fields ++ [:updated_at]
+
+    # What is stored now, so only rows whose flea fields moved are written:
+    # about 170 per mode per tick, against every one of ~5,400 rows before. A
+    # rewritten row costs WAL and a dead tuple even when nothing changed, and
+    # this runs every ten minutes on a microSD card. So a tick no longer moves
+    # an unchanged row's `updated_at` (the 12-hourly full pass still does, when
+    # it writes `base_price`). Nothing reads it.
+    current =
+      from(p in ItemPrice,
+        where: p.game_mode == ^game_mode,
+        select: {p.item_id, map(p, ^@flea_fields)}
+      )
+      |> repo.all()
+      |> Map.new()
+
+    changed = Enum.reject(rows, &(Map.get(current, &1.item_id) == Map.take(&1, @flea_fields)))
 
     incoming_priced = Enum.count(rows, &(&1.last_low_price != nil))
-
-    current_priced =
-      repo.aggregate(
-        from(p in ItemPrice, where: p.game_mode == ^game_mode and not is_nil(p.last_low_price)),
-        :count,
-        :id
-      )
+    current_priced = Enum.count(current, fn {_id, fields} -> fields.last_low_price != nil end)
 
     case prices_safe?(current_priced, incoming_priced) do
       {:skip, reason} ->
@@ -649,47 +518,78 @@ defmodule EftBuddy.Items.Sync do
         %{checked: length(raw), upserted: 0, refused: true}
 
       :ok ->
-        upserted =
-          rows
-          |> Enum.chunk_every(2_000)
-          |> Enum.reduce(0, fn chunk, acc ->
-            {count, _} =
-              repo.insert_all(ItemPrice, chunk,
-                on_conflict: {:replace, replace},
-                conflict_target: [:item_id, :game_mode]
-              )
+        {:ok, summary} =
+          repo.transaction(fn ->
+            upserted =
+              changed
+              |> Enum.chunk_every(2_000)
+              |> Enum.reduce(0, fn chunk, acc ->
+                {count, _} =
+                  repo.insert_all(ItemPrice, chunk,
+                    on_conflict: {:replace, replace},
+                    conflict_target: [:item_id, :game_mode]
+                  )
 
-            acc + count
+                acc + count
+              end)
+
+            points = record_price_points(repo, rows, game_mode, now)
+            prune_price_points(repo, game_mode, now)
+
+            %{checked: length(raw), upserted: upserted, points: points}
           end)
 
-        %{checked: length(raw), upserted: upserted}
+        summary
     end
   end
 
-  # Map of `item_id => historical_prices` for one mode, so the price tick
-  # can append to each item's existing series in one pass.
-  defp fetch_history_map(repo, game_mode) do
-    from(p in ItemPrice,
-      where: p.game_mode == ^game_mode,
-      select: {p.item_id, p.historical_prices}
+  # A point for each item whose price differs from its latest point, or that has
+  # no point yet. An unpriced item gets none: the sparkline has nothing to draw.
+  defp record_price_points(repo, rows, game_mode, now) do
+    latest =
+      from(pt in ItemPricePoint,
+        where: pt.game_mode == ^game_mode,
+        distinct: pt.item_id,
+        order_by: [asc: pt.item_id, desc: pt.observed_at, desc: pt.id],
+        select: {pt.item_id, pt.price}
+      )
+      |> repo.all()
+      |> Map.new()
+
+    points =
+      for %{item_id: item_id, last_low_price: price} <- rows,
+          is_integer(price),
+          Map.get(latest, item_id) != price do
+        %{item_id: item_id, game_mode: game_mode, observed_at: now, price: price}
+      end
+
+    points
+    |> Enum.chunk_every(5_000)
+    |> Enum.each(&repo.insert_all(ItemPricePoint, &1))
+
+    length(points)
+  end
+
+  # Drop points older than the window, except each item's latest one before it:
+  # the sparkline starts from that price at the window's left edge.
+  defp prune_price_points(repo, game_mode, now) do
+    cutoff = NaiveDateTime.add(now, -div(ItemPricePoint.window_ms(), 1_000), :second)
+
+    from(pt in ItemPricePoint,
+      where: pt.game_mode == ^game_mode and pt.observed_at < ^cutoff,
+      where:
+        exists(
+          from(newer in ItemPricePoint,
+            where:
+              newer.item_id == parent_as(:point).item_id and newer.game_mode == ^game_mode and
+                newer.observed_at < ^cutoff and newer.observed_at > parent_as(:point).observed_at,
+            select: 1
+          )
+        )
     )
-    |> repo.all()
-    |> Map.new()
+    |> Map.put(:aliases, %{point: 0})
+    |> repo.delete_all()
   end
-
-  # Append a `{price, timestamp}` point to `prev` (the item's existing
-  # series) and trim to the most recent `@max_history_points`. A nil /
-  # non-integer price — the item isn't on the flea this run — leaves the
-  # series unchanged. Always returns a list (never nil) so the jsonb
-  # column dumps cleanly.
-  defp append_history(prev, price, now_ms) when is_integer(price) do
-    prev = if is_list(prev), do: prev, else: []
-
-    (prev ++ [%{"price" => price, "timestamp" => now_ms}])
-    |> Enum.take(-@max_history_points)
-  end
-
-  defp append_history(prev, _price, _now_ms), do: if(is_list(prev), do: prev, else: [])
 
   # ── Flea settings ──────────────────────────────────────
 
@@ -747,10 +647,9 @@ defmodule EftBuddy.Items.Sync do
   defp do_run_items do
     case run_sync() do
       {:ok, count} ->
-        # Per-mode economy: item_prices + sell_for/buy_for for BOTH
-        # PVP (regular) and PVE. `run_sync/0` above only writes the
-        # `items` table (entity columns + the regular flea-price
-        # mirror); these passes own the mode-aware price surface that
+        # Per-mode economy: item_prices + buy_for for BOTH PVP (regular)
+        # and PVE. `run_sync/0` above only writes the `items` table
+        # (entity columns); these passes own the mode-aware price surface that
         # every flea-market and item-detail read goes through. Each is
         # wrapped (sync_prices_safe) so one mode failing (a transient
         # API issue) doesn't roll back the other or the entity sync.
@@ -856,10 +755,6 @@ defmodule EftBuddy.Items.Sync do
           # trade, don't have a category, and don't have a tier
           # color. The Items page already nil-guards on these.
           base_price: nil,
-          avg_24h_price: nil,
-          low_24h_price: nil,
-          high_24h_price: nil,
-          last_low_price: nil,
           wiki_link: nil,
           link: nil,
           inspect_image_link: nil,
@@ -1167,7 +1062,7 @@ defmodule EftBuddy.Items.Sync do
     |> Ecto.Multi.run(:category_map, fn repo, _ ->
       {:ok, Resolvers.category_map(repo)}
     end)
-    # 2. Vendors next — FK targets for sell_for / buy_for.
+    # 2. Vendors next — FK targets for buy_for.
     |> Ecto.Multi.run(:insert_vendors, fn repo, _ ->
       insert_vendors(repo, items)
     end)
@@ -1193,8 +1088,8 @@ defmodule EftBuddy.Items.Sync do
       set_contains_item_id(repo, items, item_map)
     end)
     # 4. Drop items no longer in the API. Their per-mode prices
-    #    (sell_for / buy_for / item_prices rows) cascade away via the
-    #    FK `on_delete`. Vendor sell/buy rows and the per-mode
+    #    (buy_for / item_prices / item_price_points rows) cascade away via
+    #    the FK `on_delete`. Vendor buy rows and the per-mode
     #    `item_prices` are now populated by `sync_prices_for_mode/1`,
     #    which runs once per game mode right after this entity pass.
     |> Ecto.Multi.run(:cleanup, fn repo, %{reference: reference} ->
@@ -1292,9 +1187,6 @@ defmodule EftBuddy.Items.Sync do
           normalized_name: item["normalizedName"],
           description: item["description"],
           base_price: item["basePrice"],
-          avg_24h_price: item["avg24hPrice"],
-          low_24h_price: item["low24hPrice"],
-          high_24h_price: item["high24hPrice"],
           wiki_link: item["wikiLink"],
           link: item["link"],
           icon_link: item["iconLink"],
@@ -1305,7 +1197,6 @@ defmodule EftBuddy.Items.Sync do
           image_8x_link: item["image8xLink"],
           background_color: item["backgroundColor"],
           min_level_for_flea: item["minLevelForFlea"],
-          last_low_price: item["lastLowPrice"],
           category_id: Map.get(category_map, item["category"]["id"]),
           inserted_at: now,
           updated_at: now
@@ -1323,9 +1214,6 @@ defmodule EftBuddy.Items.Sync do
           :normalized_name,
           :description,
           :base_price,
-          :avg_24h_price,
-          :low_24h_price,
-          :high_24h_price,
           :wiki_link,
           :link,
           :icon_link,
@@ -1340,15 +1228,8 @@ defmodule EftBuddy.Items.Sync do
           :updated_at
         ]
 
-        # `:last_low_price` deliberately absent, for the same reason it left
-        # `upsert_item_prices/4`'s list: the ten-minute price tick owns this
-        # column and this pass would overwrite a fresh value with a stale one.
-        #
-        # The other three 24h columns are still here. They are the legacy mirror
-        # on the `items` table that the flea read path no longer consults, and
-        # `refresh_prices/2` change-detects against exactly these — so removing
-        # them would leave that comparison reading columns nothing ever writes.
-        # Worth revisiting when the mirror goes.
+        # The flea price columns live in `item_prices`, per mode, written by the
+        # ten-minute tick; this pass owns only `base_price`.
 
         # Chunk to keep parameter count under Postgres' 65535 limit.
         # ~22 fields per row → 5000 rows ≈ 110k params, so chunk smaller.
@@ -1452,9 +1333,12 @@ defmodule EftBuddy.Items.Sync do
   # what lets the regular and PVE passes coexist — the PVE pass must not
   # wipe the regular rows and vice-versa. Items not in the snapshot keep
   # their rows here (they'll be removed by `cleanup_stale/3`).
-  defp replace_prices(repo, items, item_map, vendor_map, kind, schema, game_mode) do
+  #
+  # Only trader and flea *buy* offers are kept (`buy_for`); sell offers had no
+  # reader and were dropped.
+  defp replace_prices(repo, items, item_map, vendor_map, :buy, schema, game_mode) do
     now = now_naive()
-    field = if kind == :sell, do: "sellFor", else: "buyFor"
+    field = "buyFor"
 
     rows =
       items
@@ -1531,7 +1415,7 @@ defmodule EftBuddy.Items.Sync do
 
   # The structural per-mode economy pass: fetch the full price + vendor
   # snapshot for `game_mode`, then upsert `item_prices` and replace the
-  # `sell_for` / `buy_for` rows for that mode. Runs once per mode right
+  # `buy_for` rows for that mode. Runs once per mode right
   # after the entity sync (`do_run_items`). Vendors are upserted from
   # this snapshot too so a PVE-only vendor (none today, but cheap
   # insurance) still resolves.
@@ -1549,13 +1433,10 @@ defmodule EftBuddy.Items.Sync do
 
               {:ok, prices} = upsert_item_prices(Repo, items, item_map, game_mode)
 
-              {:ok, sell} =
-                replace_prices(Repo, items, item_map, vendor_map, :sell, SellFor, game_mode)
-
               {:ok, buy} =
                 replace_prices(Repo, items, item_map, vendor_map, :buy, BuyFor, game_mode)
 
-              %{prices: prices, sell_for: sell, buy_for: buy}
+              %{prices: prices, buy_for: buy}
             end,
             timeout: 120_000
           )
@@ -1671,7 +1552,7 @@ defmodule EftBuddy.Items.Sync do
     valid_ids = Enum.map(items, & &1["id"])
 
     if valid_ids == [] do
-      {:ok, %{items: 0, sell_for: 0, buy_for: 0}}
+      {:ok, %{items: 0, buy_for: 0}}
     else
       # Safety guard: refuse to prune when the snapshot is implausibly
       # small relative to the items seen recently (a truncated-but-200 API
@@ -1686,7 +1567,7 @@ defmodule EftBuddy.Items.Sync do
             "[#{Reporter.colorize_label("ItemsSync")}] Refusing stale item cleanup: #{reason}. Keeping existing rows."
           )
 
-          {:ok, %{items: 0, sell_for: 0, buy_for: 0}}
+          {:ok, %{items: 0, buy_for: 0}}
 
         :ok ->
           do_cleanup_stale(repo, valid_ids)
@@ -1724,10 +1605,6 @@ defmodule EftBuddy.Items.Sync do
         select: i.id
       )
 
-    {sell_count, _} =
-      from(s in SellFor, where: s.item_id in subquery(stale_item_ids_q))
-      |> repo.delete_all()
-
     {buy_count, _} =
       from(b in BuyFor, where: b.item_id in subquery(stale_item_ids_q))
       |> repo.delete_all()
@@ -1736,7 +1613,7 @@ defmodule EftBuddy.Items.Sync do
       from(i in Item, where: i.external_id not in ^valid_ids and i.is_quest_item == false)
       |> repo.delete_all()
 
-    {:ok, %{items: item_count, sell_for: sell_count, buy_for: buy_count}}
+    {:ok, %{items: item_count, buy_for: buy_count}}
   end
 
   # ── Barters ────────────────────────────────────────────
@@ -1750,7 +1627,7 @@ defmodule EftBuddy.Items.Sync do
   #   4. Replace child rows (`required_items` / `reward_items`) by
   #      deleting the parent's old children and bulk-inserting the
   #      new ones — same replace-strategy `Items.Sync` uses for
-  #      sell_for/buy_for.
+  #      buy_for.
   #   5. Delete parents whose external_id disappeared from the API
   #      (cascades to children via the FK).
   #
