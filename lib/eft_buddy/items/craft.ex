@@ -20,6 +20,9 @@ defmodule EftBuddy.Items.Craft do
   schema "items_crafts" do
     field(:external_id, :string)
     field(:duration, :integer)
+    # Editions the craft is limited to, e.g. ["edge_of_darkness", "eod_tue_edition"];
+    # empty means every edition.
+    field(:game_editions, {:array, :string}, default: [])
 
     belongs_to(:station_level, EftBuddy.Hideout.StationLevel)
     belongs_to(:task_unlock, EftBuddy.Tasks.Task)

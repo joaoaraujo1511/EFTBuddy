@@ -75,7 +75,7 @@ def build(mode):
     # --- crafts: quest-item ingredients, the 0.66 filter, an edition lock --
     c_all = crafts['data']
     c_keep = [next(c for c in c_all if c.get('requiredQuestItems')),
-              next(c for c in c_all if any(r['item'] == FILTER for r in c['requiredItems'])),
+              next(c for c in c_all if any(r['item'] == FILTER and r['count'] != int(r['count']) for r in c['requiredItems'])),
               next(c for c in c_all if c.get('gameEditions'))]
 
     # --- tasks: a skill reward (Sniper), a skill objective, required keys --
@@ -125,16 +125,25 @@ def build(mode):
     st_ids = {c['station'] for c in c_keep}
     hideout_body = {'data': {i: v for i, v in hideout['data'].items() if i in st_ids}}
 
-    # --- maps: one map, with the mobs/containers/weapons it references ----
+    # --- maps: Factory plus every map the kept tasks reference, with the ----
+    # --- mobs/containers/weapons they reference; position lists capped -----
     mdata = maps_doc['data']
-    m = next(v for v in mdata['maps'].values() if v['normalizedName'] == 'factory')
-    # Positions lists run to thousands of entries; a handful exercises the adapter.
-    m = {k: (v[:12] if isinstance(v, list) and k in ('lootContainers', 'spawns', 'extracts', 'locks', 'hazards', 'switches', 'transits') else v) for k, v in m.items()}
-    mob_ids = {b.get('mob') for b in m.get('bosses', [])} | {e.get('mob') for b in m.get('bosses', []) for e in b.get('escorts', [])}
-    maps_body = {'data': {'maps': {m['id']: m},
-                          'mobs': {i: {k: v[k] for k in ('id', 'name', 'normalizedName', 'imagePortraitLink') if k in v} for i, v in mdata.get('mobs', {}).items() if i in mob_ids},
-                          'lootContainers': {i: v for i, v in mdata.get('lootContainers', {}).items() if i in {c.get('lootContainer') for c in m.get('lootContainers', [])}},
-                          'stationaryWeapons': {i: v for i, v in mdata.get('stationaryWeapons', {}).items() if i in {w.get('stationaryWeapon') for w in m.get('stationaryWeapons', [])}}}}
+    task_map_ids = {t['map'] for t in t_keep.values() if t.get('map')}
+    task_map_ids |= {m for t in t_keep.values() for o in t['objectives'] for m in (o.get('maps') or [])}
+    capped = ('lootContainers', 'spawns', 'extracts', 'locks', 'hazards', 'switches', 'transits', 'lootLoose')
+    kept_maps = {}
+    for mid, v in mdata['maps'].items():
+        if v['normalizedName'] == 'factory' or mid in task_map_ids:
+            kept_maps[mid] = {k: (x[:12] if isinstance(x, list) and k in capped else x) for k, x in v.items()}
+    bosses = [b for v in kept_maps.values() for b in v.get('bosses', [])]
+    mob_ids = {b.get('mob') for b in bosses} | {e.get('mob') for b in bosses for e in b.get('escorts', [])}
+    lc_ids = {c.get('lootContainer') for v in kept_maps.values() for c in v.get('lootContainers', [])}
+    sw_ids = {w.get('stationaryWeapon') for v in kept_maps.values() for w in v.get('stationaryWeapons', [])}
+    maps_body = {'data': {'maps': kept_maps,
+                          'mobs': {i: {k: v[k] for k in ('id', 'name', 'normalizedName', 'imagePortraitLink') if k in v}
+                                   for i, v in mdata.get('mobs', {}).items() if i in mob_ids},
+                          'lootContainers': {i: v for i, v in mdata.get('lootContainers', {}).items() if i in lc_ids},
+                          'stationaryWeapons': {i: v for i, v in mdata.get('stationaryWeapons', {}).items() if i in sw_ids}}}
 
     tasks_body = {'data': {'tasks': t_keep, 'questItems': quest_items}}
     trader_fields = ('id', 'name', 'normalizedName', 'imageLink')
@@ -146,7 +155,7 @@ def build(mode):
     write(mode, 'hideout', hideout_body); write(mode, 'hideout_en', trim_locale(hideout_en, hideout_body))
     write(mode, 'maps', maps_body); write(mode, 'maps_en', trim_locale(maps_en, maps_body))
     write(mode, 'traders', traders_body); write(mode, 'traders_en', trim_locale(traders_en, traders_body))
-    print(mode, 'items', len(kept_items), 'tasks', len(t_keep), 'questItems', len(quest_items),
+    print(mode, 'maps', len(kept_maps), 'items', len(kept_items), 'tasks', len(t_keep), 'questItems', len(quest_items),
           'barters', len(b_keep), 'crafts', len(c_keep), 'stations', len(hideout_body['data']))
 
 

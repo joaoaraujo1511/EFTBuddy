@@ -18,8 +18,8 @@ construction.
   - an item typed `noFlea` that still has a price, and a normally listed item
   - 9x39 and 5.8x42 rounds, an armour plate, and items from the "Volumetric
     Throw Weapon" and "Battle Pass Document" categories
-  - the stations those crafts use, and the Factory map with its position
-    lists capped
+  - the stations those crafts use, and Factory plus every map the kept tasks
+    reference, with their position lists capped
   - every trader, with only the fields the adapter reads
 
   Each `*_en` translation document keeps only the keys these records use.

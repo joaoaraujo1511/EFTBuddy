@@ -2026,8 +2026,8 @@ defmodule EftBuddy.Items.Sync do
         Enum.map(b[key] || [], fn entry ->
           row = %{
             id: Ecto.UUID.generate(),
-            count: Resolvers.trunc_or_nil(entry["count"]),
-            quantity: Resolvers.trunc_or_nil(entry["quantity"]),
+            count: recipe_count(key, entry["count"]),
+            quantity: recipe_count(key, entry["quantity"]),
             barter_id: barter_id,
             item_id: Map.get(items_map, entry["item"]["id"]),
             inserted_at: now,
@@ -2071,7 +2071,13 @@ defmodule EftBuddy.Items.Sync do
 
               parent_rows = build_craft_parent_rows(crafts, station_level_map, tasks_map, now)
 
-              replace_fields = [:duration, :station_level_id, :task_unlock_id, :updated_at]
+              replace_fields = [
+                :duration,
+                :station_level_id,
+                :task_unlock_id,
+                :game_editions,
+                :updated_at
+              ]
 
               parent_rows
               |> Enum.chunk_every(2_000)
@@ -2168,6 +2174,7 @@ defmodule EftBuddy.Items.Sync do
         id: Ecto.UUID.generate(),
         external_id: c["id"],
         duration: c["duration"] || 0,
+        game_editions: Enum.filter(c["gameEditions"] || [], &is_binary/1),
         station_level_id: Map.get(station_level_map, {slug, level}),
         task_unlock_id: Resolvers.resolve_task_unlock(c["taskUnlock"], tasks_map),
         inserted_at: now,
@@ -2184,15 +2191,24 @@ defmodule EftBuddy.Items.Sync do
 
       if craft_id do
         Enum.map(c[key] || [], fn entry ->
+          item_id = Map.get(items_map, entry["item"]["id"])
+
           row = %{
             id: Ecto.UUID.generate(),
-            count: Resolvers.trunc_or_nil(entry["count"]),
-            quantity: Resolvers.trunc_or_nil(entry["quantity"]),
+            count: recipe_count(key, entry["count"]),
+            quantity: recipe_count(key, entry["quantity"]),
             craft_id: craft_id,
-            item_id: Map.get(items_map, entry["item"]["id"]),
+            item_id: item_id,
             inserted_at: now,
             updated_at: now
           }
+
+          # A quest item upstream doesn't define yet: kept, unresolved, so the
+          # page can show the recipe as incomplete. See `Resolvers`.
+          row =
+            if is_nil(item_id) and entry["questItem"] == true and key == "requiredItems",
+              do: Map.put(row, :unresolved_external_id, entry["item"]["id"]),
+              else: row
 
           if with_attributes do
             Map.put(row, :attributes, Resolvers.encode_attributes(entry["attributes"]))
@@ -2204,10 +2220,17 @@ defmodule EftBuddy.Items.Sync do
         []
       end
     end)
-    |> Enum.reject(&(is_nil(&1.item_id) or is_nil(&1.count) or is_nil(&1.quantity)))
+    |> Enum.reject(fn row ->
+      (is_nil(row.item_id) and is_nil(row[:unresolved_external_id])) or is_nil(row.count) or
+        is_nil(row.quantity)
+    end)
   end
 
   # ── Shared helpers (barters + crafts) ──────────────────
+
+  # Ingredients keep fractions (`numeric` columns); rewards are whole numbers.
+  defp recipe_count("requiredItems", n), do: Resolvers.count_or_nil(n)
+  defp recipe_count(_rewards, n), do: Resolvers.trunc_or_nil(n)
 
   @doc false
   # The DB ids of only those parents the current upstream snapshot carried.
