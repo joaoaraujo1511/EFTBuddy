@@ -97,7 +97,7 @@ defmodule EftBuddyWeb.TasksLiveProgressTest do
     assert render(view) =~ "Debut"
   end
 
-  describe "a quest completed while it was WIP (your decision: migrate it)" do
+  describe "a quest completed while it was WIP is migrated to its real task" do
     # While the quest was wiki-only, the tick was saved under the wiki's slug.
     # tarkov.dev then added it as "Stick to It [PVP ZONE]", whose own slug
     # differs, so the saved tick named no task and rendered as nothing.

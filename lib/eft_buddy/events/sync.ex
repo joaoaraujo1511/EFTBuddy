@@ -296,7 +296,9 @@ defmodule EftBuddy.Events.Sync do
   # minutes and ~1,700 requests per run against a wiki that rate-limits; one
   # batched revision probe per fifty pages now decides, as in `EftBuddy.Wiki.Sync`.
   # Unknown resolves to "scrape it" in every direction: no stored revision, or
-  # none reported by the API.
+  # none reported by the API. A quest that moved between WIP and matched since
+  # it was stored is scraped too, edited or not: the walkthrough was parsed for
+  # one or the other, as in `EftBuddy.Wiki.Sync.partition_by_revision/2`.
   defp quest_walkthroughs(events) do
     quest_titles = EventsDump.unique_quest_titles(events)
 
@@ -312,16 +314,19 @@ defmodule EftBuddy.Events.Sync do
       end
 
       stored = stored_walkthroughs()
+      db_index = WikiDump.build_db_index(load_db_rows())
 
       {changed, unchanged} =
         Enum.split_with(quest_titles, fn q ->
           current = revisions[q.wiki_title]
           previous = stored[q.slug]
-          is_nil(current) or is_nil(previous) or previous.revision_id != current
+
+          is_nil(current) or is_nil(previous) or previous.revision_id != current or
+            Map.get(previous.content, "wip") != WikiDump.build_quest(q.wiki_title, db_index).wip
         end)
 
       kept = Map.new(unchanged, &{&1.slug, stored[&1.slug]})
-      {scraped, counts} = scrape_quest_pages(changed, revisions)
+      {scraped, counts} = scrape_quest_pages(changed, revisions, db_index)
 
       {Map.merge(kept, scraped), Map.put(counts, :unchanged, length(unchanged))}
     end
@@ -344,11 +349,10 @@ defmodule EftBuddy.Events.Sync do
   # quest sync uses. The injected `write` accumulates into an Agent rather than
   # persisting, so the one walkthrough can be fanned out to every (event, quest)
   # row afterwards.
-  defp scrape_quest_pages([], _revisions), do: {%{}, %{processed: 0, failed: 0}}
+  defp scrape_quest_pages([], _revisions, _db_index), do: {%{}, %{processed: 0, failed: 0}}
 
-  defp scrape_quest_pages(quest_titles, revisions) do
+  defp scrape_quest_pages(quest_titles, revisions, db_index) do
     slug_for = Map.new(quest_titles, &{&1.wiki_title, &1.slug})
-    db_index = WikiDump.build_db_index(load_db_rows())
     quests = Enum.map(quest_titles, fn q -> WikiDump.build_quest(q.wiki_title, db_index) end)
 
     # Each event quest has its own wiki page, so each carries its own
