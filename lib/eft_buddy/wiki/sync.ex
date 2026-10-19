@@ -101,7 +101,7 @@ defmodule EftBuddy.Wiki.Sync do
 
   alias EftBuddy.Repo
   alias EftBuddy.Tasks.Task
-  alias EftBuddy.Wiki.{Api, Contributors, Dump, PageGaps, Projection, QuestPage}
+  alias EftBuddy.Wiki.{Api, BlacklistedPage, Contributors, Dump, PageGaps, Projection, QuestPage}
   alias EftBuddy.Sync.Reporter
 
   @category "Category:Quests"
@@ -225,9 +225,13 @@ defmodule EftBuddy.Wiki.Sync do
     # have actually been edited since we last stored them. Everything else is
     # skipped without fetching a single section.
     revisions = current_revision_ids(all_quests)
-    {quests, unchanged} = partition_by_revision(all_quests, revisions)
 
-    log_skipped_unchanged(unchanged, all_quests)
+    # Pages judged blacklisted at their current revision are not fetched at all
+    # (audit N2); the verdict depends only on the page itself.
+    {still_blacklisted, candidates} = split_known_blacklisted(all_quests, revisions)
+    {quests, unchanged} = partition_by_revision(candidates, revisions)
+
+    log_skipped_unchanged(unchanged ++ still_blacklisted, all_quests)
 
     # Fetched up front for the whole page set so the per-page credits cost
     # a handful of batched requests rather than one request per quest.
@@ -240,11 +244,17 @@ defmodule EftBuddy.Wiki.Sync do
         write: &upsert_quest(&1, &2, rosters, revisions)
       )
 
+    record_blacklist(quests, result.skipped, revisions, all_quests)
+
     # Blacklisted quests (Ref / historical content) were skipped by the
     # fetch and never written, so drop their slugs from the keep-set: the
     # prune below then deletes any rows a previous run wrote for them,
-    # clearing them out of the Tasks-tab WIP list.
-    blacklisted = MapSet.new(result.skipped, & &1.slug)
+    # clearing them out of the Tasks-tab WIP list. That includes the ones not
+    # fetched at all because their blacklisted revision is unchanged.
+    blacklisted =
+      result.skipped
+      |> MapSet.new(& &1.slug)
+      |> MapSet.union(MapSet.new(still_blacklisted, & &1.normalized_name))
 
     # UNCHANGED PAGES MUST STAY IN THE KEEP-SET, and this is the sharp edge of
     # the whole optimisation. `prune/1` deletes every row whose slug is absent,
@@ -266,7 +276,7 @@ defmodule EftBuddy.Wiki.Sync do
       # Stored without a revision because part of the page could not be
       # fetched (see `EftBuddy.Wiki.PageGaps`); each is scraped again next run.
       incomplete: Repo.aggregate(from(q in QuestPage, where: is_nil(q.revision_id)), :count),
-      blacklisted: result.summary.skipped,
+      blacklisted: result.summary.skipped + length(still_blacklisted),
       pruned: pruned,
       wip:
         Enum.count(all_quests, fn q ->
@@ -318,6 +328,61 @@ defmodule EftBuddy.Wiki.Sync do
           true
       end
     end)
+  end
+
+  # `{known, rest}`: the quests whose page was blacklisted at exactly the
+  # revision the API reports now, and everything else. An unknown revision
+  # (a failed probe) is never "known", so that page is fetched and judged again.
+  defp split_known_blacklisted(quests, revisions) do
+    known =
+      from(b in BlacklistedPage, select: {b.wiki_title, b.revision_id})
+      |> Repo.all()
+      |> Map.new()
+
+    Enum.split_with(quests, fn quest ->
+      current = Map.get(revisions, quest.wiki_title)
+      not is_nil(current) and Map.get(known, quest.wiki_title) == current
+    end)
+  end
+
+  # Remember which fetched pages were blacklisted, and at what revision, and
+  # forget pages that were fetched and not blacklisted (edited since, or failed:
+  # either way they are judged again) or are no longer in the category.
+  defp record_blacklist(fetched, skipped, revisions, all_quests) do
+    reasons = Map.new(skipped, &{&1.slug, &1.reason})
+    now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
+
+    {blacklisted_now, judged_again} =
+      Enum.split_with(fetched, &Map.has_key?(reasons, &1.normalized_name))
+
+    rows =
+      for quest <- blacklisted_now,
+          revision = Map.get(revisions, quest.wiki_title),
+          not is_nil(revision) do
+        %{
+          wiki_title: quest.wiki_title,
+          revision_id: revision,
+          reason: to_string(Map.fetch!(reasons, quest.normalized_name)),
+          inserted_at: now,
+          updated_at: now
+        }
+      end
+
+    if rows != [] do
+      Repo.insert_all(BlacklistedPage, rows,
+        on_conflict: {:replace, [:revision_id, :reason, :updated_at]},
+        conflict_target: :wiki_title
+      )
+    end
+
+    forget = Enum.map(judged_again, & &1.wiki_title)
+    enumerated = Enum.map(all_quests, & &1.wiki_title)
+
+    Repo.delete_all(
+      from(b in BlacklistedPage,
+        where: b.wiki_title in ^forget or b.wiki_title not in ^enumerated
+      )
+    )
   end
 
   defp stored_rows do

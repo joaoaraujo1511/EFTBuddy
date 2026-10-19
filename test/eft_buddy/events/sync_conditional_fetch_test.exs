@@ -90,6 +90,23 @@ defmodule EftBuddy.Events.SyncConditionalFetchTest do
     assert inspect(quest("cold-feet").content) =~ "Warm."
   end
 
+  test "an unedited page whose quest tarkov.dev has since added is scraped again",
+       %{counter: c} do
+    # Stored as WIP: no task matched "Cold Feet" when it was scraped.
+    run(c)
+    assert quest("cold-feet").content["wip"] == true
+
+    # Now tarkov.dev serves it. The page is unedited, but the stored walkthrough
+    # was parsed for a WIP quest, so it has to be scraped as a real one.
+    EftBuddy.Fixtures.task(%{name: "Cold Feet", normalized_name: "cold-feet"})
+
+    {{:ok, %{scraped: 1, unchanged: 1}}, _} = run(c)
+    assert quest("cold-feet").content["wip"] == false
+    assert quest("cold-feet").task_id
+
+    {{:ok, %{scraped: 0, unchanged: 2}}, 0} = run(c)
+  end
+
   test "a quest listed by a second event reuses the stored walkthrough", %{counter: c} do
     run(c)
 

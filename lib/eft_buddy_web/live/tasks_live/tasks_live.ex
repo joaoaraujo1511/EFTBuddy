@@ -152,8 +152,8 @@ defmodule EftBuddyWeb.TasksLive.Index do
   # The page already knows which wiki slugs a real task stands for, because the
   # same slugs hide the WIP row (`task_dedup_slugs/1`). A saved slug that names
   # no task but is one of those is moved to the task's own slug and written back
-  # to localStorage through `ClientBridge` (your decision: migrate in the
-  # browser's copy, no server state). A slug that is some task's own slug is
+  # to localStorage through `ClientBridge`: the browser's copy is migrated, and
+  # no server-side state is kept for it. A slug that is some task's own slug is
   # never moved, and nothing is written when nothing changed.
   defp migrate_wip_progress(%{assigns: %{all_tasks: []}} = socket), do: socket
 

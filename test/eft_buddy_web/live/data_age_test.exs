@@ -1,6 +1,6 @@
 defmodule EftBuddyWeb.DataAgeTest do
   @moduledoc """
-  Pages say how old their data is (your decision on audit §9, "data age"):
+  Pages say how old their data is (audit §9, "data age"):
   "Prices updated 4 min ago" on the Flea Market and Items pages, "Map data
   updated" on Maps, from each feed's last success. The Flea Market's
   description no longer calls its prices "Live".

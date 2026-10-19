@@ -634,6 +634,7 @@ defmodule EftBuddy.Items.Sync do
     cutoff = NaiveDateTime.add(now, -div(ItemPricePoint.window_ms(), 1_000), :second)
 
     from(pt in ItemPricePoint,
+      as: :point,
       where: pt.game_mode == ^game_mode and pt.observed_at < ^cutoff,
       where:
         exists(
@@ -645,7 +646,6 @@ defmodule EftBuddy.Items.Sync do
           )
         )
     )
-    |> Map.put(:aliases, %{point: 0})
     |> repo.delete_all()
   end
 
