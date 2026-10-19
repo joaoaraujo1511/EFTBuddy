@@ -32,7 +32,9 @@ defmodule EftBuddy.Ammo.Caliber do
     {"Caliber762x35", ".300 Blackout"},
     {"Caliber545x39", "5.45x39mm"},
     {"Caliber556x45NATO", "5.56x45mm NATO"},
+    {"Caliber58x42", "5.8x42mm"},
     {"Caliber762x39", "7.62x39mm"},
+    {"Caliber9x39", "9x39mm"},
     # ── Battle rifle ──
     {"Caliber68x51", "6.8x51mm (.277 Fury)"},
     {"Caliber762x51", "7.62x51mm NATO"},

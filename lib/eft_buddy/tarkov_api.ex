@@ -37,9 +37,11 @@ defmodule EftBuddy.TarkovApi do
       "Flea Market" vendor into `sellFor`/`buyFor`; the JSON API keeps
       `sellToTrader`/`buyFromTrader` trader-only and exposes the flea
       numbers as the `lastLowPrice` / `avg24hPrice` columns. We
-      reconstruct the flea vendor rows the app expects (sell price =
-      `lastLowPrice`, buy price = `avg24hPrice`, matching the GraphQL
-      resolver's own logic).
+      reconstruct the flea vendor rows the app expects with the GraphQL
+      resolver's own rule (`datasources/items.mjs` in tarkov-api): only for
+      an item not typed `noFlea` that has a `lastLowPrice`; sell price =
+      `lastLowPrice`, buy price = `avg24hPrice`, falling back to
+      `lastLowPrice`.
 
     * **Translations are deferred.** Every translatable field
       (`name`, `shortName`, `description`, category/skill/boss names, …)
@@ -70,6 +72,7 @@ defmodule EftBuddy.TarkovApi do
   alias EftBuddy.Sync.Helpers
 
   @http_timeout 60_000
+  @run_cache {__MODULE__, :run_cache}
   @flea_market_name "Flea Market"
   @flea_market_slug "flea-market"
 
@@ -336,6 +339,19 @@ defmodule EftBuddy.TarkovApi do
     end
   end
 
+  @doc """
+  Every trader for `game_mode`: `[%{"name", "normalizedName", "imageLink"}]`,
+  names translated.
+
+  Trader rows used to be created only as a side effect of a hideout level or a
+  task mentioning one, so a trader neither mentions (Taran, Voevoda, Mr. Kerman
+  and others today) had no row, and a barter of theirs would have been dropped
+  every run as "trader not in DB".
+  """
+  def traders(game_mode \\ default_mode()) do
+    with {:ok, index} <- traders_index(game_mode), do: {:ok, Map.values(index)}
+  end
+
   # ── Cross-endpoint indexes ─────────────────────────────
 
   # %{trader_id => %{"name" => <english>, "normalizedName" => slug,
@@ -474,16 +490,26 @@ defmodule EftBuddy.TarkovApi do
 
   defp trader_prices(_, _), do: []
 
-  # Reconstruct the synthetic "Flea Market" vendor row GraphQL folded into
-  # `sellFor`/`buyFor`. The sell price is the item's `lastLowPrice` and the
-  # buy price its `avg24hPrice` — verified to match the GraphQL resolver's
-  # own values. Only emitted when the relevant price is present (items not
-  # on the flea have neither, exactly as GraphQL omitted the entry).
-  defp flea_sell(%{"lastLowPrice" => price}) when is_integer(price), do: [flea_row(price)]
-  defp flea_sell(_), do: []
+  # Reconstruct the synthetic "Flea Market" vendor rows GraphQL folded into
+  # `sellFor`/`buyFor`, by the resolver's own rule (tarkov-api,
+  # `datasources/items.mjs`): only for an item that is not typed `noFlea` and
+  # has a `lastLowPrice`. Sell is `lastLowPrice`; buy is `avg24hPrice`, falling
+  # back to `lastLowPrice`. Emitting rows on `avg24hPrice` alone, as this used
+  # to, put a flea price on an item the flea won't list.
+  defp flea_sell(item) do
+    if flea_listed?(item), do: [flea_row(item["lastLowPrice"])], else: []
+  end
 
-  defp flea_buy(%{"avg24hPrice" => price}) when is_integer(price), do: [flea_row(price)]
-  defp flea_buy(_), do: []
+  defp flea_buy(item) do
+    if flea_listed?(item),
+      do: [flea_row(item["avg24hPrice"] || item["lastLowPrice"])],
+      else: []
+  end
+
+  defp flea_listed?(%{"lastLowPrice" => price} = item) when is_integer(price),
+    do: "noFlea" not in List.wrap(item["types"])
+
+  defp flea_listed?(_item), do: false
 
   defp flea_row(price) do
     %{
@@ -595,10 +621,21 @@ defmodule EftBuddy.TarkovApi do
       "level" => c["level"],
       "station" => station_ref(c["station"], stations),
       "taskUnlock" => task_unlock_ref(c["taskUnlock"]),
-      "requiredItems" => Enum.map(List.wrap(c["requiredItems"]), &contained_item/1),
+      "requiredItems" =>
+        Enum.map(List.wrap(c["requiredItems"]), &contained_item/1) ++
+          Enum.map(List.wrap(c["requiredQuestItems"]), &quest_item_ingredient/1),
       "rewardItems" => contained_item_list(c["productItem"])
     }
   end
+
+  # The JSON API lists quest-item ingredients separately, as bare
+  # `%{"item" => id}` with no count; GraphQL put them in `requiredItems`. They
+  # used to be dropped, so a craft like "Reprogrammed RFID keycard" was shown
+  # without its quest item, as if complete. One of each is consumed.
+  defp quest_item_ingredient(%{"item" => id}) when is_binary(id),
+    do: contained_item(%{"item" => id, "count" => 1})
+
+  defp quest_item_ingredient(_), do: nil
 
   defp trader_ref(trader_id, traders) when is_binary(trader_id) do
     trader = Map.get(traders, trader_id, %{})
@@ -687,8 +724,8 @@ defmodule EftBuddy.TarkovApi do
         end),
       "objectives" =>
         Enum.map(List.wrap(t["objectives"]), &objective_to_graphql(&1, traders, maps, locale)),
-      "startRewards" => rewards_to_graphql(t["startRewards"], traders),
-      "finishRewards" => rewards_to_graphql(t["finishRewards"], traders)
+      "startRewards" => rewards_to_graphql(t["startRewards"], traders, locale),
+      "finishRewards" => rewards_to_graphql(t["finishRewards"], traders, locale)
     }
   end
 
@@ -726,16 +763,10 @@ defmodule EftBuddy.TarkovApi do
       "optional" => obj["optional"],
       "count" => obj["count"],
       "foundInRaid" => obj["foundInRaid"],
-      "targetNames" => obj["targetNames"],
-      "shotType" => obj["shotType"],
-      "bodyParts" => obj["bodyParts"],
-      "exitStatus" => obj["exitStatus"],
-      "exitName" => obj["exitName"],
       "compareMethod" => obj["compareMethod"],
       "value" => obj["value"],
       "level" => obj["level"],
       "status" => obj["status"],
-      "playerLevel" => obj["playerLevel"],
       # Objective maps are bare ids in JSON; `Tasks.Sync.upsert_maps/2`
       # reads `name`/`normalizedName` off them (as a maps-table fallback),
       # so re-inflate the full ref from the maps index — a bare `%{"id"}`
@@ -751,7 +782,7 @@ defmodule EftBuddy.TarkovApi do
       # the trader index (trader-level / trader-standing objectives only).
       "trader" => slug_ref(obj["trader"], traders),
       "task" => id_ref(obj["task"]),
-      "skillLevel" => skill_level(obj),
+      "skillLevel" => skill_level(obj, locale),
       "requiredKeys" => required_keys(obj["requiredKeys"])
     }
   end
@@ -778,10 +809,17 @@ defmodule EftBuddy.TarkovApi do
 
   # GraphQL exposed the skill objective as `skillLevel { name level }`;
   # the JSON API flattens it to `skill` (name) + `level`.
-  defp skill_level(%{"skill" => name, "level" => level}) when is_binary(name),
-    do: %{"name" => name, "level" => level}
+  #
+  # Task skills arrive as the game's enum keys ("Sniper", "HideoutManagement")
+  # and are translated in `tasks_en` ("Bolt-action Rifles", "Hideout
+  # Management"), as hideout skill requirements are in `hideout_en`. They used
+  # to pass through raw, here and in `rewards_to_graphql/3`, so the Tasks page
+  # showed "+2 Sniper", and multi-word skills got a second Skill row
+  # ("hideoutmanagement" beside the hideout's "hideout-management").
+  defp skill_level(%{"skill" => name, "level" => level}, locale) when is_binary(name),
+    do: %{"name" => translate(name, locale), "level" => level}
 
-  defp skill_level(_), do: nil
+  defp skill_level(_, _locale), do: nil
 
   defp id_ref_list(ids) when is_list(ids) do
     Enum.flat_map(ids, fn
@@ -805,9 +843,9 @@ defmodule EftBuddy.TarkovApi do
   # `quantity`; the JSON API uses `count`. Trader refs (standing /
   # unlock / offer) are bare ids that `Tasks.Sync` resolves by
   # `normalizedName`, so re-inflate the slug from the trader index.
-  defp rewards_to_graphql(nil, _traders), do: nil
+  defp rewards_to_graphql(nil, _traders, _locale), do: nil
 
-  defp rewards_to_graphql(rewards, traders) do
+  defp rewards_to_graphql(rewards, traders, locale) do
     %{
       "items" =>
         Enum.map(List.wrap(rewards["items"]), fn entry ->
@@ -819,7 +857,10 @@ defmodule EftBuddy.TarkovApi do
         end),
       "skillLevelReward" =>
         Enum.map(List.wrap(rewards["skillLevelReward"]), fn entry ->
-          %{"name" => entry["name"] || entry["skill"], "level" => entry["level"]}
+          %{
+            "name" => translate(entry["name"] || entry["skill"], locale),
+            "level" => entry["level"]
+          }
         end),
       # GraphQL `traderUnlock` entries were the trader ref directly;
       # `Tasks.Sync.replace_trader_unlocks/3` calls `resolve_trader_ref/2`
@@ -1083,17 +1124,69 @@ defmodule EftBuddy.TarkovApi do
   # map for the `_en` locales). Reuses the shared transient-retry
   # predicate (Cloudflare 1102 fast-fail, transport retries) the GraphQL
   # path used.
+  #
+  # Inside `with_run_cache/1` each path is fetched once per run.
   @doc false
   def get_json(path) do
+    case Process.get(@run_cache) do
+      %{^path => body} ->
+        {:ok, body}
+
+      %{} = cache ->
+        with {:ok, body} <- fetch_json(path) do
+          Process.put(@run_cache, Map.put(cache, path, body))
+          {:ok, body}
+        end
+
+      nil ->
+        fetch_json(path)
+    end
+  end
+
+  @doc """
+  Run `fun` with each document fetched at most once.
+
+  One full Items run used to download the regular items document (about
+  17 MB uncompressed, 42 MB once decoded) three times and the traders
+  documents five times. Holding each decoded document for the length of one
+  run costs memory instead, which a run can afford and upstream would rather
+  we spent. Nested calls share the outer cache, and the cache is gone when
+  `fun` returns, so nothing outlives the run.
+  """
+  def with_run_cache(fun) when is_function(fun, 0) do
+    case Process.get(@run_cache) do
+      nil ->
+        Process.put(@run_cache, %{})
+
+        try do
+          fun.()
+        after
+          Process.delete(@run_cache)
+        end
+
+      _cache ->
+        fun.()
+    end
+  end
+
+  defp fetch_json(path) do
     url = base_url() <> path
 
-    case Req.get(url,
-           receive_timeout: @http_timeout,
-           connect_options: [timeout: 5_000],
-           retry: &Helpers.retry_transient?/2,
-           max_retries: 3,
-           headers: [{"user-agent", "EftBuddy/1.0 (+json-sync)"}]
-         ) do
+    # `:tarkov_req_options` is where tests route these requests to `Req.Test`
+    # fixtures captured from the live API.
+    opts =
+      Keyword.merge(
+        [
+          receive_timeout: @http_timeout,
+          connect_options: [timeout: 5_000],
+          retry: &Helpers.retry_transient?/2,
+          max_retries: 3,
+          headers: [{"user-agent", "EftBuddy/1.0 (+json-sync)"}]
+        ],
+        Application.get_env(:eft_buddy, :tarkov_req_options, [])
+      )
+
+    case Req.get(url, opts) do
       {:ok, %{status: 200, body: body}} ->
         decode_body(body)
 
