@@ -83,8 +83,36 @@ defmodule EftBuddyWeb.HealthController do
     json_reply(conn, if(db_up?, do: 200, else: 503), body)
   end
 
-  @doc "Readiness: whether the background feeds are fresh enough to serve."
+  @doc """
+  Readiness: whether the background feeds are fresh enough to serve.
+
+  Public, through the tunnel, so it says only what a monitor needs: the overall
+  status, and each feed family's state and age. It used to publish every feed
+  label, its run times and durations, the read cache's size and hit rate and the
+  names of its warm specs to anyone (audit §9). The full payload is
+  `sync_detail/2`, on the loopback-only admin endpoint. The HTTP status is the
+  same in both.
+  """
   def sync(conn, _params) do
+    freshness = Freshness.evaluate()
+
+    body = %{
+      status: to_string(freshness.status),
+      syncs:
+        Map.new(freshness.syncs, fn {family, f} ->
+          {family, %{state: to_string(f.state), age_seconds: f.age_seconds}}
+        end)
+    }
+
+    json_reply(conn, if(freshness.status == :ok, do: 200, else: 503), body)
+  end
+
+  @doc """
+  Readiness, in full: budgets, next planned runs, refused prunes, the raw run
+  record per label and the read cache's state. Served only by
+  `EftBuddyWeb.AdminRouter`, which listens on loopback.
+  """
+  def sync_detail(conn, _params) do
     freshness = Freshness.evaluate()
 
     body = %{

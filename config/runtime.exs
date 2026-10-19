@@ -346,7 +346,8 @@ if config_env() == :prod do
     config :eft_buddy, :item_details_max_bytes, String.to_integer(max_mb) * 1_048_576
   end
 
-  # The operator dashboard, OFF unless ADMIN_DASHBOARD_PORT is set. Absent, the
+  # The admin endpoint (the detailed `/health/sync`; LiveDashboard, which used to
+  # run here, is disabled), OFF unless ADMIN_DASHBOARD_PORT is set. Absent, the
   # `:admin_dashboard` key is never written, `EftBuddy.Application` never adds the
   # endpoint to the supervision tree, and nothing binds the port. Fail-closed by
   # omission rather than by a flag someone can set to the wrong string.

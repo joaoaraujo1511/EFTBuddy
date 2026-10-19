@@ -1,6 +1,10 @@
 defmodule EftBuddyWeb.Endpoint do
   use Phoenix.Endpoint, otp_app: :eft_buddy
 
+  # Wraps `call/2` to cap long-poll request bodies at `max_frame_size/0`. Must
+  # come after `use Phoenix.Endpoint`; see `EftBuddyWeb.LongPollCap`.
+  @before_compile EftBuddyWeb.LongPollCap
+
   # The session will be stored in the cookie and signed,
   # this means its contents can be read but not tampered with.
   # Set :encryption_salt if you would also like to encrypt it.
@@ -53,10 +57,18 @@ defmodule EftBuddyWeb.Endpoint do
   # page is permanently unusable with nothing in the logs to say why. A cap that can
   # reject a legitimate payload is worse than a slightly larger one. 1 MB also
   # matches `MAX_BACKUP_BYTES` in `app.js`, which bounds the same data as a file.
+  #
+  # The long-poll transport has no frame option, so `EftBuddyWeb.LongPollCap`
+  # applies the same number to its request bodies.
+  @max_frame_size 1024 * 1024
+
   @socket_options [
     connect_info: [session: @session_options],
-    max_frame_size: 1024 * 1024
+    max_frame_size: @max_frame_size
   ]
+
+  @doc false
+  def max_frame_size, do: @max_frame_size
 
   socket "/live", Phoenix.LiveView.Socket,
     websocket: @socket_options,

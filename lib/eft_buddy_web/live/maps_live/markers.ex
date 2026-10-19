@@ -402,6 +402,6 @@ defmodule EftBuddyWeb.MapsLive.Markers do
   defp located?(%{pos_x: x, pos_z: z}) when is_number(x) and is_number(z), do: true
   defp located?(_), do: false
 
-  defp item_link(name) when is_binary(name), do: "/items?q=" <> URI.encode_www_form(name)
+  defp item_link(name) when is_binary(name), do: EftBuddyWeb.UI.item_search_url(name)
   defp item_link(_), do: nil
 end

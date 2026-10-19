@@ -227,18 +227,18 @@ defmodule EftBuddyWeb.AmmoLive.Index do
                headers already wrap to two lines at this width, so trimming
                them costs nothing. C1-C6 stay at 44px. --%>
           <colgroup>
-            <col style="width: 300px" />
-            <col style="width: 66px" />
-            <col style="width: 60px" />
-            <col style="width: 74px" />
-            <col style="width: 70px" />
-            <col style="width: 72px" />
-            <col style="width: 66px" />
-            <col style="width: 68px" />
-            <col style="width: 80px" />
-            <col style="width: 80px" />
-            <col style="width: 56px" />
-            <col :for={_c <- armor_classes()} style="width: 44px" />
+            <col class="w-[300px]" />
+            <col class="w-[66px]" />
+            <col class="w-[60px]" />
+            <col class="w-[74px]" />
+            <col class="w-[70px]" />
+            <col class="w-[72px]" />
+            <col class="w-[66px]" />
+            <col class="w-[68px]" />
+            <col class="w-[80px]" />
+            <col class="w-[80px]" />
+            <col class="w-[56px]" />
+            <col :for={_c <- armor_classes()} class="w-[44px]" />
           </colgroup>
 
           <thead>
@@ -484,18 +484,18 @@ defmodule EftBuddyWeb.AmmoLive.Index do
       <div class="overflow-x-auto">
         <table class="w-full text-sm border-collapse table-fixed min-w-286">
           <colgroup>
-            <col style="width: 260px" />
-            <col style="width: 112px" />
-            <col style="width: 108px" />
-            <col style="width: 96px" />
-            <col style="width: 64px" />
-            <col style="width: 84px" />
-            <col style="width: 100px" />
-            <col style="width: 64px" />
-            <col style="width: 64px" />
-            <col style="width: 60px" />
-            <col style="width: 60px" />
-            <col style="width: 72px" />
+            <col class="w-[260px]" />
+            <col class="w-[112px]" />
+            <col class="w-[108px]" />
+            <col class="w-[96px]" />
+            <col class="w-[64px]" />
+            <col class="w-[84px]" />
+            <col class="w-[100px]" />
+            <col class="w-[64px]" />
+            <col class="w-[64px]" />
+            <col class="w-[60px]" />
+            <col class="w-[60px]" />
+            <col class="w-[72px]" />
           </colgroup>
           <thead>
             <tr class="border-b border-line">

@@ -29,6 +29,11 @@ defmodule EftBuddyWeb.HealthControllerTest do
 
   defp body(conn), do: Jason.decode!(conn.resp_body)
 
+  # The full readiness payload. Served only by `EftBuddyWeb.AdminRouter` on the
+  # loopback admin endpoint, which the test VM does not start, so the action is
+  # called directly; `the admin endpoint` below checks the route.
+  defp detail, do: build_conn() |> EftBuddyWeb.HealthController.sync_detail(%{})
+
   describe "GET /health — liveness" do
     test "is 200 with the database reachable", %{conn: conn} do
       conn = get(conn, ~p"/health")
@@ -108,7 +113,7 @@ defmodule EftBuddyWeb.HealthControllerTest do
       Reporter.attach_telemetry()
       Reporter.record_next_run("EventsSync", :timer.hours(3))
 
-      conn = build_conn() |> get(~p"/health/sync")
+      conn = detail()
 
       assert conn.status == 200
       family = body(conn)["syncs"]["EventsSync"]
@@ -121,7 +126,7 @@ defmodule EftBuddyWeb.HealthControllerTest do
     test "reports null, not zero, for a family that has armed nothing" do
       # "No timer at all" and "firing this instant" are opposite conditions. JSON
       # `0` would read as the latter.
-      conn = build_conn() |> get(~p"/health/sync")
+      conn = detail()
 
       assert body(conn)["syncs"]["ChaptersSync"]["next_run_seconds"] == nil
     end
@@ -162,7 +167,10 @@ defmodule EftBuddyWeb.HealthControllerTest do
         :ok
       end)
 
-      conn = build_conn() |> get(~p"/health/sync")
+      # The public verdict, then the detail that explains it.
+      assert build_conn() |> get(~p"/health/sync") |> Map.fetch!(:status) == 503
+
+      conn = detail()
 
       assert conn.status == 503
       assert body(conn)["syncs"]["ItemsSync"]["state"] == "guard_tripped"
@@ -174,8 +182,7 @@ defmodule EftBuddyWeb.HealthControllerTest do
 
     test "carries the per-family budget so a reader can see WHY" do
       assert %{"budget_seconds" => budget} =
-               build_conn()
-               |> get(~p"/health/sync")
+               detail()
                |> body()
                |> get_in(["syncs", "PricesSync"])
 
@@ -186,7 +193,7 @@ defmodule EftBuddyWeb.HealthControllerTest do
       Reporter.attach_telemetry()
       Reporter.with_run("AmmoSync", fn -> :ok end)
 
-      runs = build_conn() |> get(~p"/health/sync") |> body() |> Map.fetch!("runs")
+      runs = detail() |> body() |> Map.fetch!("runs")
 
       assert %{"outcome" => "ok", "at" => at, "duration_ms" => ms} = runs["AmmoSync"]
       assert {:ok, _, _} = DateTime.from_iso8601(at)
@@ -197,6 +204,35 @@ defmodule EftBuddyWeb.HealthControllerTest do
       conn = build_conn() |> get(~p"/health/sync")
 
       assert conn |> get_resp_header("cache-control") |> List.first() =~ "no-store"
+    end
+
+    test "publishes only the verdict and each family's state and age" do
+      # The public route is reachable by anyone through the tunnel. It used to
+      # carry every label's run times, the cache's size and hit rate, and the
+      # names of its warm specs.
+      Reporter.attach_telemetry()
+      Reporter.with_run("AmmoSync", fn -> :ok end)
+
+      body = build_conn() |> get(~p"/health/sync") |> body()
+
+      assert Map.keys(body) |> Enum.sort() == ["status", "syncs"]
+
+      for {_family, f} <- body["syncs"] do
+        assert Map.keys(f) |> Enum.sort() == ["age_seconds", "state"]
+      end
+
+      assert body["syncs"]["AmmoSync"]["state"] == "ok"
+    end
+  end
+
+  describe "the admin endpoint" do
+    test "serves the detailed payload, and no dashboard" do
+      assert %{plug: EftBuddyWeb.HealthController, plug_opts: :sync_detail} =
+               Phoenix.Router.route_info(EftBuddyWeb.AdminRouter, "GET", "/health/sync", "")
+
+      # LiveDashboard is disabled (its pages are kept for the planned dashboard).
+      assert Phoenix.Router.route_info(EftBuddyWeb.AdminRouter, "GET", "/dashboard", "") == :error
+      assert Phoenix.Router.route_info(EftBuddyWeb.Router, "GET", "/dev/dashboard", "") == :error
     end
   end
 
@@ -220,7 +256,7 @@ defmodule EftBuddyWeb.HealthControllerTest do
       # answering `"cold": []` is how an operator confirms warming actually
       # holds between syncs — the property a flat 20-minute TTL against 6-24h
       # feeds silently got wrong, while every other number looked fine.
-      body = build_conn() |> get("/health/sync") |> json_response(200)
+      body = detail() |> body()
 
       assert %{"cache" => %{"warm" => warm}} = body
 
@@ -238,6 +274,7 @@ defmodule EftBuddyWeb.HealthControllerTest do
       EftBuddy.Cache.clear()
 
       assert build_conn() |> get("/health/sync") |> json_response(200)
+      assert detail().status == 200
     end
   end
 end

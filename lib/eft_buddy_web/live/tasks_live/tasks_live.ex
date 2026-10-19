@@ -150,11 +150,20 @@ defmodule EftBuddyWeb.TasksLive.Index do
   # both mounts and rebuilds the visible list from whatever `:all_tasks`
   # holds, so the page renders empty for a blink and then fills in.
   defp load_task_data(socket) do
-    if connected?(socket) do
-      # The active game mode (PVP/PVE) scopes the task set: PVE is a
-      # distinct quest graph. Reloaded whenever the sidebar mode flips.
+    # The active game mode (PVP/PVE) scopes the task set: PVE is a
+    # distinct quest graph. Reloaded whenever the sidebar mode flips.
+    db_tasks =
+      if connected?(socket),
+        do: Tasks.list_tasks(preloads: [:trader], game_mode: socket.assigns.mode),
+        else: []
+
+    # No tarkov.dev tasks for this mode (a fresh database, or the Tasks sync
+    # failing) means nothing to match the wiki quests against, so every one of
+    # them would render as a WIP quest "recently added to the wiki", and the
+    # page would report itself loaded over that list (audit M18). It shows the
+    # standby state instead, resolved from the Tasks sync like any empty feed.
+    if db_tasks != [] do
       game_mode = socket.assigns.mode
-      db_tasks = Tasks.list_tasks(preloads: [:trader], game_mode: game_mode)
 
       # The wiki quest set, fetched ONCE and used for both jobs below: deciding
       # which tasks carry a `has_wiki?` badge, and building the WIP rows for the
@@ -1555,7 +1564,7 @@ defmodule EftBuddyWeb.TasksLive.Index do
           <ul data-fit-list class="grid grid-cols-1 gap-x-6">
             <li :for={entry <- @items} class="flex items-center gap-2 min-w-0 mb-2 last:mb-0">
               <.link
-                navigate={"/items?q=" <> URI.encode(entry.item.name)}
+                navigate={item_search_url(entry.item.name)}
                 class="group flex items-center gap-2 min-w-0"
                 title={entry.item.name}
               >
