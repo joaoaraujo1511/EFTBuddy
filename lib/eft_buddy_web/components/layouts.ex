@@ -459,6 +459,11 @@ defmodule EftBuddyWeb.Layouts do
 
     ~H"""
     <div class="p-3 pt-4 space-y-6">
+      <%!-- The three forms below opt out of LiveView's form recovery. On a
+           reconnect it replays each form's DOM values as a `phx-change`, and
+           these mirror prefs the operator session holds: a tab left open
+           across a change made in another tab would push its stale level or
+           karma back over the newer one. --%>
       <%!-- PMC level: emblem + big value + grouped stepper, all wrapped in one
            compact panel. The emblem still swaps by level via rank_image_path. --%>
       <div>
@@ -466,8 +471,10 @@ defmodule EftBuddyWeb.Layouts do
         <div class="hud-panel flex items-center gap-2.5 px-2.5 py-2">
           {rank_emblem(%{level: @pmc_level, src: @rank_image, size: "w-11 h-11"})}
           <form
+            id={"pmc-level-form-#{@panel_scope}"}
             phx-change="set_pmc_level"
             phx-submit="set_pmc_level"
+            phx-auto-recover="ignore"
             class="flex-1 min-w-0"
           >
             <input
@@ -506,7 +513,13 @@ defmodule EftBuddyWeb.Layouts do
            painted state (the hook re-syncs them from the input on update). --%>
       <div id={"scav-karma-#{@panel_scope}"} phx-hook="KarmaSlider" data-karma>
         <div class="t-label text-[9px] text-fog-500 mb-1.5">Scav Karma</div>
-        <form phx-change="set_scav_karma" phx-submit="set_scav_karma" class="karma-slider">
+        <form
+          id={"scav-karma-slider-form-#{@panel_scope}"}
+          phx-change="set_scav_karma"
+          phx-submit="set_scav_karma"
+          phx-auto-recover="ignore"
+          class="karma-slider"
+        >
           <span class="karma-slider__rail" aria-hidden="true">
             <span
               id={"scav-karma-fill-#{@panel_scope}"}
@@ -514,8 +527,7 @@ defmodule EftBuddyWeb.Layouts do
               data-karma-fill
               phx-update="ignore"
               style={karma_fill_style(@scav_karma)}
-            >
-            </span>
+            ></span>
             <span class="karma-slider__zero"></span>
           </span>
           <input
@@ -540,8 +552,10 @@ defmodule EftBuddyWeb.Layouts do
              `set_scav_karma` event, clamped by NumberCap. The slider and this
              field are kept in sync client-side by the KarmaSlider hook. --%>
         <form
+          id={"scav-karma-input-form-#{@panel_scope}"}
           phx-change="set_scav_karma"
           phx-submit="set_scav_karma"
+          phx-auto-recover="ignore"
           class="mt-1 flex justify-center"
         >
           <input
