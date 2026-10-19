@@ -47,7 +47,7 @@ defmodule EftBuddy.Progress do
   # This is a security boundary, not tidiness. The blob arrives from an
   # unauthenticated browser over `eft:restore`, is held in an `OperatorSession`
   # for up to four hours after the socket closes, and the DynamicSupervisor
-  # ceiling allows 50,000 such sessions - so an unbounded map here is a remote
+  # ceiling allows 5,000 such sessions - so an unbounded map here is a remote
   # memory-exhaustion path. Keep this list in step with the `@..._key` module
   # attributes in the LiveViews that write progress; a key missing from here is
   # silently discarded, which a new feature would notice immediately in dev.
@@ -195,7 +195,7 @@ defmodule EftBuddy.Progress do
   an invariant: normalising the base and then merging an arbitrary patch over it
   meant the allow-list and the size ceiling applied only to what was *read*, while
   the value actually stored in the `EftBuddy.OperatorSession` - the thing the
-  ceiling exists to bound, held for up to four hours across up to 50,000 sessions
+  ceiling exists to bound, held for up to four hours across up to 5,000 sessions
   - was whatever the caller passed. Sanitising the output makes the bound a
   post-condition of every mutation instead.
   """

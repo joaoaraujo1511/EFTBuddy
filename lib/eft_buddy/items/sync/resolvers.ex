@@ -88,7 +88,7 @@ defmodule EftBuddy.Items.Sync.Resolvers do
 
   **Scoped to the mode on purpose.** The two modes' barter external_id sets are
   disjoint, so an unscoped map would still resolve every child lookup — but it is
-  also handed to `EftBuddy.Items.Sync.Children.replace_children/5`, whose delete
+  also handed to `EftBuddy.Items.Sync.replace_children/5`, whose delete
   step wipes the children of *every* parent id in the map. Unscoped, the second
   mode's pass deleted the first mode's barter reward and required rows, which
   surfaced as an empty Barter tab in whichever mode synced first.

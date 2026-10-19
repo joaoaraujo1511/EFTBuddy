@@ -38,7 +38,6 @@ defmodule EftBuddy.Maps.Boss do
   """
 
   use Ecto.Schema
-  import Ecto.Changeset
 
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
@@ -65,27 +64,5 @@ defmodule EftBuddy.Maps.Boss do
     field :position, :integer, default: 0
 
     timestamps()
-  end
-
-  # NOTE: the sync writes through `insert_all`, not this changeset.
-  def changeset(boss, attrs) do
-    boss
-    |> cast(attrs, [
-      :map_id,
-      :variant_id,
-      :external_id,
-      :name,
-      :normalized_name,
-      :image_portrait_link,
-      :spawn_chance,
-      :spawn_trigger,
-      :spawn_time,
-      :spawn_time_random,
-      :spawn_locations,
-      :escorts
-    ])
-    |> validate_required([:map_id, :external_id, :name])
-    |> foreign_key_constraint(:map_id)
-    |> foreign_key_constraint(:variant_id)
   end
 end

@@ -31,11 +31,11 @@ defmodule EftBuddyWeb.AdminEndpoint do
 
   Over an SSH tunnel:
 
-      ssh -N -L 4001:127.0.0.1:4001 rcorreia@<vm>
+      ssh -N -L 4001:127.0.0.1:4001 <user>@<host>
 
-  The tunnel's far end originates ON the VM, which is what satisfies the
+  The tunnel's far end originates ON the host, which is what satisfies the
   loopback binding. Opening it requires an authenticated SSH session, so the
-  dashboard's access control is the operator's SSH key — an existing, strong
+  admin surface's access control is the operator's SSH key — an existing, strong
   credential — rather than a second login this app would have to implement,
   store and rotate.
 

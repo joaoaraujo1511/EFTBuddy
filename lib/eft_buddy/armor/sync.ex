@@ -3,10 +3,9 @@ defmodule EftBuddy.Armor.Sync do
   Syncs ballistic armor plates and their stats from the tarkov.dev JSON
   API (via `EftBuddy.TarkovApi.plates/1`) into the `armor_plates` table.
 
-  Like `EftBuddy.Ammo.Sync` / `EftBuddy.Maps.Sync`, this is **not** a
-  `GenServer` and is **not** scheduled: plate stats only change on wipes /
-  patches, so `EftBuddy.Sync.Bootstrap` runs it once on boot and a dev can
-  re-run it on demand:
+  Plate stats only change on wipes / patches, so like `EftBuddy.Ammo.Sync` it
+  runs on a slow cadence: once on boot via `EftBuddy.Sync.Bootstrap`, then every
+  12h on its `EftBuddy.Sync.Scheduler` timer. A dev can re-run it on demand:
 
       EftBuddy.Armor.Sync.run()
 

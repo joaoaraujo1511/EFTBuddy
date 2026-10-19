@@ -115,14 +115,15 @@ defmodule EftBuddy.Sync.Bootstrap do
   individual steady-state schedulers will retry on their own
   cadence afterwards.
 
-  The one dependency-aware exception: step 5 (barters & crafts)
-  resolves *every* parent FK against the items from step 1, so if
-  step 1 failed it is skipped outright rather than run — otherwise
+  The one dependency-aware exception: the barters & crafts step
+  resolves *every* parent FK against the items from the Items step, so
+  if Items failed it is skipped outright rather than run — otherwise
   it would fetch the whole barter/craft set from the API only to
   sanitise all of it away (`sanitize_barters/3` / `sanitize_crafts/3`
-  drop anything whose FK can't be resolved). Steps 2–4 still run
-  on a failed step 1: they only drop the item-keyed slices they
-  can't resolve and otherwise write useful rows.
+  drop anything whose FK can't be resolved). Every other step still
+  runs on a failed Items step: they only drop the item-keyed slices
+  they can't resolve and otherwise write useful rows. The registry
+  marks that one dependency with `requires:`.
 
   ## Cluster safety
 
@@ -240,7 +241,7 @@ defmodule EftBuddy.Sync.Bootstrap do
     # (writing useful rows regardless), so a failed Items step degrades the
     # sequence rather than invalidating it.
     #
-    # `requires_items` marks the exception: a step whose every parent FK resolves
+    # `requires:` marks the exception: a step whose every parent FK resolves
     # against items would fetch its whole set from the API only to sanitise all
     # of it away — see the "no resolvable barters/crafts" self-skip. Skipping it
     # up front avoids hammering an already-struggling upstream for data that
@@ -415,11 +416,11 @@ defmodule EftBuddy.Sync.Bootstrap do
   defp log_step_result(label, {:error, :already_running}),
     do: Logger.info("[#{prefix()}] #{label}: skipped — another sync is already running")
 
-  # `{:skip, reason}` is part of the `EftBuddy.Sync.Scheduler.do_run/0` contract —
-  # `EftBuddy.Items.Sync.run_barters_and_crafts/0` returns it when the traders its
-  # FKs resolve against are not in the database yet — but this function had no
-  # clause for it, so a legitimate, expected outcome logged as "unexpected
-  # return". A log line that cries wolf on a normal cold start is worse than none.
+  # `{:skip, reason}` is part of the `EftBuddy.Sync.Scheduler.do_run/0` contract,
+  # and a feed's `run/0` passes it through, so a step can return it. Without this
+  # clause a legitimate, expected outcome logged as "unexpected return". (The
+  # barters & crafts step does not: a barter or craft half that skips comes back
+  # inside `{:error, {:partial, _, _}}`, below.)
   defp log_step_result(label, {:skip, reason}),
     do: Logger.info("[#{prefix()}] #{label}: skipped — #{Reporter.describe_error(reason)}")
 

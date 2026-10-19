@@ -49,7 +49,7 @@ defmodule EftBuddyWeb.TasksLive.Index do
     # Dedup is presence-based on the slug: the moment a quest exists in
     # the DB it wins, so a quest auto-upgrades from WIP to API-backed
     # the next time the page loads after a Tasks.Sync - no re-dump
-    # needed. `wip_view_models/1` already drops anything in `db_slugs`.
+    # needed. `wip_view_models/2` already drops anything in `db_slugs`.
     #
     # `db_slugs` is the union of each task's API `normalized_name` AND a
     # slug derived from its NAME (via the same `Slug.normalize_name/1`
@@ -348,7 +348,7 @@ defmodule EftBuddyWeb.TasksLive.Index do
   # instantly client-side (paired `JS.toggle_class`), so here we update the
   # canonical slug set, persist it to localStorage via the `Hud` hook, and
   # reflow the list - a watchlisted quest sorts to the very top (see
-  # `sort_tasks/1`). Keyed by the stable `normalized_name` slug, like the
+  # `sort_tasks/2`). Keyed by the stable `normalized_name` slug, like the
   # completed set, so a reseed never orphans a saved watchlist.
   def handle_event("toggle_watchlist", %{"slug" => slug}, socket)
       when is_binary(slug) and slug != "" do
@@ -1061,7 +1061,7 @@ defmodule EftBuddyWeb.TasksLive.Index do
       # detail payload). It's a plain column on the task record, so this
       # costs nothing extra.
       banner_url: banner_url(task),
-      # `:status` is filled in by `filter_tasks/1`.
+      # `:status` is filled in by `statused_tasks/1`.
       # `:expanded?` and `:details` start unset and are populated
       # lazily by `handle_event("toggle_expand", ...)`.
       expanded?: false,
@@ -1265,7 +1265,7 @@ defmodule EftBuddyWeb.TasksLive.Index do
   # row id), matching the `Map.fetch(cache, task_id)` lookup above.
   #
   # API-backed quests render their banner as a row thumbnail instead (see
-  # `to_view_model/1`), so this is the only detail panel that still shows
+  # `to_view_model/2`), so this is the only detail panel that still shows
   # one - the manifest that carries it isn't read until expansion.
   defp load_details(%{wip?: true, normalized_name: slug}, cache) do
     wiki = Wiki.get_quest(slug)
@@ -1307,7 +1307,7 @@ defmodule EftBuddyWeb.TasksLive.Index do
   # Rebuild a row's stream entry with the expansion flag and (when
   # expanded) the cached details payload. The base VM is sourced from
   # `:filtered_tasks` (not `:all_tasks`) because the per-row `:status`
-  # field is added by `filter_tasks/1` - `to_view_model/1` doesn't
+  # field is added by `statused_tasks/1` - `to_view_model/2` doesn't
   # know about completion / level / prereqs. Without this the
   # rebuilt stream entry was missing `:status` and the template
   # crashed with `KeyError: key :status not found` on every expand.
@@ -1595,7 +1595,7 @@ defmodule EftBuddyWeb.TasksLive.Index do
 
   Each row carries the item's icon in a tier-colored square
   (consistent with the reward / craft tiles elsewhere), its name as a
-  click-through link to `/items?q=<name>` (new tab), and an `×N`
+  click-through link to `/items?q=<name>`, and an `×N`
   count when more than one is required.
 
   There is deliberately no "FiR" badge. The found-in-raid condition
@@ -1679,8 +1679,7 @@ defmodule EftBuddyWeb.TasksLive.Index do
 
   Mirrors the `craft_item_tile` used on the Items page: the item's
   icon sits in a tier-colored square with an `×N` quantity badge in
-  the corner, and the whole tile links to `/items?q=<name>` in a
-  new tab. Using icons (instead of a "N × name" text line) makes a
+  the corner, and the whole tile links to `/items?q=<name>`. Using icons (instead of a "N × name" text line) makes a
   quest's rewards scannable at a glance and keeps the Tasks and
   Items pages visually consistent.
   """

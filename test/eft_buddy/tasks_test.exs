@@ -18,25 +18,6 @@ defmodule EftBuddy.TasksTest do
       # Default preloads should materialize objectives (not NotLoaded).
       assert is_list(first.objectives)
     end
-
-    test "filters by trader slug" do
-      prapor = Fixtures.trader(%{name: "Prapor", normalized_name: "prapor"})
-      therapist = Fixtures.trader(%{name: "Therapist", normalized_name: "therapist"})
-      Fixtures.task(%{name: "Debut", trader_id: prapor.id})
-      Fixtures.task(%{name: "Shortage", trader_id: therapist.id})
-
-      assert names(Tasks.list_tasks(trader_slug: "prapor")) == ["Debut"]
-    end
-
-    test "faction filter returns the faction's tasks plus faction-neutral ones" do
-      Fixtures.task(%{name: "Usec Only", faction_name: "USEC"})
-      Fixtures.task(%{name: "Bear Only", faction_name: "BEAR"})
-      Fixtures.task(%{name: "Neutral", faction_name: nil})
-
-      assert names(Tasks.list_tasks(faction: :usec)) == ["Neutral", "Usec Only"]
-      assert names(Tasks.list_tasks(faction: :bear)) == ["Bear Only", "Neutral"]
-      assert names(Tasks.list_tasks(faction: nil)) == ["Bear Only", "Neutral", "Usec Only"]
-    end
   end
 
   describe "prereq_map/0" do

@@ -66,42 +66,6 @@ defmodule EftBuddyWeb.CoreComponents do
   end
 
   @doc """
-  Renders a button or button-styled link.
-  """
-  attr :rest, :global, include: ~w(href navigate patch method download name value disabled)
-  attr :class, :any, default: nil
-  attr :variant, :string, default: "primary", values: ~w(primary ghost)
-  slot :inner_block, required: true
-
-  def button(%{rest: rest} = assigns) do
-    variant_class =
-      case assigns.variant do
-        "ghost" ->
-          "bg-ink-850 text-fog-300 border-line hover:text-amber hover:border-amber/60"
-
-        _ ->
-          "bg-amber text-ink-950 border-amber hover:bg-amber-bright hover:border-amber-bright font-bold"
-      end
-
-    assigns =
-      assign(assigns, :class, [
-        "t-label text-xs inline-flex items-center justify-center gap-2 px-4 py-2.5 border transition-colors hud-focus disabled:opacity-40 disabled:cursor-not-allowed",
-        variant_class,
-        assigns.class
-      ])
-
-    if rest[:href] || rest[:navigate] || rest[:patch] do
-      ~H"""
-      <.link class={@class} {@rest}>{render_slot(@inner_block)}</.link>
-      """
-    else
-      ~H"""
-      <button class={@class} {@rest}>{render_slot(@inner_block)}</button>
-      """
-    end
-  end
-
-  @doc """
   Renders an input with label and error messages. Supports a
   `Phoenix.HTML.FormField` or explicit attributes.
   """
@@ -327,11 +291,6 @@ defmodule EftBuddyWeb.CoreComponents do
     else
       Gettext.dgettext(EftBuddyWeb.Gettext, "errors", msg, opts)
     end
-  end
-
-  @doc "Translates the errors for a field from a keyword list of errors."
-  def translate_errors(errors, field) when is_list(errors) do
-    for {^field, {msg, opts}} <- errors, do: translate_error({msg, opts})
   end
 
   @doc """
@@ -748,7 +707,7 @@ defmodule EftBuddyWeb.CoreComponents do
   defp monogram_bg(0), do: "bg-amber"
   defp monogram_bg(1), do: "bg-olive-bright"
   defp monogram_bg(2), do: "bg-signal"
-  defp monogram_bg(3), do: "bg-blue"
+  defp monogram_bg(3), do: "bg-rust"
   defp monogram_bg(4), do: "bg-purple"
   defp monogram_bg(_), do: "bg-fog-400"
 

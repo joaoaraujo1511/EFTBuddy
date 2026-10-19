@@ -148,13 +148,6 @@ defmodule EftBuddy.Wiki.DumpTest do
     end
   end
 
-  describe "sanitize_dirname/1" do
-    test "replaces filesystem-illegal characters and collapses whitespace" do
-      assert Dump.sanitize_dirname(~s(A/B:C?"  D)) == "A-B-C-- D"
-      assert Dump.sanitize_dirname("Golden Swag") == "Golden Swag"
-    end
-  end
-
   describe "parse_section/3" do
     test "level-1 list items become objectives; nested items don't" do
       parsed =
@@ -425,26 +418,6 @@ defmodule EftBuddy.Wiki.DumpTest do
       # The kept quest is written; the skipped one never reaches the writer.
       assert_received {:wrote, "keep"}
       refute_received {:wrote, "drop"}
-    end
-
-    test "dry_run skips resolution but still writes the manifest" do
-      quests = [Dump.build_quest("Alpha", %{})]
-      test_pid = self()
-
-      result =
-        Dump.run(quests,
-          fetch: fn _q -> {:ok, raw_sections()} end,
-          resolve: fn _titles ->
-            send(test_pid, :resolve_called)
-            %{}
-          end,
-          write: recording_writer(),
-          dry_run: true
-        )
-
-      assert result.summary == %{processed: 1, failed: 0, skipped: 0, resolved: 0}
-      assert_received {:wrote, "alpha", _manifest}
-      refute_received :resolve_called
     end
 
     test "suppresses the erroneous guide image for the Immunity quest, keeping the prose" do

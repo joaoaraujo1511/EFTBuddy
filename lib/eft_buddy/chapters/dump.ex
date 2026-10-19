@@ -78,23 +78,6 @@ defmodule EftBuddy.Chapters.Dump do
     |> String.trim()
   end
 
-  @doc """
-  Narrow a chapter list down to a single `--chapter` selection (matched
-  by slug). Returns the full list when no selection is given, or
-  `{:unrecognized, value}` when the slug matches nothing — so the runner
-  can fail loudly without processing anything.
-  """
-  def select_chapters(chapters, nil), do: chapters
-
-  def select_chapters(chapters, value) when is_binary(value) do
-    target = normalize_name(value)
-
-    case Enum.filter(chapters, &(&1.normalized_name == target)) do
-      [] -> {:unrecognized, value}
-      selected -> selected
-    end
-  end
-
   # ── Orchestration ──────────────────────────────────────────────────
 
   @doc """
@@ -113,7 +96,6 @@ defmodule EftBuddy.Chapters.Dump do
       storing. Applied BEFORE image resolution, so a section nothing
       renders costs neither a row nor an imageinfo lookup. Defaults to
       keeping everything.
-    * `:dry_run` — skip image resolution + write.
 
   Returns `%{failures: [%{slug, reason}], summary: %{processed, failed}}`.
   """
@@ -122,11 +104,10 @@ defmodule EftBuddy.Chapters.Dump do
     resolve = Keyword.fetch!(opts, :resolve)
     write = Keyword.fetch!(opts, :write)
     prune = Keyword.get(opts, :prune, fn _chapter, sections -> sections end)
-    dry_run? = !!Keyword.get(opts, :dry_run, false)
 
     {failures, processed} =
       Enum.reduce(chapters, {[], 0}, fn chapter, {failures, processed} ->
-        case process_one(chapter, fetch, resolve, write, prune, dry_run?) do
+        case process_one(chapter, fetch, resolve, write, prune) do
           :ok ->
             {failures, processed + 1}
 
@@ -143,13 +124,11 @@ defmodule EftBuddy.Chapters.Dump do
     }
   end
 
-  defp process_one(chapter, fetch, resolve, write, prune, dry_run?) do
+  defp process_one(chapter, fetch, resolve, write, prune) do
     case fetch.(chapter) do
       {:ok, fetched} ->
         parsed = fetched |> parse_sections() |> keep_sections(chapter, prune)
-        resolved = if dry_run?, do: %{}, else: resolve.(parsed.image_filenames)
-        manifest = build_manifest(chapter, parsed, resolved)
-        if dry_run?, do: :ok, else: write.(chapter, manifest)
+        write.(chapter, build_manifest(chapter, parsed, resolve.(parsed.image_filenames)))
 
       {:error, reason} ->
         {:error, reason}
@@ -469,21 +448,4 @@ defmodule EftBuddy.Chapters.Dump do
 
   defp upcase_first(""), do: ""
   defp upcase_first(<<first::utf8, rest::binary>>), do: String.upcase(<<first::utf8>>) <> rest
-
-  @doc """
-  Sanitise a chapter title into a filesystem-safe directory name
-  (filesystem-illegal characters become dashes, whitespace collapsed).
-
-  Mirrors `EftBuddy.Wiki.Dump.sanitize_dirname/1` exactly so the two
-  dump pipelines lay out their folders the same way. The directory name
-  is cosmetic — both loaders key their ETS tables on the manifest's
-  `normalized_name`, not the folder — but keeping the convention shared
-  avoids surprises.
-  """
-  def sanitize_dirname(name) do
-    name
-    |> String.replace(~r/[\/\\:*?"<>|]/, "-")
-    |> String.replace(~r/\s+/, " ")
-    |> String.trim()
-  end
 end

@@ -24,7 +24,7 @@ defmodule EftBuddyWeb.LoadState do
 
   Matching is done on the **base** label (the part before any `:mode`
   suffix), because a couple of syncers run per game mode and tag themselves
-  `"TasksSync:pve"` / `"PricesSync:regular"` etc.
+  `"TasksSync:pve"` / `"EconomySync:regular"` etc.
   """
 
   alias EftBuddy.Sync.Reporter

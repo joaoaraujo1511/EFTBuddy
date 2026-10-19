@@ -1,13 +1,13 @@
 defmodule EftBuddy.Wiki.DumpScript do
   @moduledoc """
-  Shared support for the wiki scrapers: the chapter sync
-  (`EftBuddy.Chapters.Sync`) and the quest sync (`EftBuddy.Wiki.Sync`).
+  The HTTP transport under `EftBuddy.Wiki.Api`, which every wiki scraper (the
+  quest, chapter and events syncs) calls: a per-process throttle, SSL options,
+  the user agent, and one MediaWiki API GET with retries that turns an error
+  body into `{:error, _}`.
 
-  Both need the same HTTP plumbing — a per-process throttle, SSL options and
-  the MediaWiki API call with retries — so it lives here in one place rather than being
-  copy-pasted (which is how the old quest + chapter scripts drifted
-  apart). Dependency-light (only `Req` + `Jason`) so it still works under
-  `mix run --no-start` in any ad-hoc script as well as inside the app.
+  The name is historical: this began as the support module for the offline
+  dump scripts the syncs replaced. Their CLI parsing and console output went
+  with them (audit L5).
   """
 
   # MediaWiki's user-agent policy asks automated clients to identify
@@ -21,7 +21,7 @@ defmodule EftBuddy.Wiki.DumpScript do
   # so being identifiable to the people whose work we depend on is the
   # minimum courtesy — and the thing that lets them reach us if our traffic
   # is ever a problem.
-  @user_agent "EFT-Buddy/0.1 (+https://github.com/joaoaraujo1511/EFT-Buddy)"
+  @user_agent "EFT-Buddy/0.1 (+https://github.com/joaoaraujo1511/EFTBuddy)"
 
   @api_throttle_ms 250
   # Transient-failure retry budget for the wiki API. Fandom rate-limits
@@ -30,93 +30,6 @@ defmodule EftBuddy.Wiki.DumpScript do
   # a page entirely. Retries only fire on failure, so this costs nothing
   # on the happy path.
   @api_max_retries 4
-
-  # ── CLI ─────────────────────────────────────────────────────────────
-
-  @doc """
-  Parse `--key value` and `--flag` style args. Anything not starting
-  with `--` is positional (the scripts treat the first positional as the
-  output directory).
-
-  `integer_keys` lists flag keys whose values should be cast to integers
-  (e.g. `[:limit]` for the quest script's `--limit N`); every other
-  value is kept as a string. Returns `{keyword_flags, positional_args}`.
-  """
-  @spec parse_args([String.t()], [atom()]) :: {keyword(), [String.t()]}
-  def parse_args(argv, integer_keys \\ []) when is_list(argv) and is_list(integer_keys) do
-    do_parse(argv, integer_keys, [], [])
-  end
-
-  # sobelow_skip ["DOS.StringToAtom"]
-  defp do_parse([], _int_keys, flags, positional),
-    do: {Enum.reverse(flags), Enum.reverse(positional)}
-
-  # sobelow_skip ["DOS.StringToAtom"]
-  defp do_parse([arg | rest], int_keys, flags, positional) do
-    if String.starts_with?(arg, "--") do
-      key =
-        arg
-        |> String.replace_prefix("--", "")
-        |> String.replace("-", "_")
-        |> String.to_atom()
-
-      case rest do
-        [next | rest2] ->
-          if String.starts_with?(next, "--") do
-            do_parse(rest, int_keys, [{key, true} | flags], positional)
-          else
-            do_parse(rest2, int_keys, [{key, cast(key, next, int_keys)} | flags], positional)
-          end
-
-        [] ->
-          do_parse([], int_keys, [{key, true} | flags], positional)
-      end
-    else
-      do_parse(rest, int_keys, flags, [arg | positional])
-    end
-  end
-
-  defp cast(key, value, int_keys) do
-    if key in int_keys, do: String.to_integer(value), else: value
-  end
-
-  # ── Console helpers (ANSI) ──────────────────────────────────────────
-
-  def header(text) do
-    IO.puts("")
-
-    IO.puts(
-      IO.ANSI.cyan() <>
-        "── #{text} " <>
-        String.duplicate("─", max(0, 60 - String.length(text))) <>
-        IO.ANSI.reset()
-    )
-  end
-
-  def ok(label, detail \\ nil) do
-    line = IO.ANSI.green() <> "  [OK]   " <> IO.ANSI.reset() <> label
-
-    line =
-      if detail, do: line <> " — " <> IO.ANSI.faint() <> detail <> IO.ANSI.reset(), else: line
-
-    IO.puts(line)
-  end
-
-  def warn(label, detail \\ nil) do
-    line = IO.ANSI.yellow() <> "  [WARN] " <> IO.ANSI.reset() <> label
-    line = if detail, do: line <> " — " <> detail, else: line
-    IO.puts(line)
-  end
-
-  def fail(label, detail \\ nil) do
-    line = IO.ANSI.red() <> "  [FAIL] " <> IO.ANSI.reset() <> label
-    line = if detail, do: line <> " — " <> detail, else: line
-    IO.puts(line)
-  end
-
-  def info(label, detail) do
-    IO.puts("  " <> IO.ANSI.faint() <> "        " <> IO.ANSI.reset() <> label <> ": " <> detail)
-  end
 
   # ── HTTP layer ──────────────────────────────────────────────────────
 

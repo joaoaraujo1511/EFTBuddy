@@ -7,7 +7,6 @@ defmodule EftBuddy.Hideout.ItemRequirement do
   """
 
   use Ecto.Schema
-  import Ecto.Changeset
 
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
@@ -20,15 +19,5 @@ defmodule EftBuddy.Hideout.ItemRequirement do
     belongs_to :item, EftBuddy.Items.Item
 
     timestamps()
-  end
-
-  def changeset(item_requirement, attrs) do
-    item_requirement
-    |> cast(attrs, [:quantity, :found_in_raid, :level_id, :item_id])
-    |> validate_required([:quantity, :level_id, :item_id])
-    |> validate_number(:quantity, greater_than: 0)
-    |> unique_constraint([:level_id, :item_id])
-    |> foreign_key_constraint(:level_id)
-    |> foreign_key_constraint(:item_id)
   end
 end

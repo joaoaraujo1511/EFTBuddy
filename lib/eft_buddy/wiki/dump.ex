@@ -241,16 +241,6 @@ defmodule EftBuddy.Wiki.Dump do
       url/size/mime keyed by the `"File:"`-prefixed title)
     * `:write`   — `(quest, manifest) -> :ok | {:error, reason}`
 
-  Options:
-
-    * `:dry_run`     — skip image resolution (the manifest is still
-      written, with `nil` urls — matching the script's historical
-      behaviour)
-    * `:on_progress` — `(quest, index, total) -> any`, called before
-      each quest (for logging)
-    * `:on_result`   — `(quest, {:ok, resolved_count} | {:skip, reason} | {:error, reason}) -> any`,
-      called after each quest (for logging)
-
   Returns `%{failures: [%{slug, reason}], skipped: [%{slug, reason}],
   summary: %{processed, failed, skipped, resolved}}`.
   """
@@ -258,20 +248,10 @@ defmodule EftBuddy.Wiki.Dump do
     fetch = Keyword.fetch!(opts, :fetch)
     resolve = Keyword.fetch!(opts, :resolve)
     write = Keyword.fetch!(opts, :write)
-    dry_run? = !!Keyword.get(opts, :dry_run, false)
-    on_progress = Keyword.get(opts, :on_progress, fn _quest, _idx, _total -> :ok end)
-    on_result = Keyword.get(opts, :on_result, fn _quest, _result -> :ok end)
-    total = length(quests)
 
     {failures, processed, resolved, skipped} =
-      quests
-      |> Enum.with_index(1)
-      |> Enum.reduce({[], 0, 0, []}, fn {quest, idx}, {failures, processed, resolved, skipped} ->
-        on_progress.(quest, idx, total)
-        result = process_one(quest, fetch, resolve, write, dry_run?)
-        on_result.(quest, result)
-
-        case result do
+      Enum.reduce(quests, {[], 0, 0, []}, fn quest, {failures, processed, resolved, skipped} ->
+        case process_one(quest, fetch, resolve, write) do
           {:ok, count} ->
             {failures, processed + 1, resolved + count, skipped}
 
@@ -297,7 +277,7 @@ defmodule EftBuddy.Wiki.Dump do
     }
   end
 
-  defp process_one(quest, fetch, resolve, write, dry_run?) do
+  defp process_one(quest, fetch, resolve, write) do
     case fetch.(quest) do
       # The fetch decided this page should not be written at all (e.g. a
       # blacklisted Ref / historical-content quest). Nothing to parse,
@@ -315,12 +295,10 @@ defmodule EftBuddy.Wiki.Dump do
           parsed |> Enum.flat_map(& &1.files) |> Enum.map(&("File:" <> &1.file)) |> Enum.uniq()
 
         info_map =
-          if dry_run? or wiki_titles == [], do: %{}, else: resolve.(wiki_titles)
+          if wiki_titles == [], do: %{}, else: resolve.(wiki_titles)
 
         manifest = build_manifest(quest, quest.wiki_title, parsed, info_map)
 
-        # NB: unlike the chapter dump, a quest dry-run still writes the
-        # manifest (only image resolution is skipped) — preserving this
         # script's historical behaviour.
         case write.(quest, manifest) do
           :ok -> {:ok, map_size(info_map)}
@@ -948,16 +926,5 @@ defmodule EftBuddy.Wiki.Dump do
       "" -> "section"
       s -> s
     end
-  end
-
-  @doc """
-  Sanitise a quest name into a filesystem-safe directory name
-  (filesystem-illegal characters become dashes, whitespace collapsed).
-  """
-  def sanitize_dirname(name) do
-    name
-    |> String.replace(~r/[\/\\:*?"<>|]/, "-")
-    |> String.replace(~r/\s+/, " ")
-    |> String.trim()
   end
 end

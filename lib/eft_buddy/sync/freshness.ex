@@ -60,7 +60,7 @@ defmodule EftBuddy.Sync.Freshness do
   merely slipped past a retry is not an incident, and false alarms cost more than
   the delay in noticing.
 
-  `Reporter` labels carry a mode suffix (`TasksSync:regular`, `PricesSync:pve`), so
+  `Reporter` labels carry a mode suffix (`TasksSync:regular`, `BartersSync:pve`), so
   budgets are matched by **prefix** and a family's verdict is the worst among its
   labels.
   """
@@ -128,7 +128,7 @@ defmodule EftBuddy.Sync.Freshness do
     # and `buy_for`. It used to label itself `PricesSync:<mode>`, which
     # `matches?/2` folded into the PricesSync family above, so a pass running on
     # the structural cadence was judged against the ten-minute feed's 2h budget.
-    # `evaluate_family/5` ages a family on its OLDEST label, so that family read
+    # `evaluate_family/6` ages a family on its OLDEST label, so that family read
     # `:stale` for roughly four of every six hours and `/health/sync` answered 503
     # for most of every cycle — before this change, and for 10 of every 12 after
     # it. A distinct label is the whole fix.

@@ -33,9 +33,9 @@ defmodule EftBuddy.Operator do
 
   ## Scav karma is stored in integer hundredths
 
-  Karma ranges -6.00..+6.00 and the stepper nudges it by 0.1. Accumulating
-  those steps as floats drifts (`0.1 + 0.2 != 0.3`), which is visible in a
-  HUD that renders the value to two decimals. Internally karma is therefore
+  Karma ranges -6.00..+6.00 in steps of 0.01 (the slider and the number
+  field). Carried as floats, those values drift (`0.1 + 0.2 != 0.3`), which is
+  visible in a HUD that renders the value to two decimals. Internally karma is therefore
   an **integer count of hundredths** (-600..600); `karma_to_float/1` converts
   at the presentation edge and `parse(:scav_karma, _)` converts on the way in.
   """
@@ -50,7 +50,6 @@ defmodule EftBuddy.Operator do
   # Karma, in integer hundredths (see moduledoc).
   @min_karma_cents -600
   @max_karma_cents 600
-  @karma_step_cents 10
   @default_karma_cents 0
 
   # ── Which prefs are per-mode ───────────────────────────────────────
@@ -313,11 +312,6 @@ defmodule EftBuddy.Operator do
   def cookie_value(:mode, mode) when is_atom(mode), do: Atom.to_string(mode)
   def cookie_value(:faction, faction) when is_atom(faction), do: Atom.to_string(faction)
   def cookie_value(_key, value), do: value
-
-  @doc "Nudge karma (in hundredths) by one stepper detent, clamped to range."
-  @spec step_karma(integer(), :up | :down) :: integer()
-  def step_karma(cents, :up), do: clamp_karma_cents(cents + @karma_step_cents)
-  def step_karma(cents, :down), do: clamp_karma_cents(cents - @karma_step_cents)
 
   @doc "Nudge the PMC level by one, clamped to range."
   @spec step_level(integer(), :up | :down) :: integer()

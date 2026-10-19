@@ -6,7 +6,6 @@ defmodule EftBuddy.GameSettings.Setting do
   """
 
   use Ecto.Schema
-  import Ecto.Changeset
 
   @primary_key {:id, :binary_id, autogenerate: true}
   schema "game_settings" do
@@ -14,12 +13,5 @@ defmodule EftBuddy.GameSettings.Setting do
     field :int_value, :integer
 
     timestamps()
-  end
-
-  def changeset(setting, attrs) do
-    setting
-    |> cast(attrs, [:key, :int_value])
-    |> validate_required([:key])
-    |> unique_constraint(:key)
   end
 end

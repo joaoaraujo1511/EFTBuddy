@@ -22,7 +22,6 @@ defmodule EftBuddy.Maps.Variant do
   """
 
   use Ecto.Schema
-  import Ecto.Changeset
 
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
@@ -49,29 +48,5 @@ defmodule EftBuddy.Maps.Variant do
     has_many :bosses, EftBuddy.Maps.Boss, foreign_key: :variant_id
 
     timestamps()
-  end
-
-  def changeset(variant, attrs) do
-    variant
-    |> cast(attrs, [
-      :map_id,
-      :external_id,
-      :normalized_name,
-      :name,
-      :name_id,
-      :label,
-      :base,
-      :kind,
-      :raid_duration,
-      :players,
-      :min_player_level,
-      :max_player_level,
-      :description,
-      :enemies
-    ])
-    |> validate_required([:map_id, :normalized_name])
-    |> validate_inclusion(:kind, ~w(base night))
-    |> unique_constraint([:map_id, :normalized_name])
-    |> foreign_key_constraint(:map_id)
   end
 end

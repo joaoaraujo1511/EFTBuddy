@@ -10,7 +10,6 @@ defmodule EftBuddy.Items.Barter do
   """
 
   use Ecto.Schema
-  import Ecto.Changeset
 
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
@@ -32,15 +31,5 @@ defmodule EftBuddy.Items.Barter do
       on_replace: :delete
 
     timestamps()
-  end
-
-  def changeset(barter, attrs) do
-    barter
-    |> cast(attrs, [:external_id, :level, :buy_limit, :game_mode, :trader_id, :task_unlock_id])
-    |> validate_required([:external_id, :level, :trader_id])
-    |> validate_number(:level, greater_than_or_equal_to: 1)
-    |> unique_constraint(:external_id)
-    |> foreign_key_constraint(:trader_id)
-    |> foreign_key_constraint(:task_unlock_id)
   end
 end

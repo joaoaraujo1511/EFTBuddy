@@ -5,7 +5,6 @@ defmodule EftBuddy.Hideout.TraderRequirement do
   """
 
   use Ecto.Schema
-  import Ecto.Changeset
 
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
@@ -16,15 +15,5 @@ defmodule EftBuddy.Hideout.TraderRequirement do
     belongs_to :trader, EftBuddy.Hideout.Trader
 
     timestamps()
-  end
-
-  def changeset(req, attrs) do
-    req
-    |> cast(attrs, [:required_level, :level_id, :trader_id])
-    |> validate_required([:required_level, :level_id, :trader_id])
-    |> validate_number(:required_level, greater_than_or_equal_to: 1)
-    |> unique_constraint([:level_id, :trader_id])
-    |> foreign_key_constraint(:level_id)
-    |> foreign_key_constraint(:trader_id)
   end
 end

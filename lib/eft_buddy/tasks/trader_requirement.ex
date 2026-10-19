@@ -7,7 +7,6 @@ defmodule EftBuddy.Tasks.TraderRequirement do
   """
 
   use Ecto.Schema
-  import Ecto.Changeset
 
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
@@ -20,16 +19,5 @@ defmodule EftBuddy.Tasks.TraderRequirement do
     belongs_to :trader, EftBuddy.Hideout.Trader
 
     timestamps()
-  end
-
-  def changeset(req, attrs) do
-    req
-    |> cast(attrs, [:requirement_type, :compare_method, :value, :task_id, :trader_id])
-    |> validate_required([:task_id, :trader_id])
-    |> unique_constraint([:task_id, :trader_id, :requirement_type],
-      name: :task_trader_reqs_task_trader_type_index
-    )
-    |> foreign_key_constraint(:task_id)
-    |> foreign_key_constraint(:trader_id)
   end
 end

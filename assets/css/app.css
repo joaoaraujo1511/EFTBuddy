@@ -220,22 +220,6 @@ button:disabled,
   background: linear-gradient(180deg, var(--color-amber), rgba(154, 136, 102, 0));
 }
 
-/* Animated diagonal hazard stripes (used on banners / loading states). */
-.hud-stripes {
-  background-image: repeating-linear-gradient(
-    -45deg,
-    rgba(154, 136, 102, 0.12) 0, rgba(154, 136, 102, 0.12) 10px,
-    rgba(0, 0, 0, 0) 10px, rgba(0, 0, 0, 0) 20px
-  );
-}
-
-/* Faint scanline overlay for hero/banner surfaces. */
-.hud-scan {
-  background-image: repeating-linear-gradient(
-    0deg, rgba(0, 0, 0, 0.22) 0, rgba(0, 0, 0, 0.22) 1px, transparent 1px, transparent 3px
-  );
-}
-
 /* Focus ring used across interactive controls. */
 .hud-focus:focus-visible {
   outline: none;

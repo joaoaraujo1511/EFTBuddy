@@ -81,37 +81,15 @@ defmodule EftBuddy.Sync.Reporter do
   # feed a status entry, which is precisely the distinction being reported on.
   @schedule_table :eft_buddy_sync_schedule
 
-  # ── Module-name → ANSI color ──────────────────────────
+  # ── Label → ANSI color ────────────────────────────────
   #
-  # Bootstrap (orchestrator) gets its own color so the
-  # "phase boundary" lines pop visually. All data-sync
-  # modules share a single color: per-module colors looked
-  # busy in practice and the SELECT/INSERT/UPDATE/DELETE
-  # coloring inside each summary line already gives the eye
-  # plenty of structure. Cyan is readable on light *and*
-  # dark backgrounds. Swap values here to retheme.
-  @label_colors %{
-    "Bootstrap" => :magenta,
-    "Sync" => :cyan,
-    "ItemsSync" => :cyan,
-    "PricesSync" => :cyan,
-    "FleaSettingsSync" => :cyan,
-    "QuestItemsSync" => :cyan,
-    "BartersSync" => :cyan,
-    "CraftsSync" => :cyan,
-    "HideoutSync" => :cyan,
-    "TasksSync" => :cyan,
-    "MapsSync" => :cyan,
-    "WikiSync" => :cyan,
-    "ChaptersSync" => :cyan
-  }
-
-  # Fallback color for any bracketed tag we don't have an explicit entry
-  # for — including mode-suffixed labels (`TasksSync:pve`) and ad-hoc
-  # tags from shared infra. Cyan matches the data-sync family above, so
-  # an unmapped label is still colorized consistently instead of
-  # printing uncolored against its colored neighbours.
-  @default_label_color :cyan
+  # Bootstrap (orchestrator) gets its own color so the "phase boundary" lines
+  # pop visually. Every other label shares one: per-module colors looked busy
+  # in practice, and the SELECT/INSERT/UPDATE/DELETE coloring inside each
+  # summary line already gives the eye plenty of structure. Cyan is readable on
+  # light *and* dark backgrounds.
+  @bootstrap_label_color :magenta
+  @label_color :cyan
 
   # ── SQL-op → ANSI color ────────────────────────────────
   #
@@ -172,7 +150,6 @@ defmodule EftBuddy.Sync.Reporter do
                    last_ok_at: DateTime.t() | nil,
                    duration_ms: non_neg_integer(),
                    refusals: non_neg_integer(),
-                   consecutive_skips: non_neg_integer(),
                    consecutive_failures: non_neg_integer()}}
 
   `at` is when the label last ran; `last_ok_at` is when it last ran *successfully*
@@ -254,37 +231,6 @@ defmodule EftBuddy.Sync.Reporter do
     case :ets.whereis(@schedule_table) do
       :undefined -> %{}
       _ -> @schedule_table |> :ets.tab2list() |> Map.new()
-    end
-  end
-
-  @doc """
-  Seconds until `label` next plans to run, or `nil` if it has never armed a timer.
-
-  Negative when the planned moment has passed and the tick has not been recorded
-  yet — a run in progress, or a message still queued. Reported as-is rather than
-  clamped: a large negative number means a feed that armed a timer and never
-  fired, which is worth being able to see.
-  """
-  @spec seconds_until_next_run(String.t()) :: integer() | nil
-  def seconds_until_next_run(label) when is_binary(label) do
-    case Map.get(schedule(), label) do
-      %{next_run_at: at} -> DateTime.diff(at, DateTime.utc_now())
-      _ -> nil
-    end
-  end
-
-  @doc """
-  Seconds since the most recent *successful* run across all syncs, or
-  `nil` if none has succeeded since boot. Useful as a single freshness
-  gauge.
-  """
-  def seconds_since_last_success do
-    status()
-    |> Enum.map(fn {_label, s} -> last_ok_at(s) end)
-    |> Enum.reject(&is_nil/1)
-    |> case do
-      [] -> nil
-      times -> DateTime.diff(DateTime.utc_now(), Enum.max(times, DateTime))
     end
   end
 
@@ -476,13 +422,8 @@ defmodule EftBuddy.Sync.Reporter do
     end
   end
 
-  # Resolve a label (possibly `"Base:mode"`) to its ANSI color. Keys on
-  # the base label so mode-suffixed runs share their family's color, and
-  # falls back to the shared data-sync color for anything unmapped.
-  defp label_color(label) do
-    base = label |> String.split(":", parts: 2) |> hd()
-    Map.get(@label_colors, base, @default_label_color)
-  end
+  defp label_color("Bootstrap"), do: @bootstrap_label_color
+  defp label_color(_label), do: @label_color
 
   # ── Error rendering ────────────────────────────────────
 
@@ -756,11 +697,6 @@ defmodule EftBuddy.Sync.Reporter do
            # goes stale on its budget instead of looking permanently current — its
            # `at` was being refreshed by runs that wrote nothing.
            last_ok_at: if(outcome == :ok, do: now, else: Map.get(prev, :last_ok_at)),
-           # Not read by anything today. It is here because "skipped once on a cold
-           # start" and "has skipped forty times in a row" are the same record
-           # otherwise, and the second is the shape worth seeing on a dashboard.
-           consecutive_skips:
-             if(outcome == :skipped, do: Map.get(prev, :consecutive_skips, 0) + 1, else: 0),
            # Read by `EftBuddy.Sync.Freshness`: one failed run is not enough to fail
            # readiness, two in a row are. A single Fandom 503 used to turn
            # `/health/sync` red for the feed's whole cadence (12h for the events

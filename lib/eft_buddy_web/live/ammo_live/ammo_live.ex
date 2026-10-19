@@ -173,7 +173,7 @@ defmodule EftBuddyWeb.AmmoLive.Index do
   defp apply_ammo_view(socket) do
     %{rounds: rounds, query: query, sorts: sorts} = socket.assigns
 
-    filtered = Ammo.filter(rounds, %{query: query, caliber: "all", source: "all"})
+    filtered = Ammo.filter(rounds, query)
 
     socket
     |> assign(:groups, Ammo.group(filtered, sorts))
@@ -924,11 +924,6 @@ defmodule EftBuddyWeb.AmmoLive.Index do
 
   @doc "Background colour for a round's penetration vs a given armor class."
   def class_pen_color(round, class), do: rating_color(class_rating(round, class))
-
-  @doc false
-  # Legend swatches, weakest → strongest so the scale reads left→right
-  # (red = low → green = high): {rating, label}.
-  def pen_legend, do: Enum.map(0..6, &{&1, rating_label(&1)})
 
   # Value gradient anchors: green (good) → yellow (mid) → red (bad), taken
   # from the app's go / warn / rust status palette as {r, g, b}. Interpolated

@@ -19,13 +19,11 @@ defmodule EftBuddy.Wiki do
     * `get_quest/1`              — full projected map for one slug
     * `all_quests/0`             — lightweight rows (for the WIP merge)
     * `has_wiki?/1`              — is there any wiki content for this slug
-    * `guide_for/1`              — ordered prose / image blocks
-    * `objective_images_for/1`   — `%{1 => [files], ...}` by objective index
     * `karma_requirements/0`     — `%{slug => {:gte, n} | {:lte, n}}`
 
-  The heavy manifest → render projection lives in
-  `EftBuddy.Wiki.Projection` and runs on demand (per `get_quest/1`), not
-  for every row, so there's no boot-time cache to keep warm.
+  The heavy manifest → render projection lives in `EftBuddy.Wiki.Projection`.
+  `get_quest/1` caches each quest's projection, and `warm_quests/0` builds them
+  all after a sync, so a quest expand never pays for it.
   """
 
   import Ecto.Query
@@ -156,32 +154,6 @@ defmodule EftBuddy.Wiki do
   end
 
   def has_wiki?(_), do: false
-
-  @doc """
-  Ordered list of Guide-section blocks in document order, ready to
-  render (`:heading` / `:prose` / `:gallery`). Empty list when the quest
-  has no Guide section or no manifest at all.
-  """
-  @spec guide_for(String.t()) :: [map()]
-  def guide_for(slug) do
-    case get_quest(slug) do
-      nil -> []
-      %{guide: blocks} -> blocks
-    end
-  end
-
-  @doc """
-  Map from API-objective index (1-based) to the list of wiki file refs
-  anchored to that objective. Empty map for tasks whose wiki Objectives
-  section had no images (the common case).
-  """
-  @spec objective_images_for(String.t()) :: %{integer() => [map()]}
-  def objective_images_for(slug) do
-    case get_quest(slug) do
-      nil -> %{}
-      %{objective_images: map} -> map
-    end
-  end
 
   @doc """
   `%{slug => karma_requirement_tuple}` for every quest with a parsed

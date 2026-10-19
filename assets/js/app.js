@@ -9,9 +9,9 @@
 //               flat 2D/3D renders), styled to the HUD palette.
 //   * imgFallback - CSP-safe <img> error handler (reveals an inline glyph).
 //
-// The LiveView <-> client event names (eft:restore / eft:cookie / eft:store /
-// eft:clear) are the server contract consumed by the OperatorState on_mount
-// and the Tasks/Hideout LiveViews; the implementations below are all new.
+// The LiveView <-> client event names (eft:restore up; eft:cookie, eft:store
+// and eft:reload down) are the contract with `EftBuddyWeb.ClientBridge` and
+// the OperatorState on_mount.
 // =============================================================================
 
 import "phoenix_html"
@@ -90,8 +90,10 @@ function writeProgress(state) {
 }
 
 // Wipe all per-browser state: the localStorage progress blob and the prefs
-// cookie. Shared by the server-driven `eft:clear` event and the operator's
-// own "Reset progress" backup action.
+// cookie. Only the operator's own "Reset progress" calls it. The server never
+// asks for it: there used to be an `eft:clear` push, and it deleted a backup
+// the operator had just imported (see the `{:reset, _}` clause in
+// `EftBuddyWeb.OperatorState`).
 function clearAll() {
   try {
     window.localStorage.removeItem(PROGRESS_KEY)
@@ -209,8 +211,6 @@ const Hud = {
       if (!progress || typeof progress !== "object") return
       writeProgress(mergeProgress(readProgress(), progress))
     })
-
-    this.handleEvent("eft:clear", () => clearAll())
 
     // Another tab reset or imported. Its POST to /session/reset rewrote
     // localStorage and the prefs cookie and rotated the session, so this tab's
@@ -373,9 +373,8 @@ function reloadViaServerReset() {
 }
 
 // =============================================================================
-// SHELL - the three-column console chrome (left nav rail + right operator
-// drawer). The DESKTOP collapse states (rail width / drawer open) are owned by
-// the server and persisted through the cookie bridge, so all this hook manages
+// SHELL - the console chrome (left nav rail + top bar). The DESKTOP rail
+// collapse is owned by the server and persisted through the cookie bridge, so all this hook manages
 // is the MOBILE, off-canvas rail: an ephemeral, client-only overlay that never
 // round-trips. The rail's mobile translate is re-applied on every LiveView
 // patch (via `updated()`) because morphdom would otherwise clobber the inline
@@ -1939,7 +1938,7 @@ const NumberCap = {
 
 // =============================================================================
 // KARMA SLIDER - the scav-karma control in the left rail. A native range input
-// drives the server `set_scav_karma` event (throttled by phx-throttle on the
+// drives the server `set_scav_karma` event (debounced by phx-debounce on the
 // input; the server clamps + persists), while this hook paints the instant
 // visuals: the sign-based fill (green right of centre for positive karma, rust
 // left of it for negative) and the numeric readout. It reads straight off the

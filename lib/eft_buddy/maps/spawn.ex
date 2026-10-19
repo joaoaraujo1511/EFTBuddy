@@ -22,7 +22,6 @@ defmodule EftBuddy.Maps.Spawn do
   """
 
   use Ecto.Schema
-  import Ecto.Changeset
 
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
@@ -41,21 +40,5 @@ defmodule EftBuddy.Maps.Spawn do
     field :pos_z, :float
 
     timestamps()
-  end
-
-  def changeset(spawn, attrs) do
-    spawn
-    |> cast(attrs, [
-      :map_id,
-      :spawn_type,
-      :zone_name,
-      :sides,
-      :categories,
-      :pos_x,
-      :pos_y,
-      :pos_z
-    ])
-    |> validate_required([:map_id, :spawn_type])
-    |> foreign_key_constraint(:map_id)
   end
 end

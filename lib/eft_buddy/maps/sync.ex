@@ -6,10 +6,9 @@ defmodule EftBuddy.Maps.Sync do
   `svg_path` from
   tarkov.dev's `maps.json` (the GraphQL API exposes no map imagery).
 
-  Like `EftBuddy.Tasks.Sync`, this module is **not** a `GenServer` and
-  is **not** scheduled. Maps change only on wipes / patches, so the
-  cold-start `EftBuddy.Sync.Bootstrap` runs it once on boot and a dev
-  can re-run it on demand from IEx:
+  Maps change only on wipes / patches, so it runs on a slow cadence: the
+  cold-start `EftBuddy.Sync.Bootstrap` runs it once on boot, then every 12h on
+  its `EftBuddy.Sync.Scheduler` timer. A dev can re-run it on demand from IEx:
 
       EftBuddy.Maps.Sync.run()
 

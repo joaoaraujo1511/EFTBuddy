@@ -5,7 +5,6 @@ defmodule EftBuddy.Tasks.OfferUnlock do
   """
 
   use Ecto.Schema
-  import Ecto.Changeset
 
   @reward_phases ~w(start finish)a
 
@@ -20,18 +19,5 @@ defmodule EftBuddy.Tasks.OfferUnlock do
     belongs_to :item, EftBuddy.Items.Item
 
     timestamps()
-  end
-
-  def changeset(record, attrs) do
-    record
-    |> cast(attrs, [:level, :reward_phase, :task_id, :trader_id, :item_id])
-    |> validate_required([:level, :reward_phase, :task_id, :trader_id, :item_id])
-    |> validate_number(:level, greater_than_or_equal_to: 1)
-    |> unique_constraint([:task_id, :trader_id, :item_id, :reward_phase],
-      name: :task_offer_unlocks_task_trader_item_phase_index
-    )
-    |> foreign_key_constraint(:task_id)
-    |> foreign_key_constraint(:trader_id)
-    |> foreign_key_constraint(:item_id)
   end
 end

@@ -38,7 +38,6 @@ defmodule EftBuddyWeb.Layouts do
   @bar_l_collapsed "lg:left-[4.5rem]"
 
   attr :flash, :map, required: true
-  attr :current_scope, :map, default: nil
   attr :active, :atom, default: nil
   attr :page_title, :string, default: nil
 

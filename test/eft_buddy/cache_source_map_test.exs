@@ -176,41 +176,16 @@ defmodule EftBuddy.CacheSourceMapTest do
     end
   end
 
-  describe "the ammo split" do
-    test "ballistics and availability are separate entries with different owners" do
+  describe "the ammo rounds" do
+    test "are owned by the ammo and item feeds, not the ten-minute price tick" do
       EftBuddy.Ammo.list_rounds()
 
-      ballistics = sources_for({EftBuddy.Ammo, :ballistics})
-      availability = sources_for({EftBuddy.Ammo, :availability})
-
-      # The whole point of the split: the ten-minute price tick must not be able
-      # to throw away the expensive half.
-      refute "PricesSync" in ballistics
-      assert "PricesSync" in availability
-    end
-
-    test "a price refresh drops availability and leaves ballistics standing" do
-      EftBuddy.Ammo.list_rounds()
-
-      assert Cache.invalidate_source("PricesSync") == 1
-
-      assert Enum.any?(Cache.entries(), &(&1.key == {EftBuddy.Ammo, :ballistics})),
-             "the ten-minute price tick threw away the ballistics half"
-
-      refute Enum.any?(Cache.entries(), &(&1.key == {EftBuddy.Ammo, :availability}))
-    end
-
-    test "a game patch drops both" do
-      EftBuddy.Ammo.list_rounds()
-
-      # ItemsSync owns both halves: it writes the item rows the rounds preload
-      # AND cascades away the buy_for rows availability is derived from.
-      assert Cache.invalidate_source("ItemsSync") == 2
+      assert sources_for({EftBuddy.Ammo, :list_rounds}) == ["AmmoSync", "ItemsSync"]
+      assert Cache.invalidate_source("PricesSync") == 0
+      assert Cache.invalidate_source("ItemsSync") == 1
     end
 
     test "list_rounds returns the same shape whether cached or not" do
-      # The split changed how the result is assembled, so this pins that it did
-      # not change WHAT is assembled.
       Application.put_env(:eft_buddy, :cache_enabled, false)
       uncached = EftBuddy.Ammo.list_rounds()
 
@@ -242,14 +217,17 @@ defmodule EftBuddy.CacheSourceMapTest do
       assert Cache.size() == 0
     end
 
-    test "an unrecognised option opts out rather than minting a new key" do
-      # `list_tasks/1` is a general query builder. Keying on raw opts would key
-      # the table on a space the function cannot bound — the same property that
-      # disqualifies the flea-market reads entirely.
-      EftBuddy.Tasks.list_tasks(preloads: [:trader], trader_slug: "prapor")
-      EftBuddy.Tasks.list_tasks(preloads: [:trader], order_by: [desc: :name])
+    test "an unlisted preload shape opts out rather than minting a new key" do
+      # Keying on the raw preload list would key the table on a space the
+      # function cannot bound — the same property that disqualifies the
+      # flea-market reads entirely.
+      EftBuddy.Tasks.list_tasks(preloads: [:trader, :objectives], game_mode: :pvp)
 
       assert Cache.size() == 0
+    end
+
+    test "an unknown option raises instead of being silently ignored" do
+      assert_raise ArgumentError, fn -> EftBuddy.Tasks.list_tasks(faction: :usec) end
     end
 
     test "different game modes do not collide" do

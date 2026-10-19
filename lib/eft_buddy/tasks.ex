@@ -287,20 +287,19 @@ defmodule EftBuddy.Tasks do
   end
 
   @doc """
-  Lists tasks. Options:
+  Lists tasks, by name. Options:
 
     * `:preloads` — list of associations to preload (defaults to a
       sensible "everything you need to render a row" set; pass `[]`
       for a bare list).
-    * `:trader_slug` — filter by trader `normalized_name`.
-    * `:faction` — `:usec` | `:bear` | nil. When given, returns
-      faction-locked tasks for that faction *plus* faction-neutral
-      tasks (where `faction_name` is `nil`). nil returns everything.
     * `:game_mode` — `:pvp`/`:pve` (or the DB strings). When given,
       returns only that mode's tasks. PVE is a distinct quest graph,
       so omitting this would merge both modes and show every quest
       twice (once per mode).
-    * `:order_by` — defaults to `[asc: :name]`.
+
+  Any other option raises. `:trader_slug`, `:faction` and `:order_by` existed
+  with no caller, and `:faction` dropped every neutral task, because real
+  rows say `"Any"` rather than `nil` (audit L8).
   """
   # Two owners. The tasks are TasksSync's; the `:trader` preload resolves against
   # `EftBuddy.Hideout.Trader`, which HideoutSync writes.
@@ -311,19 +310,19 @@ defmodule EftBuddy.Tasks do
   @cacheable_preloads [[], [:trader]]
 
   def list_tasks(opts \\ []) do
+    opts = Keyword.validate!(opts, [:preloads, :game_mode])
+
     case cache_key(opts) do
       nil -> list_tasks_uncached(opts)
       key -> Cache.fetch(key, @list_tasks_sources, fn -> list_tasks_uncached(opts) end)
     end
   end
 
-  # A WHITELIST, not a key built from `opts`.
+  # A WHITELIST of preload shapes, not a key built from `opts`.
   #
-  # `list_tasks/1` is a general query builder — it accepts `:trader_slug`,
-  # `:faction`, `:order_by` and an arbitrary preload list — so keying the cache
-  # on the raw options would key it on a space this function cannot bound, which
-  # is the exact property that disqualifies the flea-market reads from being
-  # cached at all.
+  # `:preloads` takes an arbitrary association list, so keying the cache on it
+  # would key it on a space this function cannot bound, which is the exact
+  # property that disqualifies the flea-market reads from being cached at all.
   #
   # It would also be a memory trap. The DEFAULT preload set is eleven
   # associations and ~26MB per game mode; nothing in the app calls it that way
@@ -331,24 +330,18 @@ defmodule EftBuddy.Tasks do
   # default is deliberately not cacheable, and adding a shape here is a decision
   # someone has to make on purpose.
   defp cache_key(opts) do
-    {known, rest} = Keyword.split(opts, [:preloads, :game_mode])
-    preloads = Keyword.get(known, :preloads, @default_preloads)
+    preloads = Keyword.get(opts, :preloads, @default_preloads)
 
-    if rest == [] and preloads in @cacheable_preloads do
-      {__MODULE__, :list_tasks, preloads, Keyword.get(known, :game_mode)}
+    if preloads in @cacheable_preloads do
+      {__MODULE__, :list_tasks, preloads, Keyword.get(opts, :game_mode)}
     end
   end
 
   defp list_tasks_uncached(opts) do
-    preloads = Keyword.get(opts, :preloads, @default_preloads)
-    order = Keyword.get(opts, :order_by, asc: :name)
-
     Task
-    |> maybe_filter_by_trader(opts[:trader_slug])
-    |> maybe_filter_by_faction(opts[:faction])
     |> maybe_filter_by_game_mode(opts[:game_mode])
-    |> order_by(^order)
-    |> preload(^preloads)
+    |> order_by(asc: :name)
+    |> preload(^Keyword.get(opts, :preloads, @default_preloads))
     |> Repo.all()
   end
 
@@ -357,29 +350,6 @@ defmodule EftBuddy.Tasks do
   defp maybe_filter_by_game_mode(query, game_mode) do
     db = EftBuddy.GameMode.to_db(game_mode)
     from(t in query, where: t.game_mode == ^db)
-  end
-
-  defp maybe_filter_by_trader(query, nil), do: query
-
-  defp maybe_filter_by_trader(query, slug) when is_binary(slug) do
-    from(t in query,
-      join: tr in assoc(t, :trader),
-      where: tr.normalized_name == ^slug
-    )
-  end
-
-  defp maybe_filter_by_faction(query, nil), do: query
-
-  defp maybe_filter_by_faction(query, faction) when faction in [:usec, :bear] do
-    # The API stores faction names uppercase ("USEC" / "BEAR").
-    # Match faction-locked tasks for the given faction *and*
-    # faction-neutral tasks (factionName: null), since most quests
-    # are doable by either faction.
-    name = faction |> Atom.to_string() |> String.upcase()
-
-    from(t in query,
-      where: is_nil(t.faction_name) or t.faction_name == ^name
-    )
   end
 
   # ── Availability inputs ────────────────────────────────

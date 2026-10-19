@@ -8,7 +8,6 @@ defmodule EftBuddy.Tasks.ItemReward do
   """
 
   use Ecto.Schema
-  import Ecto.Changeset
 
   @reward_phases ~w(start finish)a
 
@@ -22,18 +21,6 @@ defmodule EftBuddy.Tasks.ItemReward do
     belongs_to :item, EftBuddy.Items.Item
 
     timestamps()
-  end
-
-  def changeset(record, attrs) do
-    record
-    |> cast(attrs, [:quantity, :reward_phase, :task_id, :item_id])
-    |> validate_required([:quantity, :reward_phase, :task_id, :item_id])
-    |> validate_number(:quantity, greater_than: 0)
-    |> unique_constraint([:task_id, :item_id, :reward_phase],
-      name: :task_item_rewards_task_item_phase_index
-    )
-    |> foreign_key_constraint(:task_id)
-    |> foreign_key_constraint(:item_id)
   end
 
   def reward_phases, do: @reward_phases

@@ -37,11 +37,6 @@ defmodule EftBuddy.Credits do
   @spec profile_url(String.t()) :: String.t()
   def profile_url(name) when is_binary(name), do: Url.page("UserProfile:" <> name)
 
-  @doc "The contributor's uploads, linked from the per-image credit."
-  @spec uploads_url(String.t()) :: String.t()
-  def uploads_url(name) when is_binary(name),
-    do: Url.page("Special:ListFiles/" <> name)
-
   @doc """
   Split names into a first page and the remainder for an inline credit popup.
 

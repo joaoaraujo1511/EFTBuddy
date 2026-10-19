@@ -13,7 +13,6 @@ defmodule EftBuddy.Tasks.Task do
   """
 
   use Ecto.Schema
-  import Ecto.Changeset
 
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
@@ -61,34 +60,5 @@ defmodule EftBuddy.Tasks.Task do
     has_many :offer_unlocks, EftBuddy.Tasks.OfferUnlock, foreign_key: :task_id
 
     timestamps()
-  end
-
-  def changeset(task, attrs) do
-    task
-    |> cast(attrs, [
-      :external_id,
-      :name,
-      :normalized_name,
-      :game_mode,
-      :wiki_link,
-      :task_image_link,
-      :faction_name,
-      :experience,
-      :min_player_level,
-      :kappa_required,
-      :lightkeeper_required,
-      :restartable,
-      :trader_id,
-      :map_id
-    ])
-    |> validate_required([:external_id, :name, :normalized_name, :game_mode])
-    |> unique_constraint([:external_id, :game_mode],
-      name: :tasks_external_id_game_mode_index
-    )
-    |> unique_constraint([:normalized_name, :game_mode],
-      name: :tasks_normalized_name_game_mode_index
-    )
-    |> foreign_key_constraint(:trader_id)
-    |> foreign_key_constraint(:map_id)
   end
 end

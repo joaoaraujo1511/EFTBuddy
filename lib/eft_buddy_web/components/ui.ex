@@ -351,28 +351,6 @@ defmodule EftBuddyWeb.UI do
     Map.get(item, :tone) || if active?, do: :amber, else: :neutral
   end
 
-  # ── Stat readout ───────────────────────────────────────────────────
-
-  @doc "A labelled numeric/text readout (label above, value below)."
-  attr :label, :string, required: true
-  attr :value, :any, required: true
-  attr :accent, :boolean, default: false
-  attr :class, :any, default: nil
-
-  def stat(assigns) do
-    ~H"""
-    <div class={["min-w-0", @class]}>
-      <div class="t-label text-[9px] text-fog-500">{@label}</div>
-      <div class={[
-        "t-num text-base mt-0.5 truncate",
-        if(@accent, do: "text-amber", else: "text-fog-100")
-      ]}>
-        {@value}
-      </div>
-    </div>
-    """
-  end
-
   # ── Tab bar (deployment strip) ─────────────────────────────────────
 
   @doc """
@@ -770,27 +748,6 @@ defmodule EftBuddyWeb.UI do
       "The background sync couldn't populate this page. This is usually temporary - retry in a moment."
 
   defp standby_message(_), do: "Data is loading in the background. Refresh shortly."
-
-  # ── Loading sentinel for infinite scroll ───────────────────────────
-
-  @doc "An infinite-scroll sentinel row. Renders nothing once `done?`."
-  attr :done?, :boolean, default: false
-  attr :event, :string, default: "load_more"
-
-  def scroll_sentinel(assigns) do
-    ~H"""
-    <div
-      :if={not @done?}
-      phx-click={@event}
-      phx-viewport-bottom={@event}
-      class="py-8 flex items-center justify-center"
-    >
-      <span class="t-label text-[10px] text-fog-600 inline-flex items-center gap-2">
-        <span class="h-1.5 w-1.5 rounded-full bg-amber hud-pulse"></span> Loading more
-      </span>
-    </div>
-    """
-  end
 
   # ── Item icon tile (shared across Items/Tasks/Hideout/Storyline) ───
 

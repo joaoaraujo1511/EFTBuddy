@@ -100,26 +100,6 @@ defmodule EftBuddy.Sync.ReporterStatusTest do
     end
   end
 
-  describe "consecutive_skips" do
-    test "counts a run of skips and resets on any other outcome" do
-      # "skipped once on a cold start" and "has skipped forty times in a row" are
-      # otherwise the same record, and only the second is worth waking up for.
-      assert record("ProbeSync", {:skip, "a"}).consecutive_skips == 1
-      assert record("ProbeSync", {:skip, "b"}).consecutive_skips == 2
-      assert record("ProbeSync", {:ok, %{}}).consecutive_skips == 0
-      assert record("ProbeSync", {:skip, "c"}).consecutive_skips == 1
-      assert record("ProbeSync", {:error, :boom}).consecutive_skips == 0
-    end
-
-    test "is tracked per label, not globally" do
-      record("ProbeSync", {:skip, "a"})
-      record("OtherSync", {:skip, "a"})
-
-      assert Reporter.status()["ProbeSync"].consecutive_skips == 1
-      assert Reporter.status()["OtherSync"].consecutive_skips == 1
-    end
-  end
-
   describe "consecutive_failures" do
     test "counts failed runs in a row and resets on anything else" do
       # What `Freshness` reads: one failure does not fail readiness, two in a row do.

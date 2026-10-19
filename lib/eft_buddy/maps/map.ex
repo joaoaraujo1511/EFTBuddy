@@ -16,7 +16,6 @@ defmodule EftBuddy.Maps.Map do
   """
 
   use Ecto.Schema
-  import Ecto.Changeset
 
   alias EftBuddy.Maps.{
     AccessKey,
@@ -95,43 +94,5 @@ defmodule EftBuddy.Maps.Map do
     has_many :switches, Switch, foreign_key: :map_id
 
     timestamps()
-  end
-
-  def changeset(map, attrs) do
-    map
-    |> cast(attrs, [
-      :external_id,
-      :name,
-      :normalized_name,
-      :tarkov_data_id,
-      :name_id,
-      :wiki,
-      :svg_path,
-      :image_variants,
-      :description,
-      :enemies,
-      :raid_duration,
-      :players,
-      :min_player_level,
-      :max_player_level,
-      :access_keys_min_player_level,
-      :projection,
-      :transform,
-      :coordinate_rotation,
-      :bounds,
-      :svg_bounds,
-      :min_zoom,
-      :max_zoom,
-      :tile_size,
-      :tile_path,
-      :height_range,
-      :layers,
-      :labels,
-      :image_author,
-      :image_author_link
-    ])
-    |> validate_required([:external_id, :name, :normalized_name])
-    |> unique_constraint(:external_id)
-    |> unique_constraint(:normalized_name)
   end
 end

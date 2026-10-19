@@ -4,10 +4,9 @@ defmodule EftBuddy.Tasks.Sync do
   requirements / rewards from the tarkov.dev JSON API (via
   `EftBuddy.TarkovApi`) into the local database.
 
-  Unlike `EftBuddy.Items.Sync`, this module is **not** a
-  `GenServer` and is **not** scheduled. Tasks
-  change only on wipes / patches, so we trigger the sync manually
-  from a remote IEx shell:
+  It wears `EftBuddy.Sync.Scheduler`: the cold-start `EftBuddy.Sync.Bootstrap`
+  runs it once on boot, and it re-runs every 6h after that. It can also be run
+  on demand from a remote IEx shell:
 
       EftBuddy.Tasks.Sync.run()
 
@@ -27,7 +26,7 @@ defmodule EftBuddy.Tasks.Sync do
   through and take the whole `Ecto.Multi` down with it — every run, until
   upstream renames again. Seen in the wild on 2026-08-27. The mechanism,
   the evidence and the two candidate fixes are written up in full at the
-  `bulk_upsert` call in `upsert_tasks/3`; read that before touching the
+  `bulk_upsert` call in `upsert_tasks/4`; read that before touching the
   conflict target or the `replace` list.
   """
 
@@ -297,9 +296,9 @@ defmodule EftBuddy.Tasks.Sync do
       # guard a task referencing one would re-create a bare row that leaks onto
       # the Maps tab.
       #
-      # Task *links* to those slugs are not lost, though — `objective_maps/2`
-      # and `task_map_id/2` resolve them through `Maps.alias_slug/1` onto the
-      # canonical map.
+      # Task *links* to those slugs are not lost, though —
+      # `map_id_map_with_aliases/2` resolves them through `Maps.alias_slug/1`
+      # onto the canonical map.
       |> Enum.reject(&(&1["normalizedName"] in EftBuddy.Maps.excluded_slugs()))
       |> Enum.map(fn m ->
         %{

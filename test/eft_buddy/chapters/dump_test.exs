@@ -40,24 +40,6 @@ defmodule EftBuddy.Chapters.DumpTest do
     end
   end
 
-  describe "select_chapters/2" do
-    setup do
-      %{chapters: Dump.build_chapters(["Boreas", "Tour"])}
-    end
-
-    test "nil selection returns the full list", %{chapters: chapters} do
-      assert Dump.select_chapters(chapters, nil) == chapters
-    end
-
-    test "a known slug narrows to that one chapter", %{chapters: chapters} do
-      assert [%{normalized_name: "boreas"}] = Dump.select_chapters(chapters, "boreas")
-    end
-
-    test "an unknown slug is reported, not silently empty", %{chapters: chapters} do
-      assert Dump.select_chapters(chapters, "nope") == {:unrecognized, "nope"}
-    end
-  end
-
   describe "parse_sections/1" do
     setup do
       parsed =

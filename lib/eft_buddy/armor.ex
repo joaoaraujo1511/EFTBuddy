@@ -55,9 +55,6 @@ defmodule EftBuddy.Armor do
     end)
   end
 
-  @doc "The sortable plate column keys (the `col` values `sort_header/1` emits)."
-  def sort_columns, do: Map.keys(@sort_columns)
-
   @doc false
   def sort_atoms, do: @sort_atoms
 

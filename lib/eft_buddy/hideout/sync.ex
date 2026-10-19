@@ -4,11 +4,10 @@ defmodule EftBuddy.Hideout.Sync do
   prerequisite stations / skills / traders) from the tarkov.dev JSON
   API (via `EftBuddy.TarkovApi`) into the local database.
 
-  Like `EftBuddy.Tasks.Sync`, this module is **not** a `GenServer`
-  and is **not** scheduled. Hideout data only changes on patches /
-  wipes, so the sync runs once at boot via
-  `EftBuddy.Sync.Bootstrap` and can be re-triggered manually from
-  a remote IEx shell when needed:
+  Hideout data only changes on patches / wipes, so it runs on a slow cadence:
+  once at boot via `EftBuddy.Sync.Bootstrap`, then every 12h on its
+  `EftBuddy.Sync.Scheduler` timer. It can be re-triggered from a remote IEx
+  shell when needed:
 
       EftBuddy.Hideout.Sync.run()
 

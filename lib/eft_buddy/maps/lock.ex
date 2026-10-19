@@ -7,7 +7,6 @@ defmodule EftBuddy.Maps.Lock do
   """
 
   use Ecto.Schema
-  import Ecto.Changeset
 
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
@@ -30,22 +29,5 @@ defmodule EftBuddy.Maps.Lock do
     field :pos_z, :float
 
     timestamps()
-  end
-
-  def changeset(lock, attrs) do
-    lock
-    |> cast(attrs, [
-      :map_id,
-      :lock_type,
-      :needs_power,
-      :key_item_id,
-      :count,
-      :pos_x,
-      :pos_y,
-      :pos_z
-    ])
-    |> validate_required([:map_id])
-    |> foreign_key_constraint(:map_id)
-    |> foreign_key_constraint(:key_item_id)
   end
 end

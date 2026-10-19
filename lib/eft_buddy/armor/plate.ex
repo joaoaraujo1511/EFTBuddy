@@ -10,7 +10,6 @@ defmodule EftBuddy.Armor.Plate do
   """
 
   use Ecto.Schema
-  import Ecto.Changeset
 
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
@@ -35,29 +34,5 @@ defmodule EftBuddy.Armor.Plate do
     belongs_to :item, EftBuddy.Items.Item
 
     timestamps()
-  end
-
-  @doc """
-  Changeset for creating/updating a plate from API data.
-  """
-  def changeset(plate, attrs) do
-    plate
-    |> cast(attrs, [
-      :external_id,
-      :item_id,
-      :class,
-      :durability,
-      :material,
-      :armor_type,
-      :blunt_throughput,
-      :speed_penalty,
-      :turn_penalty,
-      :ergo_penalty,
-      :repair_cost
-    ])
-    |> validate_required([:external_id, :class, :durability, :material, :armor_type])
-    |> unique_constraint(:external_id)
-    |> unique_constraint(:item_id)
-    |> foreign_key_constraint(:item_id)
   end
 end

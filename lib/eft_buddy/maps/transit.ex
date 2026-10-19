@@ -7,7 +7,6 @@ defmodule EftBuddy.Maps.Transit do
   """
 
   use Ecto.Schema
-  import Ecto.Changeset
 
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
@@ -28,23 +27,5 @@ defmodule EftBuddy.Maps.Transit do
     field :pos_z, :float
 
     timestamps()
-  end
-
-  def changeset(transit, attrs) do
-    transit
-    |> cast(attrs, [
-      :map_id,
-      :external_id,
-      :description,
-      :conditions,
-      :destination_map_id,
-      :pos_x,
-      :pos_y,
-      :pos_z
-    ])
-    |> validate_required([:map_id, :external_id])
-    |> unique_constraint([:map_id, :external_id])
-    |> foreign_key_constraint(:map_id)
-    |> foreign_key_constraint(:destination_map_id)
   end
 end
