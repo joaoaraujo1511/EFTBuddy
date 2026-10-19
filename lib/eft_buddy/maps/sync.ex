@@ -67,6 +67,7 @@ defmodule EftBuddy.Maps.Sync do
     Spawn,
     StationaryWeapon,
     Switch,
+    MapModeDetail,
     Transit,
     Variant
   }
@@ -85,14 +86,27 @@ defmodule EftBuddy.Maps.Sync do
   @impl EftBuddy.Sync.Scheduler
   def do_run do
     Reporter.with_run("MapsSync", fn ->
-      case fetch_maps() do
-        {:ok, raw_maps} ->
-          maps = sanitize(raw_maps)
+      # Every mode's document, each fetched once. The default mode's supplies
+      # the maps' identity; each mode supplies its own sub-entities and details.
+      fetched =
+        EftBuddy.TarkovApi.with_run_cache(fn ->
+          Map.new(EftBuddy.GameMode.all(), &{&1, fetch_maps(&1)})
+        end)
+
+      case fetched[EftBuddy.GameMode.default()] do
+        {:ok, _} ->
+          by_mode = for {mode, {:ok, raw}} <- fetched, into: %{}, do: {mode, sanitize(raw)}
+          failed = for {mode, {:error, reason}} <- fetched, do: {mode, reason}
           media = fetch_map_media()
 
-          case upsert_all(maps, media) do
-            {:ok, counts} ->
+          case upsert_all(by_mode, media) do
+            {:ok, counts} when failed == [] ->
               {:ok, counts}
+
+            # Like Tasks and Prices: the modes that arrived are written, and a
+            # mode that didn't fails the run, so `/health/sync` sees it.
+            {:ok, counts} ->
+              {:error, {:partial, [{EftBuddy.GameMode.default(), counts}], failed}}
 
             {:error, _, reason, _} ->
               Logger.error("[#{prefix()}] Multi failed: #{Reporter.describe_error(reason)}")
@@ -119,8 +133,8 @@ defmodule EftBuddy.Maps.Sync do
 
   # ── Fetch ──────────────────────────────────────────────
 
-  defp fetch_maps do
-    EftBuddy.TarkovApi.maps()
+  defp fetch_maps(game_mode) do
+    EftBuddy.TarkovApi.maps(game_mode)
   end
 
   # Best-effort fetch of tarkov.dev's frontend `maps.json` to recover the
@@ -130,14 +144,23 @@ defmodule EftBuddy.Maps.Sync do
   # `image_variants`. Any failure (network, shape drift) degrades to an
   # empty map and the sync proceeds without images — the page just shows
   # no viewer.
+  #
+  # Goes through `:tarkov_req_options` like every tarkov.dev request, so tests
+  # serve it from a fixture instead of reaching GitHub.
   defp fetch_map_media do
-    case Req.get(@maps_json_url,
-           receive_timeout: @http_timeout,
-           connect_options: [timeout: 5_000],
-           retry: &retry_transient?/2,
-           max_retries: 2,
-           headers: [{"user-agent", "EftBuddy/1.0 (+maps-sync)"}]
-         ) do
+    opts =
+      Keyword.merge(
+        [
+          receive_timeout: @http_timeout,
+          connect_options: [timeout: 5_000],
+          retry: &retry_transient?/2,
+          max_retries: 2,
+          headers: [{"user-agent", "EftBuddy/1.0 (+maps-sync)"}]
+        ],
+        Application.get_env(:eft_buddy, :tarkov_req_options, [])
+      )
+
+    case Req.get(@maps_json_url, opts) do
       {:ok, %{status: 200, body: body}} ->
         # raw.githubusercontent serves the file as text/plain, so Req
         # doesn't auto-decode it — handle both decoded and raw bodies.
@@ -520,7 +543,9 @@ defmodule EftBuddy.Maps.Sync do
 
   # ── Pipeline ───────────────────────────────────────────
 
-  defp upsert_all(maps, media) do
+  defp upsert_all(by_mode, media) do
+    maps = Map.fetch!(by_mode, EftBuddy.GameMode.default())
+
     Ecto.Multi.new()
     # Item id map (FK target — items already populated by Items.Sync).
     |> Ecto.Multi.run(:item_id_map, fn repo, _ ->
@@ -538,28 +563,9 @@ defmodule EftBuddy.Maps.Sync do
     |> Ecto.Multi.run(:map_id_map, fn repo, _ ->
       {:ok, fetch_external_id_map(repo, GameMap)}
     end)
-    # 2. Raid variants (Factory day / night). Must precede bosses, which key
-    #    their `variant_id` off the ids this step generates.
-    |> Ecto.Multi.run(:replace_variants, fn repo, ctx -> replace_variants(repo, maps, ctx) end)
-    # 3. Replace every map's sub-entity rows.
-    |> Ecto.Multi.run(:replace_bosses, fn repo, ctx -> replace_bosses(repo, maps, ctx) end)
-    |> Ecto.Multi.run(:replace_extracts, fn repo, ctx -> replace_extracts(repo, maps, ctx) end)
-    |> Ecto.Multi.run(:replace_transits, fn repo, ctx -> replace_transits(repo, maps, ctx) end)
-    |> Ecto.Multi.run(:replace_locks, fn repo, ctx -> replace_locks(repo, maps, ctx) end)
-    |> Ecto.Multi.run(:replace_hazards, fn repo, ctx -> replace_hazards(repo, maps, ctx) end)
-    |> Ecto.Multi.run(:replace_spawns, fn repo, ctx -> replace_spawns(repo, maps, ctx) end)
-    |> Ecto.Multi.run(:replace_loot_containers, fn repo, ctx ->
-      replace_loot_containers(repo, maps, ctx)
-    end)
-    |> Ecto.Multi.run(:replace_stationary_weapons, fn repo, ctx ->
-      replace_stationary_weapons(repo, maps, ctx)
-    end)
-    |> Ecto.Multi.run(:replace_switches, fn repo, ctx ->
-      replace_switches(repo, maps, ctx)
-    end)
-    |> Ecto.Multi.run(:replace_access_keys, fn repo, ctx ->
-      replace_access_keys(repo, maps, ctx)
-    end)
+    # 2-3. Each mode's variants, details and sub-entity rows, from that mode's
+    #      own document.
+    |> replace_mode_data(by_mode)
     # 4. Drop maps that disappeared from the snapshot (cascades children).
     |> Ecto.Multi.run(:cleanup, fn repo, %{reference: reference} ->
       cleanup_stale(repo, maps, reference)
@@ -578,7 +584,8 @@ defmodule EftBuddy.Maps.Sync do
          loot_containers: repo.aggregate(LootContainer, :count, :id),
          stationary_weapons: repo.aggregate(StationaryWeapon, :count, :id),
          switches: repo.aggregate(Switch, :count, :id),
-         access_keys: repo.aggregate(AccessKey, :count, :id)
+         access_keys: repo.aggregate(AccessKey, :count, :id),
+         mode_details: repo.aggregate(MapModeDetail, :count, :id)
        }}
     end)
     |> Repo.transaction(timeout: 180_000)
@@ -586,6 +593,67 @@ defmodule EftBuddy.Maps.Sync do
       {:ok, %{counts: counts}} -> {:ok, counts}
       other -> other
     end
+  end
+
+  # ── Per-mode data ──────────────────────────────────────
+
+  # One transaction step per mode that arrived. Variants come first: bosses key
+  # their `variant_id` off the ids that step generates.
+  defp replace_mode_data(multi, by_mode) do
+    Enum.reduce(by_mode, multi, fn {game_mode, maps}, multi ->
+      Ecto.Multi.run(multi, {:mode_data, game_mode}, fn repo, ctx ->
+        ctx = Map.put(ctx, :game_mode, game_mode)
+        {:ok, variant_ids} = replace_variants(repo, maps, ctx)
+        ctx = Map.put(ctx, :replace_variants, variant_ids)
+
+        for step <- [
+              &replace_mode_details/3,
+              &replace_bosses/3,
+              &replace_extracts/3,
+              &replace_transits/3,
+              &replace_locks/3,
+              &replace_hazards/3,
+              &replace_spawns/3,
+              &replace_loot_containers/3,
+              &replace_stationary_weapons/3,
+              &replace_switches/3,
+              &replace_access_keys/3
+            ],
+            do: {:ok, _} = step.(repo, maps, ctx)
+
+        {:ok, game_mode}
+      end)
+    end)
+  end
+
+  # The attributes upstream publishes per mode, overlaid onto the map by
+  # `EftBuddy.Maps` for the active mode.
+  defp replace_mode_details(repo, maps, ctx) do
+    %{map_id_map: map_ids, game_mode: game_mode} = ctx
+    now = now_naive()
+
+    rows =
+      for m <- maps, map_id = Map.get(map_ids, m["id"]), not is_nil(map_id) do
+        %{
+          id: Ecto.UUID.generate(),
+          map_id: map_id,
+          game_mode: game_mode,
+          enemies: List.wrap(m["enemies"]),
+          raid_duration: m["raidDuration"],
+          players: m["players"],
+          min_player_level: m["minPlayerLevel"],
+          max_player_level: m["maxPlayerLevel"],
+          access_keys_min_player_level: m["accessKeysMinPlayerLevel"],
+          inserted_at: now,
+          updated_at: now
+        }
+      end
+      |> Enum.uniq_by(& &1.map_id)
+
+    bulk_upsert(repo, MapModeDetail, rows,
+      conflict_target: [:map_id, :game_mode],
+      replace: MapModeDetail.overlay_fields() ++ [:updated_at]
+    )
   end
 
   # ── Maps ───────────────────────────────────────────────
@@ -611,12 +679,6 @@ defmodule EftBuddy.Maps.Sync do
           svg_path: Map.get(map_media, :svg_path),
           image_variants: Map.get(map_media, :image_variants) || %{},
           description: m["description"],
-          enemies: List.wrap(m["enemies"]),
-          raid_duration: m["raidDuration"],
-          players: m["players"],
-          min_player_level: m["minPlayerLevel"],
-          max_player_level: m["maxPlayerLevel"],
-          access_keys_min_player_level: m["accessKeysMinPlayerLevel"],
           projection: Map.get(rendering, :projection),
           transform: Map.get(rendering, :transform),
           coordinate_rotation: Map.get(rendering, :coordinate_rotation),
@@ -647,12 +709,6 @@ defmodule EftBuddy.Maps.Sync do
         :svg_path,
         :image_variants,
         :description,
-        :enemies,
-        :raid_duration,
-        :players,
-        :min_player_level,
-        :max_player_level,
-        :access_keys_min_player_level,
         :projection,
         :transform,
         :coordinate_rotation,
@@ -680,7 +736,7 @@ defmodule EftBuddy.Maps.Sync do
   defp replace_variants(repo, maps, ctx) do
     %{map_id_map: map_ids} = ctx
     map_uuids = resolve_map_uuids(maps, map_ids)
-    delete_in_chunks(repo, Variant, :map_id, map_uuids)
+    delete_in_chunks(repo, Variant, :map_id, map_uuids, ctx.game_mode)
 
     now = now_naive()
 
@@ -693,7 +749,7 @@ defmodule EftBuddy.Maps.Sync do
         {{map_id, payload["normalizedName"]}, variant_row(id, map_id, payload, spec, now)}
       end
 
-    _ = bulk_insert(repo, Variant, Enum.map(prepared, &elem(&1, 1)))
+    _ = bulk_insert(repo, Variant, ctx.game_mode, Enum.map(prepared, &elem(&1, 1)))
 
     {:ok, Map.new(prepared, fn {key, row} -> {key, row.id} end)}
   end
@@ -733,7 +789,7 @@ defmodule EftBuddy.Maps.Sync do
   defp replace_bosses(repo, maps, ctx) do
     %{map_id_map: map_ids, replace_variants: variant_ids} = ctx
     map_uuids = resolve_map_uuids(maps, map_ids)
-    delete_in_chunks(repo, Boss, :map_id, map_uuids)
+    delete_in_chunks(repo, Boss, :map_id, map_uuids, ctx.game_mode)
 
     now = now_naive()
 
@@ -753,7 +809,7 @@ defmodule EftBuddy.Maps.Sync do
         |> Enum.map(fn {row, i} -> Map.put(row, :position, i) end)
       end)
 
-    {:ok, bulk_insert(repo, Boss, rows)}
+    {:ok, bulk_insert(repo, Boss, ctx.game_mode, rows)}
   end
 
   defp boss_row(map_id, variant_id, b, now) do
@@ -851,7 +907,7 @@ defmodule EftBuddy.Maps.Sync do
   defp replace_extracts(repo, maps, ctx) do
     %{map_id_map: map_ids, item_id_map: items} = ctx
     map_uuids = resolve_map_uuids(maps, map_ids)
-    delete_in_chunks(repo, Extract, :map_id, map_uuids)
+    delete_in_chunks(repo, Extract, :map_id, map_uuids, ctx.game_mode)
 
     now = now_naive()
 
@@ -879,7 +935,7 @@ defmodule EftBuddy.Maps.Sync do
         end)
       end)
 
-    {:ok, bulk_insert(repo, Extract, rows)}
+    {:ok, bulk_insert(repo, Extract, ctx.game_mode, rows)}
   end
 
   # ── Transits ───────────────────────────────────────────
@@ -887,7 +943,7 @@ defmodule EftBuddy.Maps.Sync do
   defp replace_transits(repo, maps, ctx) do
     %{map_id_map: map_ids} = ctx
     map_uuids = resolve_map_uuids(maps, map_ids)
-    delete_in_chunks(repo, Transit, :map_id, map_uuids)
+    delete_in_chunks(repo, Transit, :map_id, map_uuids, ctx.game_mode)
 
     now = now_naive()
 
@@ -916,7 +972,7 @@ defmodule EftBuddy.Maps.Sync do
         end)
       end)
 
-    {:ok, bulk_insert(repo, Transit, rows)}
+    {:ok, bulk_insert(repo, Transit, ctx.game_mode, rows)}
   end
 
   # ── Locks ──────────────────────────────────────────────
@@ -926,7 +982,7 @@ defmodule EftBuddy.Maps.Sync do
   defp replace_locks(repo, maps, ctx) do
     %{map_id_map: map_ids, item_id_map: items} = ctx
     map_uuids = resolve_map_uuids(maps, map_ids)
-    delete_in_chunks(repo, Lock, :map_id, map_uuids)
+    delete_in_chunks(repo, Lock, :map_id, map_uuids, ctx.game_mode)
 
     now = now_naive()
 
@@ -951,7 +1007,7 @@ defmodule EftBuddy.Maps.Sync do
         end)
       end)
 
-    {:ok, bulk_insert(repo, Lock, rows)}
+    {:ok, bulk_insert(repo, Lock, ctx.game_mode, rows)}
   end
 
   # ── Hazards ────────────────────────────────────────────
@@ -959,7 +1015,7 @@ defmodule EftBuddy.Maps.Sync do
   defp replace_hazards(repo, maps, ctx) do
     %{map_id_map: map_ids} = ctx
     map_uuids = resolve_map_uuids(maps, map_ids)
-    delete_in_chunks(repo, Hazard, :map_id, map_uuids)
+    delete_in_chunks(repo, Hazard, :map_id, map_uuids, ctx.game_mode)
 
     now = now_naive()
 
@@ -982,7 +1038,7 @@ defmodule EftBuddy.Maps.Sync do
         end)
       end)
 
-    {:ok, bulk_insert(repo, Hazard, rows)}
+    {:ok, bulk_insert(repo, Hazard, ctx.game_mode, rows)}
   end
 
   # ── Spawns ─────────────────────────────────────────────
@@ -1001,7 +1057,7 @@ defmodule EftBuddy.Maps.Sync do
   defp replace_spawns(repo, maps, ctx) do
     %{map_id_map: map_ids} = ctx
     map_uuids = resolve_map_uuids(maps, map_ids)
-    delete_in_chunks(repo, Spawn, :map_id, map_uuids)
+    delete_in_chunks(repo, Spawn, :map_id, map_uuids, ctx.game_mode)
 
     now = now_naive()
 
@@ -1031,7 +1087,7 @@ defmodule EftBuddy.Maps.Sync do
         end)
       end)
 
-    {:ok, bulk_insert(repo, Spawn, rows)}
+    {:ok, bulk_insert(repo, Spawn, ctx.game_mode, rows)}
   end
 
   @doc false
@@ -1062,7 +1118,7 @@ defmodule EftBuddy.Maps.Sync do
   defp replace_loot_containers(repo, maps, ctx) do
     %{map_id_map: map_ids} = ctx
     map_uuids = resolve_map_uuids(maps, map_ids)
-    delete_in_chunks(repo, LootContainer, :map_id, map_uuids)
+    delete_in_chunks(repo, LootContainer, :map_id, map_uuids, ctx.game_mode)
 
     now = now_naive()
 
@@ -1085,7 +1141,7 @@ defmodule EftBuddy.Maps.Sync do
         end)
       end)
 
-    {:ok, bulk_insert(repo, LootContainer, rows)}
+    {:ok, bulk_insert(repo, LootContainer, ctx.game_mode, rows)}
   end
 
   # ── Stationary weapons ─────────────────────────────────
@@ -1093,7 +1149,7 @@ defmodule EftBuddy.Maps.Sync do
   defp replace_stationary_weapons(repo, maps, ctx) do
     %{map_id_map: map_ids} = ctx
     map_uuids = resolve_map_uuids(maps, map_ids)
-    delete_in_chunks(repo, StationaryWeapon, :map_id, map_uuids)
+    delete_in_chunks(repo, StationaryWeapon, :map_id, map_uuids, ctx.game_mode)
 
     now = now_naive()
 
@@ -1113,7 +1169,7 @@ defmodule EftBuddy.Maps.Sync do
         end)
       end)
 
-    {:ok, bulk_insert(repo, StationaryWeapon, rows)}
+    {:ok, bulk_insert(repo, StationaryWeapon, ctx.game_mode, rows)}
   end
 
   # ── Switches ───────────────────────────────────────────
@@ -1121,7 +1177,7 @@ defmodule EftBuddy.Maps.Sync do
   defp replace_switches(repo, maps, ctx) do
     %{map_id_map: map_ids} = ctx
     map_uuids = resolve_map_uuids(maps, map_ids)
-    delete_in_chunks(repo, Switch, :map_id, map_uuids)
+    delete_in_chunks(repo, Switch, :map_id, map_uuids, ctx.game_mode)
 
     now = now_naive()
 
@@ -1141,14 +1197,14 @@ defmodule EftBuddy.Maps.Sync do
         end)
       end)
 
-    {:ok, bulk_insert(repo, Switch, rows)}
+    {:ok, bulk_insert(repo, Switch, ctx.game_mode, rows)}
   end
 
   # ── Access keys ────────────────────────────────────────
   defp replace_access_keys(repo, maps, ctx) do
     %{map_id_map: map_ids, item_id_map: items} = ctx
     map_uuids = resolve_map_uuids(maps, map_ids)
-    delete_in_chunks(repo, AccessKey, :map_id, map_uuids)
+    delete_in_chunks(repo, AccessKey, :map_id, map_uuids, ctx.game_mode)
 
     now = now_naive()
 
@@ -1171,7 +1227,7 @@ defmodule EftBuddy.Maps.Sync do
         end)
       end)
 
-    {:ok, bulk_insert(repo, AccessKey, rows)}
+    {:ok, bulk_insert(repo, AccessKey, ctx.game_mode, rows)}
   end
 
   # ── Cleanup ────────────────────────────────────────────
@@ -1255,6 +1311,9 @@ defmodule EftBuddy.Maps.Sync do
     {:ok, total}
   end
 
+  defp bulk_insert(repo, schema, game_mode, rows),
+    do: bulk_insert(repo, schema, Enum.map(rows, &Map.put(&1, :game_mode, game_mode)))
+
   defp bulk_insert(_repo, _schema, []), do: 0
 
   defp bulk_insert(repo, schema, rows) do
@@ -1266,13 +1325,15 @@ defmodule EftBuddy.Maps.Sync do
     end)
   end
 
-  defp delete_in_chunks(_repo, _schema, _field, []), do: :ok
+  # Map sub-entities are per game mode: replacing one mode's rows must never
+  # touch the other's.
+  defp delete_in_chunks(_repo, _schema, _field, [], _game_mode), do: :ok
 
-  defp delete_in_chunks(repo, schema, field, ids) do
+  defp delete_in_chunks(repo, schema, field, ids, game_mode) do
     ids
     |> Enum.chunk_every(10_000)
     |> Enum.each(fn chunk ->
-      from(r in schema, where: field(r, ^field) in ^chunk)
+      from(r in schema, where: field(r, ^field) in ^chunk and r.game_mode == ^game_mode)
       |> repo.delete_all()
     end)
   end

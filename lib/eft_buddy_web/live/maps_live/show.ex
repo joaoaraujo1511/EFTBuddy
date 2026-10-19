@@ -18,7 +18,7 @@ defmodule EftBuddyWeb.MapsLive.Show do
 
   @impl true
   def mount(%{"slug" => slug}, _session, socket) do
-    case Maps.get_map_by_slug(slug) do
+    case Maps.get_map_by_slug(slug, socket.assigns.mode) do
       nil ->
         {:ok,
          socket
@@ -43,9 +43,28 @@ defmodule EftBuddyWeb.MapsLive.Show do
     end
   end
 
-  # Maps detail derives nothing from the sidebar pings / client-restore
-  # blob, so swallow them rather than letting them warn.
+  # Bosses, spawns, extracts, keys and raid length all differ between PVP and
+  # PVE, so a mode flip reloads the map for the new mode and re-sends the
+  # markers (the viewer redraws on every `tac:data`).
   @impl true
+  def handle_info({:sidebar_state_changed, :mode, mode}, socket) do
+    case Maps.get_map_by_slug(socket.assigns.map.normalized_name, mode) do
+      nil ->
+        {:noreply, socket}
+
+      map ->
+        viewer = build_viewer_config(map)
+
+        {:noreply,
+         socket
+         |> assign(:map, map)
+         |> assign(:map_viewer, viewer)
+         |> push_viewer_data(map, viewer)}
+    end
+  end
+
+  # The HUD's other pings and the client-restore blob carry nothing this page
+  # derives from, so swallow them rather than letting them warn.
   def handle_info(_msg, socket), do: {:noreply, socket}
 
   # ── Map viewer + markers ───────────────────────────────

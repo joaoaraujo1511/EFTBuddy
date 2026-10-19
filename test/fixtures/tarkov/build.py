@@ -159,5 +159,24 @@ def build(mode):
           'barters', len(b_keep), 'crafts', len(c_keep), 'stations', len(hideout_body['data']))
 
 
+MEDIA = 'https://raw.githubusercontent.com/the-hideout/tarkov-dev/main/src/data/maps.json'
+
+
+def build_media():
+    """tarkov.dev's frontend maps.json (map imagery), cut to the fixture maps."""
+    slugs = set()
+    for mode in ('regular', 'pve'):
+        with open(os.path.join(DST, mode, 'maps.json'), encoding='utf-8') as f:
+            slugs |= {m['normalizedName'] for m in json.load(f)['data']['maps'].values()}
+    req = urllib.request.Request(MEDIA, headers={'User-Agent': 'EftBuddy fixture builder'})
+    with urllib.request.urlopen(req, timeout=120) as resp:
+        groups = json.loads(resp.read())
+    kept = [g for g in groups if g.get('normalizedName') in slugs]
+    with open(os.path.join(DST, 'maps_media.json'), 'w', encoding='utf-8', newline='\n') as f:
+        json.dump(kept, f, ensure_ascii=False, separators=(',', ':'), sort_keys=True)
+    print('maps_media groups', len(kept))
+
+
 for mode in ('regular', 'pve'):
     build(mode)
+build_media()
