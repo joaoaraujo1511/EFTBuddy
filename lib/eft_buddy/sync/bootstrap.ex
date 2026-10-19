@@ -366,7 +366,7 @@ defmodule EftBuddy.Sync.Bootstrap do
         Logger.warning(
           "[#{prefix()}] #{length(stranded)} feed(s) not released — their cold-start step did " <>
             "not succeed, so each retries in 15 minutes rather than waiting a full " <>
-            "interval: #{stranded |> Enum.map(&inspect/1) |> Enum.join(", ")}"
+            "interval: #{Enum.map_join(stranded, ", ", &inspect/1)}"
         )
     end
   end

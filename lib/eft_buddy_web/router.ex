@@ -37,6 +37,11 @@ defmodule EftBuddyWeb.Router do
          "; "
        )
 
+  # Sobelow 0.16 reads `@csp` as a dynamic value and reports the policy as
+  # possibly missing. It is set, and `csp_hygiene_test.exs` asserts the header and
+  # its key directives on a real response, which is the check that would catch it
+  # going away.
+  # sobelow_skip ["Config.CSP"]
   pipeline :browser do
     plug :accepts, ["html"]
     plug :fetch_session

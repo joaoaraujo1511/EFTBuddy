@@ -1720,16 +1720,13 @@ defmodule EftBuddy.Items.Sync do
               parent_rows =
                 build_barter_parent_rows(barters, traders_map, tasks_map, now, game_mode)
 
-              replace_fields = [:level, :buy_limit, :trader_id, :task_unlock_id, :updated_at]
-
-              parent_rows
-              |> Enum.chunk_every(2_000)
-              |> Enum.each(fn chunk ->
-                Repo.insert_all(Barter, chunk,
-                  on_conflict: {:replace, replace_fields},
-                  conflict_target: :external_id
-                )
-              end)
+              upsert_parents(Barter, parent_rows, [
+                :level,
+                :buy_limit,
+                :trader_id,
+                :task_unlock_id,
+                :updated_at
+              ])
 
               barter_id_map = Resolvers.barter_id_map(Repo, game_mode)
 
@@ -1834,12 +1831,11 @@ defmodule EftBuddy.Items.Sync do
     sample =
       dropped
       |> Enum.take(5)
-      |> Enum.map(fn row ->
+      |> Enum.map_join("\n", fn row ->
         ext_id = Map.get(row, "id", "<no-id>")
         reason = drop_reason(kind, row, items_map, parent_map)
         "  - #{ext_id}: #{reason}"
       end)
-      |> Enum.join("\n")
 
     Logger.warning(
       "[#{prefix()}] Skipped #{length(dropped)} #{kind} during sanitisation. First samples:\n" <>
@@ -2008,22 +2004,13 @@ defmodule EftBuddy.Items.Sync do
 
               parent_rows = build_craft_parent_rows(crafts, station_level_map, tasks_map, now)
 
-              replace_fields = [
+              upsert_parents(Craft, parent_rows, [
                 :duration,
                 :station_level_id,
                 :task_unlock_id,
                 :game_editions,
                 :updated_at
-              ]
-
-              parent_rows
-              |> Enum.chunk_every(2_000)
-              |> Enum.each(fn chunk ->
-                Repo.insert_all(Craft, chunk,
-                  on_conflict: {:replace, replace_fields},
-                  conflict_target: :external_id
-                )
-              end)
+              ])
 
               craft_id_map = Resolvers.craft_id_map(Repo)
 
@@ -2164,6 +2151,19 @@ defmodule EftBuddy.Items.Sync do
   end
 
   # ── Shared helpers (barters + crafts) ──────────────────
+
+  # Upsert barter or craft parent rows by `external_id`, in chunks that stay
+  # under Postgres's bind-parameter limit.
+  defp upsert_parents(schema, rows, replace_fields) do
+    rows
+    |> Enum.chunk_every(2_000)
+    |> Enum.each(fn chunk ->
+      Repo.insert_all(schema, chunk,
+        on_conflict: {:replace, replace_fields},
+        conflict_target: :external_id
+      )
+    end)
+  end
 
   # Ingredients keep fractions (`numeric` columns); rewards are whole numbers.
   defp recipe_count("requiredItems", n), do: Resolvers.count_or_nil(n)

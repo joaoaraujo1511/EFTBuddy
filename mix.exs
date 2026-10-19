@@ -40,7 +40,7 @@ defmodule EftBuddy.MixProject do
   # Type `mix help deps` for examples and options.
   defp deps do
     [
-      {:phoenix, "~> 1.8.3"},
+      {:phoenix, "~> 1.8.15"},
       {:phoenix_ecto, "~> 4.5"},
       {:ecto_sql, "~> 3.13"},
       {:postgrex, ">= 0.0.0"},
@@ -58,16 +58,16 @@ defmodule EftBuddy.MixProject do
        app: false,
        compile: false,
        depth: 1},
-      {:req, "~> 0.5"},
-      {:telemetry_metrics, "~> 1.0"},
+      {:req, "~> 0.7.5"},
+      {:telemetry_metrics, "~> 1.2"},
       {:telemetry_poller, "~> 1.0"},
       {:gettext, "~> 1.0"},
       {:jason, "~> 1.2"},
       {:dns_cluster, "~> 0.2.0"},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
-      {:sobelow, "~> 0.13", only: [:dev, :test], runtime: false},
+      {:sobelow, "~> 0.16", only: [:dev, :test], runtime: false},
       {:mix_audit, "~> 2.1", only: [:dev, :test], runtime: false},
-      {:bandit, "~> 1.5"}
+      {:bandit, "~> 1.13"}
     ]
   end
 

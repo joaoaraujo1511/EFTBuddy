@@ -1,0 +1,40 @@
+# Version updates. Security updates are switched on separately, in the
+# repository's settings, and arrive whenever an advisory lands.
+#
+# Weekly and grouped, so a week's patch releases are one PR rather than ten.
+# Every PR still has to pass CI ("Build & test" and the image build) before it
+# can merge. Major versions come as their own PRs: those are the ones to read.
+#
+# The Dockerfile is not listed: its base images are assembled from ARGs
+# (ELIXIR_VERSION, OTP_VERSION, DEBIAN_VERSION), which Dependabot cannot
+# follow. Bump those by hand, alongside the matching OTP/Elixir in ci.yml.
+version: 2
+updates:
+  - package-ecosystem: mix
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      mix-minor-and-patch:
+        update-types: [minor, patch]
+
+  # Actions are pinned by commit SHA (see ci.yml); Dependabot moves the SHA and
+  # the version comment beside it together.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions-minor-and-patch:
+        update-types: [minor, patch]
+
+  # Postgres and cloudflared in docker-compose.yml. A Postgres MAJOR bump needs a
+  # dump and restore, so it must never be merged as a routine update.
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: weekly
+    ignore:
+      - dependency-name: postgres
+        update-types: [version-update:semver-major]
