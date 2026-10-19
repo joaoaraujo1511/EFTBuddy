@@ -10,8 +10,12 @@ defmodule EftBuddyWeb.StorylineLiveTest do
   endgame chapter shows one ending's guide and payout, the index's Endings
   tab shows the fork itself, and every other chapter is a walkthrough —
   three shapes wired from different data.
+
+  Not async: `EftBuddy.ChaptersTest` inserts the same chapter slugs in a
+  different order, and two sandbox transactions each waiting on the other's
+  uncommitted unique key is a deadlock Postgres resolves by failing one test.
   """
-  use EftBuddyWeb.ConnCase, async: true
+  use EftBuddyWeb.ConnCase, async: false
 
   import Phoenix.LiveViewTest
 
