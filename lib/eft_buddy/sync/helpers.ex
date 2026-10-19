@@ -6,6 +6,8 @@ defmodule EftBuddy.Sync.Helpers do
   by each `*.Sync` module.
   """
 
+  import Ecto.Query, only: [from: 2]
+
   @doc """
   Decide whether a stale-row cleanup is safe to perform, given the live
   row `current` count and the `snapshot` size from the latest upstream
@@ -47,6 +49,15 @@ defmodule EftBuddy.Sync.Helpers do
   It matters more than it used to. These syncs now run unattended on a
   daily timer rather than only when someone deploys, so nobody is watching
   when the guard makes its decision.
+
+  ## What `current` must be
+
+  Not the table's row count. Pass `cleanup_reference/3`: the rows the feed has
+  seen recently. Comparing against the whole table made the guard refuse every
+  prune for good once stale rows existed. tarkov.dev regenerates barter ids
+  when it rebuilds its data, so in September each rebuild added a full new set
+  of barters, the table outgrew every snapshot, and each mode ended up holding
+  three copies of every barter.
 
   Returns `:ok` to proceed with the delete, or `{:skip, reason}` to refuse.
   A cold start (`current == 0`) always returns `:ok` so the first
@@ -90,9 +101,55 @@ defmodule EftBuddy.Sync.Helpers do
 
         {:skip,
          "snapshot=#{snapshot} would keep < #{round(ratio * 100)}% of the " <>
-           "#{current} existing rows — treating as a partial/corrupt upstream response"}
+           "#{current} rows expected — treating as a partial/corrupt upstream response"}
     end
   end
+
+  @doc """
+  The row count `cleanup_safe?/3` should compare a snapshot against: the rows in
+  `queryable` that a sync has written within the last `window_ms`.
+
+  Every sync stamps each row it receives with that run's `updated_at`, unchanged
+  rows included. A row with an old stamp is therefore one upstream stopped
+  sending, so it should not count towards how big a normal snapshot is.
+
+    * **Upstream re-issued its ids** (barters, September 2026). The old rows were
+      seen last run and the new snapshot is the same size, so the prune goes
+      ahead and removes the old rows in the same run.
+    * **A truncated response**, even several in a row. The rows it left out
+      were seen recently, so they still count and every run is refused until
+      they have been missing for the whole window. After that, upstream really
+      has dropped them.
+    * **Nothing seen within the window**: the feed has been failing for longer
+      than that. This falls back to the whole table, so a long outage can never
+      let a truncated response through.
+
+  Read it **before** the upsert. Once the run has stamped its own rows, the
+  rows it is about to drop look exactly as recent as the ones it kept.
+
+  Pass `cleanup_window_ms/1` as the window.
+  """
+  @spec cleanup_reference(module(), Ecto.Queryable.t(), pos_integer()) :: non_neg_integer()
+  def cleanup_reference(repo, queryable, window_ms)
+      when is_integer(window_ms) and window_ms > 0 do
+    cutoff = NaiveDateTime.add(now_naive(), -div(window_ms, 1_000), :second)
+
+    case repo.aggregate(from(r in queryable, where: r.updated_at >= ^cutoff), :count) do
+      0 -> repo.aggregate(queryable, :count)
+      recent -> recent
+    end
+  end
+
+  @doc """
+  How far back `cleanup_reference/3` counts a row as recently seen: two of the
+  feed's own sync intervals. A row has to be missing from two runs' worth of
+  time before a prune can remove it, so one truncated response is never
+  enough. Scaling with the interval keeps that true for 6-hourly and
+  12-hourly feeds alike.
+  """
+  @spec cleanup_window_ms(pos_integer()) :: pos_integer()
+  def cleanup_window_ms(interval_ms) when is_integer(interval_ms) and interval_ms > 0,
+    do: 2 * interval_ms
 
   @doc """
   Decide whether a price snapshot is safe to write.

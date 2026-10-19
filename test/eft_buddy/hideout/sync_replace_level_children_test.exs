@@ -7,7 +7,7 @@ defmodule EftBuddy.Hideout.SyncReplaceLevelChildrenTest do
   It is the worse of the two. The function deletes from FOUR child tables
   (`item_requirements`, `station_level_requirements`, `skill_requirements`,
   `trader_requirements`), and its scope used to come from `fetch_level_map/2`,
-  which reads the ENTIRE `station_levels` table. `cleanup_stale/2` then refuses to
+  which reads the ENTIRE `station_levels` table. `cleanup_stale/3` then refuses to
   prune the stations a truncated snapshot omitted, so the result is hideout
   stations rendering with zero item, skill, trader and prerequisite requirements —
   presented to the user as fact.

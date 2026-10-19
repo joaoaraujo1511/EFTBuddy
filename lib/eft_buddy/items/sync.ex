@@ -556,7 +556,7 @@ defmodule EftBuddy.Items.Sync do
   # changing the row count. See the guard's own docstring.
   @doc false
   # Public only so the guard can be unit-tested — this path had no test coverage
-  # at all. Treat it as private; `cleanup_stale/2` above is public for the same
+  # at all. Treat it as private; `cleanup_stale/3` above is public for the same
   # reason.
   def refresh_item_prices_flea(repo, raw, game_mode) do
     item_map = Resolvers.item_map(repo)
@@ -804,6 +804,15 @@ defmodule EftBuddy.Items.Sync do
   defp upsert_quest_items(repo, quest_items) do
     now = now_naive()
 
+    # Read before the upsert below re-stamps every quest item it touches — see
+    # `Sync.Helpers.cleanup_reference/3`.
+    reference =
+      cleanup_reference(
+        repo,
+        from(i in Item, where: i.is_quest_item == true),
+        cleanup_window_ms(effective_interval_ms())
+      )
+
     rows =
       Enum.map(quest_items, fn qi ->
         %{
@@ -902,9 +911,7 @@ defmodule EftBuddy.Items.Sync do
         # payloads as JSONB — which no FK protects and only `Tasks.Sync` rebuilds, at
         # boot. So a truncated quest-item fetch silently strips task rewards and
         # dangles objective references until the next full boot sequence.
-        current = repo.aggregate(from(i in Item, where: i.is_quest_item == true), :count, :id)
-
-        case cleanup_safe?(current, length(valid_external_ids)) do
+        case cleanup_safe?(reference, length(valid_external_ids)) do
           {:skip, reason} ->
             Logger.error(
               "[#{prefix()}] Refusing stale quest-item cleanup: #{reason}. Keeping existing rows."
@@ -1143,7 +1150,10 @@ defmodule EftBuddy.Items.Sync do
     |> Ecto.Multi.run(:vendor_map, fn repo, _ ->
       {:ok, Resolvers.vendor_map(repo)}
     end)
-    # 3. Items — single bulk upsert keyed on :external_id.
+    # 3. Items — single bulk upsert keyed on :external_id. The prune's reference
+    #    is read first, because the upsert re-stamps every item it touches — see
+    #    `Sync.Helpers.cleanup_reference/3`.
+    |> Ecto.Multi.run(:reference, fn repo, _ -> {:ok, regular_item_reference(repo)} end)
     |> Ecto.Multi.run(:upsert_items, fn repo, %{category_map: category_map} ->
       upsert_items(repo, items, category_map)
     end)
@@ -1163,8 +1173,8 @@ defmodule EftBuddy.Items.Sync do
     #    FK `on_delete`. Vendor sell/buy rows and the per-mode
     #    `item_prices` are now populated by `sync_prices_for_mode/1`,
     #    which runs once per game mode right after this entity pass.
-    |> Ecto.Multi.run(:cleanup, fn repo, _ ->
-      cleanup_stale(repo, items)
+    |> Ecto.Multi.run(:cleanup, fn repo, %{reference: reference} ->
+      cleanup_stale(repo, items, reference)
     end)
     |> Repo.transaction(timeout: 120_000)
   end
@@ -1417,7 +1427,7 @@ defmodule EftBuddy.Items.Sync do
   # Atomic within the transaction. Scoping the delete by `game_mode` is
   # what lets the regular and PVE passes coexist — the PVE pass must not
   # wipe the regular rows and vice-versa. Items not in the snapshot keep
-  # their rows here (they'll be removed by `cleanup_stale/2`).
+  # their rows here (they'll be removed by `cleanup_stale/3`).
   defp replace_prices(repo, items, item_map, vendor_map, kind, schema, game_mode) do
     now = now_naive()
     field = if kind == :sell, do: "sellFor", else: "buyFor"
@@ -1629,20 +1639,24 @@ defmodule EftBuddy.Items.Sync do
   # silently empties hideout station requirements and task rewards. That makes both
   # the guard AND the `is_quest_item == false` scope load-bearing, and both are
   # pinned by `test/eft_buddy/items/sync_cleanup_stale_test.exs`.
-  def cleanup_stale(repo, items) do
+  #
+  # `reference` is the guard's comparison point (`Sync.Helpers.cleanup_reference/3`),
+  # read by the pipeline before its upsert. It defaults to reading it here, which
+  # is only right when nothing has been upserted yet — as in the unit tests.
+  def cleanup_stale(repo, items, reference \\ nil) do
     valid_ids = Enum.map(items, & &1["id"])
 
     if valid_ids == [] do
       {:ok, %{items: 0, sell_for: 0, buy_for: 0}}
     else
       # Safety guard: refuse to prune when the snapshot is implausibly
-      # small relative to what we already have (a truncated-but-200 API
-      # response). `current` counts only regular items because that's
+      # small relative to the items seen recently (a truncated-but-200 API
+      # response). The reference counts only regular items because that's
       # the only set this function ever deletes (see the
       # `is_quest_item == false` guard below).
-      current = repo.aggregate(from(i in Item, where: i.is_quest_item == false), :count, :id)
+      reference = reference || regular_item_reference(repo)
 
-      case cleanup_safe?(current, length(valid_ids)) do
+      case cleanup_safe?(reference, length(valid_ids)) do
         {:skip, reason} ->
           Logger.error(
             "[#{Reporter.colorize_label("ItemsSync")}] Refusing stale item cleanup: #{reason}. Keeping existing rows."
@@ -1654,6 +1668,14 @@ defmodule EftBuddy.Items.Sync do
           do_cleanup_stale(repo, valid_ids)
       end
     end
+  end
+
+  defp regular_item_reference(repo) do
+    cleanup_reference(
+      repo,
+      from(i in Item, where: i.is_quest_item == false),
+      cleanup_window_ms(effective_interval_ms())
+    )
   end
 
   defp do_cleanup_stale(repo, valid_ids) do
@@ -1726,6 +1748,16 @@ defmodule EftBuddy.Items.Sync do
             fn ->
               now = now_naive()
 
+              # Before the upsert re-stamps every barter it touches. Comparing
+              # the snapshot with the whole table is what let stale barters pile
+              # up in September — see `Sync.Helpers.cleanup_reference/3`.
+              reference =
+                cleanup_reference(
+                  Repo,
+                  from(b in Barter, where: b.game_mode == ^game_mode),
+                  cleanup_window_ms(effective_interval_ms())
+                )
+
               parent_rows =
                 build_barter_parent_rows(barters, traders_map, tasks_map, now, game_mode)
 
@@ -1766,7 +1798,7 @@ defmodule EftBuddy.Items.Sync do
               # back from the whole table; `replace_children/5` intersects it with
               # THIS run's `parent_rows` so the delete can only ever reach barters
               # upstream actually mentioned — precisely the rows
-              # `cleanup_stale_barters/2` below then refuses to prune, which would
+              # `cleanup_stale_barters/3` below then refuses to prune, which would
               # otherwise leave childless parents. See `replace_children/5`.
               replace_children(
                 BarterRequiredItem,
@@ -1784,7 +1816,7 @@ defmodule EftBuddy.Items.Sync do
                 child_reward_rows
               )
 
-              cleanup_stale_barters(Enum.map(barters, & &1["id"]), game_mode)
+              cleanup_stale_barters(Enum.map(barters, & &1["id"]), game_mode, reference)
 
               length(parent_rows)
             end,
@@ -2009,6 +2041,12 @@ defmodule EftBuddy.Items.Sync do
           Repo.transaction(
             fn ->
               now = now_naive()
+
+              # Before the upsert re-stamps every craft it touches — see
+              # `Sync.Helpers.cleanup_reference/3`.
+              reference =
+                cleanup_reference(Repo, Craft, cleanup_window_ms(effective_interval_ms()))
+
               parent_rows = build_craft_parent_rows(crafts, station_level_map, tasks_map, now)
 
               replace_fields = [:duration, :station_level_id, :task_unlock_id, :updated_at]
@@ -2046,7 +2084,7 @@ defmodule EftBuddy.Items.Sync do
 
               # Snapshot-scoped, for the same reason as barters above: unscoped, the
               # delete would strip the children of crafts upstream didn't mention,
-              # which `cleanup_stale_parents/2` then declines to prune.
+              # which `cleanup_stale_parents/3` then declines to prune.
               replace_children(
                 CraftRequiredItem,
                 :craft_id,
@@ -2063,7 +2101,7 @@ defmodule EftBuddy.Items.Sync do
                 child_reward_rows
               )
 
-              cleanup_stale_parents(Craft, Enum.map(crafts, & &1["id"]))
+              cleanup_stale_parents(Craft, Enum.map(crafts, & &1["id"]), reference)
 
               length(parent_rows)
             end,
@@ -2221,12 +2259,10 @@ defmodule EftBuddy.Items.Sync do
   # snapshot. Children cascade via the FK's `on_delete: :delete_all`.
   # Guarded by `cleanup_safe?/2` so a truncated upstream response can't
   # wipe the barter/craft tables (and cascade their children away).
-  defp cleanup_stale_parents(_schema, []), do: :ok
+  defp cleanup_stale_parents(_schema, [], _reference), do: :ok
 
-  defp cleanup_stale_parents(schema, valid_external_ids) do
-    current = Repo.aggregate(schema, :count, :id)
-
-    case cleanup_safe?(current, length(valid_external_ids)) do
+  defp cleanup_stale_parents(schema, valid_external_ids, reference) do
+    case cleanup_safe?(reference, length(valid_external_ids)) do
       {:skip, reason} ->
         Logger.error(
           "[#{prefix()}] Refusing stale #{inspect(schema)} cleanup: #{reason}. Keeping existing rows."
@@ -2247,14 +2283,11 @@ defmodule EftBuddy.Items.Sync do
   # must only prune THAT mode's rows — otherwise syncing `regular` would
   # delete every `pve` barter (its ids aren't in the regular snapshot)
   # and vice-versa. Same partial-snapshot guard as
-  # `cleanup_stale_parents/2`, scoped to the mode.
-  defp cleanup_stale_barters([], _game_mode), do: :ok
+  # `cleanup_stale_parents/3`, scoped to the mode.
+  defp cleanup_stale_barters([], _game_mode, _reference), do: :ok
 
-  defp cleanup_stale_barters(valid_external_ids, game_mode) do
-    current =
-      Repo.aggregate(from(b in Barter, where: b.game_mode == ^game_mode), :count, :id)
-
-    case cleanup_safe?(current, length(valid_external_ids)) do
+  defp cleanup_stale_barters(valid_external_ids, game_mode, reference) do
+    case cleanup_safe?(reference, length(valid_external_ids)) do
       {:skip, reason} ->
         Logger.error(
           "[#{prefix()}] Refusing stale barter cleanup (#{game_mode}): #{reason}. Keeping existing rows."
