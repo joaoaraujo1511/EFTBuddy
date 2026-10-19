@@ -144,23 +144,35 @@ defmodule EftBuddyWeb.EventsLive.Index do
   # Toggle one quest's walkthrough. Lazy-loads + caches the projected
   # detail the first time a quest opens (nil is a valid, cached result -
   # the quest's page failed to scrape or hasn't been scraped yet).
+  #
+  # Only quests listed on this page can be opened. The id comes from the client,
+  # and every unknown one used to be cached and kept as expanded for the life of
+  # the socket.
   def handle_event("toggle_quest", %{"id" => quest_id}, socket) do
     %{expanded_ids: expanded, details_cache: cache} = socket.assigns
 
-    if MapSet.member?(expanded, quest_id) do
-      {:noreply, assign(socket, :expanded_ids, MapSet.delete(expanded, quest_id))}
-    else
-      cache =
-        if Map.has_key?(cache, quest_id),
-          do: cache,
-          else: Map.put(cache, quest_id, Events.get_quest_detail(quest_id))
+    cond do
+      MapSet.member?(expanded, quest_id) ->
+        {:noreply, assign(socket, :expanded_ids, MapSet.delete(expanded, quest_id))}
 
-      {:noreply,
-       socket
-       |> assign(:expanded_ids, MapSet.put(expanded, quest_id))
-       |> assign(:details_cache, cache)}
+      not listed_quest?(socket.assigns.all_events, quest_id) ->
+        {:noreply, socket}
+
+      true ->
+        cache =
+          if Map.has_key?(cache, quest_id),
+            do: cache,
+            else: Map.put(cache, quest_id, Events.get_quest_detail(quest_id))
+
+        {:noreply,
+         socket
+         |> assign(:expanded_ids, MapSet.put(expanded, quest_id))
+         |> assign(:details_cache, cache)}
     end
   end
+
+  defp listed_quest?(events, quest_id),
+    do: Enum.any?(events, fn event -> Enum.any?(event.quests, &(&1.id == quest_id)) end)
 
   # The progress blob changed: either a cold connect handing up localStorage for
   # the first time, or another of the operator's tabs editing the watchlist. On a

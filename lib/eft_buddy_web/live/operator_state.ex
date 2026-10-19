@@ -117,6 +117,9 @@ defmodule EftBuddyWeb.OperatorState do
       # and `EftBuddyWeb.ClientBridge.put_progress/2` must not push over
       # `localStorage` until the browser has spoken - see there for why.
       |> assign(:progress_seeded?, seeded?)
+      # True between a mode flip and the page reloading its per-mode lists; see
+      # `apply_prefs/3`.
+      |> assign(:mode_switching?, false)
       |> attach_hook(:operator_events, :handle_event, &handle_event/3)
       |> attach_hook(:operator_broadcasts, :handle_info, &handle_info/2)
 
@@ -260,10 +263,18 @@ defmodule EftBuddyWeb.OperatorState do
   defp apply_prefs(socket, prefs, persist? \\ true) do
     changed = changed_page_keys(socket, prefs)
 
+    # A mode flip takes effect here, but each page reloads its per-mode lists
+    # (watchlist, completed quests, hideout levels) only when the
+    # `{:sidebar_state_changed, :mode, _}` sent by `announce/2` arrives. A click
+    # already waiting in the mailbox is handled first: it edits the OLD mode's
+    # list and `ClientBridge.put_progress/2` would file it under the NEW mode,
+    # replacing that mode's list. Until the ping passes through `handle_info/2`
+    # below, `put_progress/2` writes nothing.
     socket =
       socket
       |> assign(:operator_prefs, prefs)
       |> assign_prefs(prefs)
+      |> assign(:mode_switching?, socket.assigns[:mode_switching?] || :mode in changed)
 
     announce(socket, changed)
 
@@ -314,51 +325,45 @@ defmodule EftBuddyWeb.OperatorState do
     {:halt, assign(socket, :client_state, progress)}
   end
 
-  # A reset/import in another tab. That tab reloads itself; this one re-syncs to
-  # the fresh defaults so the two don't disagree.
+  # A reset/import in another tab. That tab has already rewritten `localStorage`
+  # and the prefs cookie (to empty, or to the imported backup) and is navigating
+  # through `EftBuddyWeb.SessionController`, which rotated the session. This tab
+  # is now holding a copy that is wrong in both directions, so it reloads: the
+  # reload reads the new cookie and storage and joins the new session.
   #
-  # Only keys that ACTUALLY changed are announced. Announcing all of them would
-  # cost several full reflows per tab - on Tasks a `:mode` ping alone re-queries
-  # the whole task graph - for values that may not have moved at all.
-  defp handle_info({:operator_session, _from, {:reset, snapshot}}, socket) do
-    # `apply_prefs/3` already announces only what moved; `persist?: false`
-    # because the tab that reset has rewritten the cookie itself.
-    socket = apply_prefs(socket, snapshot.prefs, false)
-
-    if socket.assigns.client_state != snapshot.progress do
-      send(self(), {:client_state_restored, snapshot.progress})
-    end
-
-    # DELIBERATELY NO `eft:clear` PUSH HERE. An earlier revision of this pass added
-    # one, reasoning that since `eft:store` now merges per mode, a reset must say
-    # "remove keys" explicitly. That was wrong, and it silently broke **backup
-    # import**.
-    #
-    # Both client actions that reach this broadcast put `localStorage` into the state
-    # they want BEFORE navigating through `EftBuddyWeb.SessionController`:
-    # "Reset progress" calls `clearAll()` (so storage is already empty), and "Import
-    # backup" calls `applyBackup()` (so storage already holds the imported blob).
-    # The reset route then rotates the token and redirects. The server sees one
-    # indistinguishable `{:reset, _}` in both cases — so pushing `eft:clear` on it
-    # deleted the file the operator had just restored, and the redirect then
-    # cold-seeded from empty storage. Import appeared to do nothing except erase
-    # whatever the device already had.
-    #
-    # The client is the party that knows the intent and has already acted on it, so
-    # the server has nothing to add. Other tabs converge correctly without it: their
-    # `:client_state` becomes `snapshot.progress`, and because the browser-side
-    # `eft:store` handler merges, their next write cannot destroy whatever storage
-    # now holds — they pick the new contents up on their next `eft:restore`.
-    #
-    # `:progress_seeded?` becomes TRUE: `localStorage` is in a state the client just
-    # chose, so later writes may push again. Leaving it false would make every
-    # subsequent click in this tab fail to persist.
+  # It used to re-sync in place instead, adopting `snapshot.progress` (always
+  # empty) as its client state with `:progress_seeded?` TRUE. The page then
+  # rebuilt its lists from nothing, and the next click pushed a short list for
+  # that key. `eft:store` merges per key, so that list replaced the imported one:
+  # import a backup in one tab, tick one quest in another, and the import was
+  # gone. Re-sync can't be made safe here because the server never sees
+  # `localStorage`; only the browser can re-read it.
+  #
+  # `:progress_seeded?` goes FALSE until the reload, so a click that races it
+  # writes nothing rather than something wrong. A tab still running JS from
+  # before this change ignores `eft:reload`; it just stops persisting until the
+  # visitor reloads, which is safe.
+  #
+  # DELIBERATELY NO `eft:clear` PUSH HERE. An earlier revision added one and it
+  # silently broke **backup import**: both client actions that reach this
+  # broadcast have already put `localStorage` into the state they want ("Reset
+  # progress" calls `clearAll()`, "Import backup" calls `applyBackup()`) before
+  # navigating, and the server sees one indistinguishable `{:reset, _}` for both.
+  # Clearing on it deleted the file the operator had just restored.
+  defp handle_info({:operator_session, _from, {:reset, _snapshot}}, socket) do
     socket =
       socket
-      |> assign(:client_state, snapshot.progress)
-      |> assign(:progress_seeded?, true)
+      |> assign(:progress_seeded?, false)
+      |> push_event("eft:reload", %{})
 
     {:halt, socket}
+  end
+
+  # The mode ping reaching this hook means the page is about to reload its lists
+  # for the new mode, in its own `handle_info/2` right after this one, so writes
+  # are safe again. `:cont`, because the page must still see the message.
+  defp handle_info({:sidebar_state_changed, :mode, _value}, socket) do
+    {:cont, assign(socket, :mode_switching?, false)}
   end
 
   defp handle_info(_message, socket), do: {:cont, socket}

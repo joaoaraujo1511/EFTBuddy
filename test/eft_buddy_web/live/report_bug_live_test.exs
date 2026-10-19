@@ -37,6 +37,21 @@ defmodule EftBuddyWeb.ReportBugLiveTest do
     assert report.title == @valid["title"]
   end
 
+  test "a NUL character is stripped instead of crashing the page", %{conn: conn} do
+    # REGRESSION (audit L14). Postgres `text` rejects 0x00, so `Repo.insert`
+    # raised and the LiveView crashed, losing the report.
+    {:ok, view, _html} = live(conn, ~p"/report-bug")
+
+    submit(view, %{
+      "title" => "Copied from a log\0 viewer",
+      "description" => "The log line had a NUL\0 byte in the middle of it."
+    })
+
+    assert [report] = Feedback.list_bug_reports()
+    assert report.title == "Copied from a log viewer"
+    refute report.description =~ "\0"
+  end
+
   test "refuses a second submission inside the cooldown", %{conn: conn} do
     {:ok, view, _html} = live(conn, ~p"/report-bug")
 
