@@ -47,6 +47,7 @@ defmodule EftBuddy.Items.Sync do
 
   alias EftBuddy.Items.Sync.Resolvers
   alias EftBuddy.Sync.Reporter
+  alias EftBuddy.Sync.Scheduler
 
   # All durations are in milliseconds and MUST be integers — `Process.send_after/3`
   # rejects floats with an ArgumentError.
@@ -252,25 +253,29 @@ defmodule EftBuddy.Items.Sync do
       |> Keyword.get(:price_interval, @default_price_interval)
       |> normalize_ms(@default_price_interval)
 
-    # First ticks happen after a full interval — Bootstrap handles the
-    # cold start, so we don't need a short initial delay here. Jitter is
-    # applied so a multi-node deploy with rolling restarts doesn't see
-    # every node fire at the same instant.
-    #
-    # This is a FALLBACK, not the normal path: `:bootstrap_complete` re-arms the
-    # full tick from the end of the cold start. Until this module joined
-    # `EftBuddy.Sync.Registry.notifiable/0` it never received that cast, so its
-    # cadence drifted from boot rather than anchoring to the sequence — silently,
-    # because a feed that runs on the wrong schedule still runs.
-    full_timer = arm(:full_sync, full_interval)
+    # A FALLBACK, not the normal path: `:bootstrap_complete` re-arms the full
+    # tick a whole interval out once the cold start has run this feed, and
+    # `:bootstrap_failed` arms its retry when it did not. This only fires when
+    # neither arrives, meaning Bootstrap died or is disabled, and then the
+    # catalogue has not been synced at all. It used to be the full twelve hours,
+    # so a failed Items cold start left items, prices, barters and crafts empty
+    # for half a day (audit H6). Fifteen minutes cannot race the sequence: Items'
+    # steps come first and finish in seconds.
+    full_timer = arm(:full_sync, Scheduler.default_fallback_ms())
     arm(:price_sync, price_interval)
 
-    {:ok, %{full_interval: full_interval, price_interval: price_interval, full_timer: full_timer}}
+    {:ok,
+     %{
+       full_interval: full_interval,
+       price_interval: price_interval,
+       full_timer: full_timer,
+       retrying?: false
+     }}
   end
 
   @impl true
   def handle_cast(:sync_now, state) do
-    safe_run("Periodic full", &run/0)
+    Scheduler.run_isolated(fn -> safe_run("Periodic full", &run/0) end)
     {:noreply, state}
   end
 
@@ -287,17 +292,33 @@ defmodule EftBuddy.Items.Sync do
     {:noreply, %{state | full_timer: arm(:full_sync, interval + @stagger)}}
   end
 
+  # The cold start did not get this feed's work done (the items step failed, or
+  # barters/crafts did). Retry the full tick in fifteen minutes; that counts as
+  # its one retry, as for every `EftBuddy.Sync.Scheduler` feed.
+  def handle_cast(:bootstrap_failed, state) do
+    if state[:full_timer], do: Process.cancel_timer(state.full_timer)
+
+    {:noreply,
+     %{state | full_timer: arm(:full_sync, Scheduler.failure_retry_ms()), retrying?: true}}
+  end
+
   def handle_cast(_msg, state), do: {:noreply, state}
 
   @impl true
   def handle_info(:full_sync, %{full_interval: interval} = state) do
-    safe_run("Periodic full", &run/0)
-    {:noreply, %{state | full_timer: arm(:full_sync, interval)}}
+    # In a short-lived process, like every scheduler feed: this run decodes the
+    # 17 MB items document, and the GenServer kept that heap (291 MB idle on the
+    # Pi) when it did the work itself.
+    result = Scheduler.run_isolated(fn -> safe_run("Periodic full", &run/0) end)
+    {next, retrying?} = Scheduler.after_run_delay(result, interval, state.retrying?)
+
+    {:noreply, %{state | full_timer: arm(:full_sync, next), retrying?: retrying?}}
   end
 
   @impl true
   def handle_info(:price_sync, %{price_interval: interval} = state) do
-    safe_run("Periodic price", &run_prices/0)
+    # No failure retry: the tick is ten minutes, already sooner than one.
+    Scheduler.run_isolated(fn -> safe_run("Periodic price", &run_prices/0) end)
     arm(:price_sync, interval)
     {:noreply, state}
   end
@@ -321,9 +342,12 @@ defmodule EftBuddy.Items.Sync do
 
   # GenServer tick wrapper: runs the given `fun`, logs a single summary
   # line per outcome, and swallows crashes so a one-off exception doesn't
-  # take the supervisor down.
+  # take the supervisor down. Returns the run's result (a crash as
+  # `{:error, {:crash, message}}`), which is what decides the failure retry.
   defp safe_run(label, fun) do
-    case fun.() do
+    result = fun.()
+
+    case result do
       {:ok, summary} ->
         Logger.info("[#{prefix()}] #{label} run done: #{inspect(summary)}")
 
@@ -333,14 +357,19 @@ defmodule EftBuddy.Items.Sync do
       {:error, reason} ->
         Logger.error("[#{prefix()}] #{label} run error: #{Reporter.describe_error(reason)}")
     end
+
+    result
   rescue
     e ->
       Logger.error(
         "[#{prefix()}] Crash: #{Exception.message(e)}\n#{Exception.format_stacktrace(__STACKTRACE__)}"
       )
+
+      {:error, {:crash, Exception.message(e)}}
   catch
     kind, value ->
       Logger.error("[#{prefix()}] Caught #{kind}: #{inspect(value)}")
+      {:error, {:crash, "#{kind}: #{inspect(value)}"}}
   end
 
   # ── Synchronous `run*` plumbing ────────────────────────
@@ -351,8 +380,13 @@ defmodule EftBuddy.Items.Sync do
   defp do_run_full do
     case do_run_items() do
       {:ok, item_count} ->
-        {:ok, %{barters: barters, crafts: crafts}} = do_run_barters_and_crafts()
-        {:ok, %{items: item_count, barters: barters, crafts: crafts}}
+        case do_run_barters_and_crafts() do
+          {:ok, %{barters: barters, crafts: crafts}} ->
+            {:ok, %{items: item_count, barters: barters, crafts: crafts}}
+
+          {:error, {:partial, succeeded, failed}} ->
+            {:error, {:partial, [{"items", {:ok, item_count}} | succeeded], failed}}
+        end
 
       {:error, reason} ->
         Logger.error("[#{prefix()}] Items error: #{Reporter.describe_error(reason)}")
@@ -360,6 +394,15 @@ defmodule EftBuddy.Items.Sync do
     end
   end
 
+  # `{:ok, %{barters: [{mode, result}], crafts: result}}` when every sub-step
+  # wrote, otherwise `{:error, {:partial, succeeded, failed}}` naming each.
+  #
+  # It used to return `{:ok, _}` whatever happened inside, so Bootstrap logged a
+  # failed barter sync as "ok" and released the feed a full interval plus its
+  # stagger (14h) out, with an empty table (audit H6). A skip counts as not
+  # done: it means a dependency (traders, station levels) is missing and nothing
+  # was written, which is what Bootstrap's retry is for. Each sub-step still
+  # reports under its own label, so `/health/sync` sees exactly which one.
   defp do_run_barters_and_crafts do
     # Barters genuinely differ between modes (~6% of recipes) and the
     # API gives them mode-specific ids, so we sync each mode. Crafts are
@@ -369,8 +412,22 @@ defmodule EftBuddy.Items.Sync do
         {game_mode, sync_barters_safe(game_mode)}
       end)
 
-    {:ok, %{barters: barters, crafts: sync_crafts_safe()}}
+    crafts = sync_crafts_safe()
+
+    steps = [{"crafts", crafts} | for({mode, r} <- barters, do: {"barters:#{mode}", r})]
+
+    case Enum.split_with(steps, &match?({_, {:ok, _}}, &1)) do
+      {_all, []} ->
+        {:ok, %{barters: barters, crafts: crafts}}
+
+      {succeeded, failed} ->
+        failed = for {name, result} <- failed, do: {name, not_done_reason(result)}
+        {:error, {:partial, succeeded, failed}}
+    end
   end
+
+  defp not_done_reason({:error, reason}), do: reason
+  defp not_done_reason({:skip, reason}), do: {:skipped, reason}
 
   # ── Price refresh (lightweight, frequent) ──────────────
 

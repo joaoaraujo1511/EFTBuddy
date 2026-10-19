@@ -354,4 +354,172 @@ defmodule EftBuddy.Sync.SchedulerTest do
       end)
     end
   end
+
+  # Fails until told otherwise, and reports which process ran it. Twelve-hour
+  # interval, so a delay recorded in minutes can only be the retry.
+  defmodule FlakyFeed do
+    use EftBuddy.Sync.Scheduler,
+      label: "ProbeFlakySync",
+      interval: 12 * 60 * 60 * 1_000,
+      bootstrap: :ran
+
+    @impl EftBuddy.Sync.Scheduler
+    def do_run do
+      if test = :persistent_term.get({__MODULE__, :test}, nil), do: send(test, {:ran_in, self()})
+      :persistent_term.get({__MODULE__, :result}, {:error, :upstream_down})
+    end
+  end
+
+  describe "a failed run is retried once" do
+    @hour 60 * 60 * 1_000
+
+    test "after_run_delay: a first failure retries soon, the retry's failure does not" do
+      retry = Scheduler.failure_retry_ms()
+      assert retry == 15 * 60 * 1_000
+
+      assert Scheduler.after_run_delay({:error, :boom}, 12 * @hour, false) == {retry, true}
+      assert Scheduler.after_run_delay({:error, :boom}, 12 * @hour, true) == {12 * @hour, false}
+      assert Scheduler.after_run_delay({:ok, %{}}, 12 * @hour, true) == {12 * @hour, false}
+    end
+
+    test "after_run_delay: a feed's own shorter retry wins" do
+      # `EftBuddy.Wiki.Sync` asks for its own delay after `{:error, :no_tasks}`.
+      assert Scheduler.after_run_delay({:error, :no_tasks}, 42, false) == {42, true}
+    end
+
+    test "after_run_delay: contention and skips are not failures" do
+      contention = Scheduler.contention_retry_ms()
+
+      assert Scheduler.after_run_delay({:error, :already_running}, contention, false) ==
+               {contention, false}
+
+      assert Scheduler.after_run_delay({:skip, :nothing}, 12 * @hour, false) ==
+               {12 * @hour, false}
+    end
+
+    setup do
+      Reporter.reset_status()
+
+      on_exit(fn ->
+        :persistent_term.erase({FlakyFeed, :result})
+        :persistent_term.erase({FlakyFeed, :test})
+        Reporter.reset_status()
+      end)
+    end
+
+    defp tick(pid) do
+      ExUnit.CaptureLog.capture_log(fn ->
+        send(pid, :sync)
+        :sys.get_state(pid)
+      end)
+
+      {:sys.get_state(pid), Reporter.schedule()["ProbeFlakySync"].delay_ms}
+    end
+
+    test "a failing feed retries in 15 minutes, then goes back to its interval" do
+      {:ok, pid} = GenServer.start_link(FlakyFeed, [], [])
+
+      {state, delay} = tick(pid)
+      assert state.retrying?
+      assert delay <= Scheduler.failure_retry_ms() + Scheduler.max_jitter_ms() + 1
+
+      # The retry fails too: no loop against a struggling upstream.
+      {state, delay} = tick(pid)
+      refute state.retrying?
+      assert delay >= 12 * @hour
+
+      # A later failure gets its own single retry again.
+      {state, _delay} = tick(pid)
+      assert state.retrying?
+
+      GenServer.stop(pid)
+    end
+
+    test "a successful retry returns to the interval" do
+      {:ok, pid} = GenServer.start_link(FlakyFeed, [], [])
+      {%{retrying?: true}, _} = tick(pid)
+
+      :persistent_term.put({FlakyFeed, :result}, {:ok, %{}})
+      {state, delay} = tick(pid)
+
+      refute state.retrying?
+      assert delay >= 12 * @hour
+
+      GenServer.stop(pid)
+    end
+
+    test ":bootstrap_failed arms the retry from now, and it counts as the one retry" do
+      {:ok, pid} = GenServer.start_link(FlakyFeed, [], [])
+
+      GenServer.cast(pid, :bootstrap_failed)
+      state = :sys.get_state(pid)
+
+      assert state.retrying?
+      delay = Reporter.schedule()["ProbeFlakySync"].delay_ms
+      assert delay >= Scheduler.failure_retry_ms()
+      assert delay <= Scheduler.failure_retry_ms() + Scheduler.max_jitter_ms() + 1
+
+      # The failed cold start was the first failure; failing again now goes back
+      # to the interval rather than retrying a second time.
+      {state, delay} = tick(pid)
+      refute state.retrying?
+      assert delay >= 12 * @hour
+
+      GenServer.stop(pid)
+    end
+  end
+
+  describe "each run executes in its own process (audit M4)" do
+    setup do
+      Reporter.reset_status()
+
+      on_exit(fn ->
+        :persistent_term.erase({FlakyFeed, :result})
+        :persistent_term.erase({FlakyFeed, :test})
+        Reporter.reset_status()
+      end)
+    end
+
+    test "a timer tick runs the feed outside the long-lived GenServer, which waits for it" do
+      # A run that decodes a 17 MB document inside the GenServer leaves the GenServer
+      # holding that heap: 291 MB idle for Items.Sync, measured on the Pi. A process
+      # that exits gives it all back.
+      :persistent_term.put({FlakyFeed, :test}, self())
+      :persistent_term.put({FlakyFeed, :result}, {:ok, %{}})
+      {:ok, pid} = GenServer.start_link(FlakyFeed, [], [])
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        send(pid, :sync)
+        # Synchronous: the GenServer only answers once the run has finished.
+        :sys.get_state(pid)
+      end)
+
+      assert_received {:ran_in, runner}
+      assert runner != pid
+      refute Process.alive?(runner), "the run's process exits, and its heap with it"
+
+      GenServer.stop(pid)
+    end
+
+    test "sync_now does the same" do
+      :persistent_term.put({FlakyFeed, :test}, self())
+      :persistent_term.put({FlakyFeed, :result}, {:ok, %{}})
+      {:ok, pid} = GenServer.start_link(FlakyFeed, [], [])
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        GenServer.cast(pid, :sync_now)
+        :sys.get_state(pid)
+      end)
+
+      assert_received {:ran_in, runner}
+      assert runner != pid
+
+      GenServer.stop(pid)
+    end
+
+    test "run_isolated returns the function's result" do
+      assert Scheduler.run_isolated(fn -> {:ok, self()} end) |> elem(1) != self()
+      assert Scheduler.run_isolated(fn -> {:error, :x} end) == {:error, :x}
+    end
+  end
 end

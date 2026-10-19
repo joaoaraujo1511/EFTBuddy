@@ -17,6 +17,11 @@ defmodule EftBuddy.Application do
     # `:atomics` and not a persistent term.
     EftBuddy.Feedback.init_rate_limiter()
 
+    # Owned by this long-lived process, not by the first scrape that asks: an
+    # ETS table dies with its owner, and every sync now runs in a short-lived
+    # process, so a lazily created cache was thrown away after every run.
+    EftBuddy.Wiki.FileLicense.init_cache()
+
     # The background data sync (periodic Items.Sync + the cold-start
     # Bootstrap) is disabled in test (see config/test.exs) so the suite
     # never hits the live Tarkov.dev API or races the Ecto SQL sandbox.

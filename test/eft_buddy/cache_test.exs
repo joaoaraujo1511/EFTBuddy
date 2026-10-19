@@ -317,6 +317,50 @@ defmodule EftBuddy.CacheTest do
     end
   end
 
+  describe "a sync that lands while a value is being computed (audit M7)" do
+    test "the value is returned but not stored" do
+      # The race: computed from data read before a sync committed, written after
+      # that sync's invalidation. It would stand for the entry's whole TTL.
+      value =
+        Cache.fetch({:race, :one}, ["ProbeRaceSync"], fn ->
+          Cache.invalidate_source("ProbeRaceSync")
+          :read_before_the_sync
+        end)
+
+      assert value == :read_before_the_sync
+      refute Cache.live?({:race, :one}), "a value older than its source must not be cached"
+
+      # The next read computes, and with nothing landing meanwhile, stores.
+      assert Cache.fetch({:race, :one}, ["ProbeRaceSync"], fn -> :fresh end) == :fresh
+      assert Cache.live?({:race, :one})
+    end
+
+    test "only the entry's own sources count" do
+      Cache.fetch({:race, :other}, ["ProbeRaceSync"], fn ->
+        Cache.invalidate_source("SomeOtherSync")
+        :kept
+      end)
+
+      assert Cache.live?({:race, :other})
+    end
+
+    test "fetch_many has the same guard" do
+      result =
+        Cache.fetch_many([{:race, :m1}, {:race, :m2}], ["ProbeRaceSync"], fn missing ->
+          Cache.invalidate_source("ProbeRaceSync")
+          Map.new(missing, &{&1, :read_before_the_sync})
+        end)
+
+      assert result == %{
+               {:race, :m1} => :read_before_the_sync,
+               {:race, :m2} => :read_before_the_sync
+             }
+
+      refute Cache.live?({:race, :m1})
+      refute Cache.live?({:race, :m2})
+    end
+  end
+
   describe "fetch_many/4" do
     test "calls the fill function with only the keys that missed" do
       Cache.put({:fm, 1}, :cached, ["ItemsSync"])
