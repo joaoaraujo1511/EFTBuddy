@@ -71,12 +71,10 @@ defmodule EftBuddy.Events.Sync do
   alias EftBuddy.Events.{Event, EventQuest}
   alias EftBuddy.Events.Dump, as: EventsDump
   alias EftBuddy.Wiki.Dump, as: WikiDump
-  alias EftBuddy.Wiki.{Contributors, DumpScript, FileLicense}
+  alias EftBuddy.Wiki.{Api, Contributors}
   alias EftBuddy.Sync.Reporter
 
-  @api_url "https://escapefromtarkov.fandom.com/api.php"
   @events_page "Events"
-  @imageinfo_batch 50
 
   @event_replace_on_conflict [
     :name,
@@ -91,6 +89,12 @@ defmodule EftBuddy.Events.Sync do
   ]
 
   @event_quest_replace_on_conflict [:name, :task_id, :position, :content, :updated_at]
+
+  # When a quest page failed to scrape this run there is no manifest, and the
+  # stored walkthrough is the best copy there is: only the fields the Events page
+  # itself gives are refreshed (audit M21). It used to be overwritten with `%{}`,
+  # so one transient failure blanked the walkthrough for twelve hours.
+  @event_quest_listing_only [:name, :position, :updated_at]
 
   @impl EftBuddy.Sync.Scheduler
   # Hand off to the quest scrape now that this run has refreshed the
@@ -111,7 +115,7 @@ defmodule EftBuddy.Events.Sync do
   end
 
   defp run_pipeline do
-    case fetch_events_wikitext() do
+    case Api.page_wikitext(@events_page) do
       {:error, reason} ->
         Logger.error(
           "[#{prefix()}] couldn't fetch the Events page (#{inspect(reason)}); keeping existing rows."
@@ -138,24 +142,46 @@ defmodule EftBuddy.Events.Sync do
     fetched_at = DateTime.utc_now() |> DateTime.to_iso8601()
 
     banner_map = resolve_banner_urls(events)
-    manifests = scrape_quest_manifests(events)
+    {manifests, scrape} = scrape_quest_manifests(events)
 
-    {processed_slugs, quest_count} =
-      Enum.reduce(events, {[], 0}, fn event, {slugs, qcount} ->
-        {:ok, row} = upsert_event(event, banner_map, fetched_at)
-        upsert_event_quests(row, event, manifests)
-        {[event.normalized_name | slugs], qcount + length(event.quests)}
+    # Every parsed event stays in the keep-set even when its row could not be
+    # written, so a bad row keeps its previous version rather than being pruned.
+    processed_slugs = Enum.map(events, & &1.normalized_name)
+
+    quest_count =
+      Enum.reduce(events, 0, fn event, qcount ->
+        case upsert_event(event, banner_map, fetched_at) do
+          {:ok, row} ->
+            upsert_event_quests(row, event, manifests)
+
+          # One event the parser got wrong (a heading like `==(25 June 2026)==`
+          # yields an empty name) used to raise a MatchError here and abort the
+          # whole sync on every run (audit M25). It is counted and skipped.
+          {:error, changeset} ->
+            Reporter.silent_warn(
+              "[#{prefix()}] event #{inspect(event.name)} not written: #{inspect(changeset.errors)}"
+            )
+        end
+
+        qcount + length(event.quests)
       end)
 
-    pruned = prune_events(processed_slugs)
+    # Events no longer on the page; their `event_quests` cascade away via the
+    # FK's `on_delete: :delete_all`. We only reach here after a non-empty parse,
+    # and `Api.prune/2` refuses one that would drop most of the table.
+    pruned = Api.prune(Event, processed_slugs)
 
-    {:ok,
-     %{
-       events: length(events),
-       quests: quest_count,
-       scraped: map_size(manifests),
-       pruned: pruned
-     }}
+    Api.scrape_result(
+      %{
+        events: length(events),
+        quests: quest_count,
+        scraped: map_size(manifests),
+        failed: scrape.failed,
+        pruned: pruned
+      },
+      scrape.processed + scrape.failed,
+      scrape.failed
+    )
   end
 
   # ── Event upsert ───────────────────────────────────────
@@ -206,13 +232,26 @@ defmodule EftBuddy.Events.Sync do
 
     event.quests
     |> Enum.with_index()
-    |> Enum.each(fn {quest, idx} -> upsert_event_quest(event_id, quest, idx, manifests) end)
+    |> Enum.each(fn {quest, idx} ->
+      case upsert_event_quest(event_id, quest, idx, manifests) do
+        :ok ->
+          :ok
+
+        {:error, errors} ->
+          Reporter.silent_warn(
+            "[#{prefix()}] event quest #{inspect(quest.name)} not written: #{inspect(errors)}"
+          )
+      end
+    end)
   end
 
   defp upsert_event_quest(event_id, quest, position, manifests) do
     manifest = Map.get(manifests, quest.slug)
     content = if manifest, do: json_round_trip(manifest), else: %{}
     task_id = manifest && Map.get(manifest, :task_id)
+
+    replace =
+      if manifest, do: @event_quest_replace_on_conflict, else: @event_quest_listing_only
 
     attrs = %{
       event_id: event_id,
@@ -226,23 +265,13 @@ defmodule EftBuddy.Events.Sync do
     %EventQuest{}
     |> EventQuest.changeset(attrs)
     |> Repo.insert(
-      on_conflict: {:replace, @event_quest_replace_on_conflict},
+      on_conflict: {:replace, replace},
       conflict_target: [:event_id, :normalized_name]
     )
     |> case do
       {:ok, _row} -> :ok
       {:error, changeset} -> {:error, changeset.errors}
     end
-  end
-
-  # Delete rows for events no longer on the page (their `event_quests`
-  # cascade away via the FK's `on_delete: :delete_all`). Safe because we
-  # only reach here after a non-empty parse.
-  defp prune_events(processed_slugs) do
-    {deleted, _} =
-      Repo.delete_all(from(e in Event, where: e.normalized_name not in ^processed_slugs))
-
-    deleted
   end
 
   # ── Quest-page scraping (reuses the quest dump pipeline) ───────────
@@ -252,11 +281,14 @@ defmodule EftBuddy.Events.Sync do
   # quest's manifest by slug. The injected `write` accumulates into an
   # Agent rather than persisting, so we can fan the one manifest out to
   # every (event, quest) row afterwards.
+  #
+  # Returns `{manifests, %{processed: n, failed: n}}`. The counts used to be
+  # dropped, which is how a run where every quest page failed still reported ok.
   defp scrape_quest_manifests(events) do
     quest_titles = EventsDump.unique_quest_titles(events)
 
     if quest_titles == [] do
-      %{}
+      {%{}, %{processed: 0, failed: 0}}
     else
       db_index = WikiDump.build_db_index(load_db_rows())
       quests = Enum.map(quest_titles, fn q -> WikiDump.build_quest(q.wiki_title, db_index) end)
@@ -264,22 +296,23 @@ defmodule EftBuddy.Events.Sync do
       # Each event quest has its own wiki page, so each carries its own
       # authors. The event rows themselves are all scraped from the single
       # shared "Events" page, so there is no per-event roster to fetch.
-      rosters = Contributors.fetch(Enum.map(quests, & &1.wiki_title), http_opts())
+      rosters = Contributors.fetch(Enum.map(quests, & &1.wiki_title), Api.http_opts())
 
       {:ok, agent} = Agent.start_link(fn -> %{} end)
 
       try do
-        WikiDump.run(quests,
-          fetch: &fetch_quest_sections/1,
-          resolve: &resolve_image_urls/1,
-          write: fn quest, manifest ->
-            manifest = Contributors.merge(manifest, Map.get(rosters, quest.wiki_title))
-            Agent.update(agent, &Map.put(&1, quest.normalized_name, manifest))
-            :ok
-          end
-        )
+        result =
+          WikiDump.run(quests,
+            fetch: &fetch_quest_sections/1,
+            resolve: &resolve_image_urls/1,
+            write: fn quest, manifest ->
+              manifest = Contributors.merge(manifest, Map.get(rosters, quest.wiki_title))
+              Agent.update(agent, &Map.put(&1, quest.normalized_name, manifest))
+              :ok
+            end
+          )
 
-        Agent.get(agent, & &1)
+        {Agent.get(agent, & &1), Map.take(result.summary, [:processed, :failed])}
       after
         Agent.stop(agent)
       end
@@ -295,92 +328,33 @@ defmodule EftBuddy.Events.Sync do
     )
   end
 
-  # ── Wiki HTTP (impure glue, mirrors Wiki.Sync) ─────────
-
-  defp http_opts, do: [url: @api_url, user_agent: DumpScript.user_agent()]
-
-  defp fetch_events_wikitext do
-    case DumpScript.api_get(
-           %{
-             "action" => "parse",
-             "page" => @events_page,
-             "prop" => "wikitext",
-             "format" => "json",
-             "formatversion" => "2"
-           },
-           http_opts()
-         ) do
-      {:ok, %{"error" => %{"info" => msg}}} -> {:error, msg}
-      {:ok, body} -> {:ok, get_in(body, ["parse", "wikitext"]) || ""}
-      {:error, reason} -> {:error, reason}
-    end
-  end
+  # ── Wiki HTTP (the shared requests live in `EftBuddy.Wiki.Api`) ────
 
   # Build the section list (incl. the synthesized lead) and fetch each
   # section's wikitext for one quest — identical to the quest sync, so
   # the manifest shape matches `wiki_quests.content` exactly.
   defp fetch_quest_sections(quest) do
-    case fetch_sections(quest.wiki_title) do
-      {:error, reason} ->
-        {:error, reason}
+    with {:ok, sections_list} <- Api.section_list(quest.wiki_title) do
+      sections_list = [%{index: "0", heading: "(lead / infobox)", level: "0"} | sections_list]
 
-      {:ok, sections_list} ->
-        sections_list = [%{index: "0", heading: "(lead / infobox)", level: "0"} | sections_list]
-
-        raw =
-          Enum.map(sections_list, fn s ->
-            %{
-              index: s.index,
-              heading: s.heading,
-              level: s.level,
-              wikitext: fetch_wikitext_section(quest.wiki_title, s.index)
-            }
-          end)
-
-        {:ok, raw}
+      {:ok,
+       Enum.map(sections_list, fn s ->
+         %{
+           index: s.index,
+           heading: s.heading,
+           level: s.level,
+           wikitext: fetch_wikitext_section(quest.wiki_title, s.index)
+         }
+       end)}
     end
   end
 
-  defp fetch_sections(title) do
-    case DumpScript.api_get(
-           %{
-             "action" => "parse",
-             "page" => title,
-             "prop" => "sections",
-             "format" => "json",
-             "formatversion" => "2"
-           },
-           http_opts()
-         ) do
-      {:ok, %{"error" => %{"info" => msg}}} ->
-        {:error, msg}
-
-      {:ok, body} ->
-        list =
-          (get_in(body, ["parse", "sections"]) || [])
-          |> Enum.map(fn s -> %{index: s["index"], heading: s["line"], level: s["level"]} end)
-
-        {:ok, list}
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
+  # A section we can't fetch doesn't fail the whole quest; it is stored empty and
+  # counted on the run's `warnings=`.
   defp fetch_wikitext_section(title, section_index) do
-    case DumpScript.api_get(
-           %{
-             "action" => "parse",
-             "page" => title,
-             "prop" => "wikitext",
-             "section" => section_index,
-             "format" => "json",
-             "formatversion" => "2"
-           },
-           http_opts()
-         ) do
-      {:ok, body} ->
-        get_in(body, ["parse", "wikitext"]) || ""
+    case Api.section_wikitext(title, section_index) do
+      {:ok, wikitext} ->
+        wikitext
 
       {:error, reason} ->
         Reporter.silent_warn(
@@ -394,84 +368,28 @@ defmodule EftBuddy.Events.Sync do
   # File-title-keyed image resolution for the quest dump (keys are
   # `"File:"`-prefixed, matching `EftBuddy.Wiki.Dump.serialize_file/2`).
   defp resolve_image_urls(file_titles) do
-    info =
-      file_titles
-      |> Enum.uniq()
-      |> Enum.chunk_every(@imageinfo_batch)
-      |> Enum.flat_map(fn batch -> resolve_image_batch(batch, & &1) end)
-      |> Map.new()
+    {info, failed} = Api.images_with_licenses(file_titles, "url|size|mime|user")
 
-    licenses = FileLicense.fetch(Map.keys(info), http_opts())
+    if failed > 0,
+      do: Reporter.silent_warn("[#{prefix()}] #{failed} image or licence batch(es) failed")
 
-    Map.new(info, fn {title, iinfo} ->
-      {title, Map.put(iinfo, "license", Map.get(licenses, title))}
-    end)
+    info
   end
 
-  # Bare-filename-keyed resolution for event banners. The parsed records
-  # carry bare filenames; we prefix `File:` for the query and map the
-  # resolved url back to the bare key the records use.
+  # Event banners, keyed by the bare filenames the parsed records carry.
   defp resolve_banner_urls(events) do
-    events
-    |> Enum.map(& &1.banner_filename)
-    |> Enum.reject(&is_nil/1)
-    |> Enum.uniq()
-    |> Enum.chunk_every(@imageinfo_batch)
-    |> Enum.flat_map(fn batch ->
-      batch
+    {info, failed} =
+      events
+      |> Enum.map(& &1.banner_filename)
+      |> Enum.reject(&is_nil/1)
       |> Enum.map(&("File:" <> &1))
-      |> resolve_image_batch(&strip_file_prefix/1)
-    end)
-    |> Map.new(fn {key, iinfo} -> {key, iinfo["url"]} end)
+      |> Api.imageinfo("url|size|mime|user")
+
+    if failed > 0,
+      do: Reporter.silent_warn("[#{prefix()}] #{failed} banner imageinfo batch(es) failed")
+
+    Map.new(info, fn {"File:" <> filename, iinfo} -> {filename, iinfo["url"]} end)
   end
-
-  # Resolve a batch of `"File:"`-prefixed titles to imageinfo, keying the
-  # result by `key_fun.(original_title)` so callers choose prefixed
-  # (quest dump) or bare (banners) keys. MediaWiki normalizes/redirects
-  # titles, so we invert those rewrites to recover the title we sent.
-  defp resolve_image_batch(titles, key_fun) do
-    case DumpScript.api_get(
-           %{
-             "action" => "query",
-             "titles" => Enum.join(titles, "|"),
-             "prop" => "imageinfo",
-             "iiprop" => "url|size|mime|user",
-             "format" => "json",
-             "formatversion" => "2",
-             "redirects" => "1"
-           },
-           http_opts()
-         ) do
-      {:ok, body} ->
-        rewrites =
-          ((get_in(body, ["query", "normalized"]) || []) ++
-             (get_in(body, ["query", "redirects"]) || []))
-          |> Map.new(fn %{"from" => from, "to" => to} -> {to, from} end)
-
-        original_for = fn title ->
-          Enum.reduce_while(1..5, title, fn _, current ->
-            case Map.get(rewrites, current) do
-              nil -> {:halt, current}
-              prev -> {:cont, prev}
-            end
-          end)
-        end
-
-        (get_in(body, ["query", "pages"]) || [])
-        |> Enum.flat_map(fn
-          %{"missing" => true} -> []
-          %{"title" => t, "imageinfo" => [iinfo | _]} -> [{key_fun.(original_for.(t)), iinfo}]
-          _ -> []
-        end)
-
-      {:error, reason} ->
-        Reporter.silent_warn("[#{prefix()}] imageinfo batch failed: #{inspect(reason)}")
-        []
-    end
-  end
-
-  defp strip_file_prefix("File:" <> rest), do: rest
-  defp strip_file_prefix(other), do: other
 
   # Round-trip an atom-keyed manifest/content map through JSON so it's
   # stored string-keyed (exactly what a JSONB read returns), matching

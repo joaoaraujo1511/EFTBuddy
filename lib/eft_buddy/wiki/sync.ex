@@ -63,11 +63,17 @@ defmodule EftBuddy.Wiki.Sync do
 
     * empty `tasks` table → skip entirely (every quest would be a
       mis-keyed WIP), retry sooner.
-    * empty category enumeration (API down / category renamed) → skip,
-      keep existing rows, retry on the normal cadence.
+    * a category that cannot be listed whole (a failed continuation page)
+      or lists nothing → skip, keep existing rows (`EftBuddy.Wiki.Api`
+      enumerates all or nothing; a partial listing used to prune ~40% of the
+      table), and the prune itself refuses to drop most of the table.
     * a single page that fails to fetch is isolated by
       `EftBuddy.Wiki.Dump.run/2` and its existing row is preserved by the
-      prune (the slug is still in the processed set).
+      prune (the slug is still in the processed set). A page with a failed
+      section, image batch or roster is stored without a revision so it is
+      scraped again (`EftBuddy.Wiki.PageGaps`).
+    * more than 10% of the attempted pages failing makes the run an error
+      (`EftBuddy.Wiki.Api.scrape_result/3`), which `/health/sync` can see.
   """
 
   # `bootstrap: :chained` — this one is not armed by Bootstrap at all.
@@ -95,15 +101,14 @@ defmodule EftBuddy.Wiki.Sync do
 
   alias EftBuddy.Repo
   alias EftBuddy.Tasks.Task
-  alias EftBuddy.Wiki.{Contributors, Dump, DumpScript, FileLicense, Projection, QuestPage}
+  alias EftBuddy.Wiki.{Api, Contributors, Dump, PageGaps, Projection, QuestPage}
   alias EftBuddy.Sync.Reporter
 
-  @api_url "https://escapefromtarkov.fandom.com/api.php"
   @category "Category:Quests"
-  @imageinfo_batch 50
 
-  # MediaWiki caps `titles` at 50 per query for anonymous callers.
-  @revisions_batch 50
+  # What the image lookup asks for: `url` also returns `descriptionurl` (the
+  # File: page), and `user` is the uploader, both needed for the image credit.
+  @iiprop "url|size|mime|sha1|user|extmetadata"
 
   # How long after `:events_complete` this scrape starts.
   @post_events_gap 1 * 60 * 1_000
@@ -167,19 +172,27 @@ defmodule EftBuddy.Wiki.Sync do
 
       true ->
         db_index = Dump.build_db_index(db_rows)
-        titles = enumerate_quest_titles()
 
-        if titles == [] do
-          Logger.error(
-            "[#{prefix()}] enumerated 0 quests from #{@category} (API down or category renamed?); keeping existing rows."
-          )
+        case Api.category_members(@category) do
+          {:error, reason} ->
+            Logger.error(
+              "[#{prefix()}] could not enumerate #{@category} (#{inspect(reason)}); keeping existing rows."
+            )
 
-          {:error, :empty_enumeration}
-        else
-          titles
-          |> Enum.filter(&Dump.quest_title?/1)
-          |> blacklist_event_quests()
-          |> scrape_and_upsert(db_index)
+            {:error, {:enumeration_failed, reason}}
+
+          {:ok, []} ->
+            Logger.error(
+              "[#{prefix()}] enumerated 0 quests from #{@category} (category renamed?); keeping existing rows."
+            )
+
+            {:error, :empty_enumeration}
+
+          {:ok, titles} ->
+            titles
+            |> Enum.filter(&Dump.quest_title?/1)
+            |> blacklist_event_quests()
+            |> scrape_and_upsert(db_index)
         end
     end
   end
@@ -215,7 +228,7 @@ defmodule EftBuddy.Wiki.Sync do
 
     # Fetched up front for the whole page set so the per-page credits cost
     # a handful of batched requests rather than one request per quest.
-    rosters = Contributors.fetch(Enum.map(quests, & &1.wiki_title), http_opts())
+    rosters = Contributors.fetch(Enum.map(quests, & &1.wiki_title), Api.http_opts())
 
     result =
       Dump.run(quests,
@@ -243,18 +256,26 @@ defmodule EftBuddy.Wiki.Sync do
 
     pruned = prune(keep_slugs)
 
-    {:ok,
-     %{
-       processed: result.summary.processed,
-       unchanged: length(unchanged),
-       failed: result.summary.failed,
-       blacklisted: result.summary.skipped,
-       pruned: pruned,
-       wip:
-         Enum.count(all_quests, fn q ->
-           q.wip and not MapSet.member?(blacklisted, q.normalized_name)
-         end)
-     }}
+    summary = %{
+      processed: result.summary.processed,
+      unchanged: length(unchanged),
+      failed: result.summary.failed,
+      # Stored without a revision because part of the page could not be
+      # fetched (see `EftBuddy.Wiki.PageGaps`); each is scraped again next run.
+      incomplete: Repo.aggregate(from(q in QuestPage, where: is_nil(q.revision_id)), :count),
+      blacklisted: result.summary.skipped,
+      pruned: pruned,
+      wip:
+        Enum.count(all_quests, fn q ->
+          q.wip and not MapSet.member?(blacklisted, q.normalized_name)
+        end)
+    }
+
+    Api.scrape_result(
+      summary,
+      result.summary.processed + result.summary.failed,
+      result.summary.failed
+    )
   end
 
   # Split the enumerated quests into "needs scraping" and "unchanged since the
@@ -296,86 +317,47 @@ defmodule EftBuddy.Wiki.Sync do
   #
   # A failed batch yields nothing rather than raising, which degrades to a full
   # scrape of those pages — the behaviour before conditional fetching existed.
+  # Titles are mapped back to the ones we asked about, so a redirected page is
+  # not read as "unknown revision" and scraped on every run.
   defp current_revision_ids(quests) do
-    quests
-    |> Enum.map(& &1.wiki_title)
-    |> Enum.uniq()
-    |> Enum.chunk_every(@revisions_batch)
-    |> Enum.flat_map(&revision_batch/1)
-    |> Map.new()
-  end
+    {revisions, failed} = quests |> Enum.map(& &1.wiki_title) |> Api.revision_ids()
 
-  defp revision_batch(batch) do
-    case DumpScript.api_get(
-           %{
-             "action" => "query",
-             "titles" => Enum.join(batch, "|"),
-             "prop" => "revisions",
-             # Ids only. This is the cheapest thing the API can answer with, and
-             # asking for content here would defeat the point.
-             "rvprop" => "ids",
-             "format" => "json",
-             "formatversion" => "2",
-             "redirects" => "1"
-           },
-           http_opts()
-         ) do
-      {:ok, body} ->
-        # Titles are normalised and redirected by the API, so map the answers
-        # back to the titles we asked about — otherwise every redirected page
-        # reads as "unknown revision" and is scraped on every run.
-        rewrites =
-          ((get_in(body, ["query", "normalized"]) || []) ++
-             (get_in(body, ["query", "redirects"]) || []))
-          |> Map.new(fn %{"from" => from, "to" => to} -> {to, from} end)
-
-        (get_in(body, ["query", "pages"]) || [])
-        |> Enum.flat_map(fn
-          %{"title" => title, "revisions" => [%{"revid" => revid} | _]} when is_integer(revid) ->
-            [{Map.get(rewrites, title, title), revid}]
-
-          _other ->
-            []
-        end)
-
-      {:error, reason} ->
-        Reporter.silent_warn(
-          "[#{prefix()}] revision probe failed (#{inspect(reason)}); " <>
-            "scraping this batch unconditionally"
-        )
-
-        []
+    if failed > 0 do
+      Reporter.silent_warn(
+        "[#{prefix()}] #{failed} revision probe batch(es) failed; scraping those pages unconditionally"
+      )
     end
+
+    revisions
   end
 
   # Delete rows for quests no longer present on the wiki (or now
-  # blacklisted). Safe because `keep_slugs` covers every enumerated page
-  # we still want — a page whose fetch failed is still in this set, so its
-  # prior row is preserved — and we only reach here on a non-empty
-  # enumeration. The empty clause guards the pathological "everything got
-  # blacklisted" case so it can't `NOT IN ()` the whole table away.
+  # blacklisted). `keep_slugs` covers every enumerated page we still want — a
+  # page whose fetch failed is still in this set, so its prior row is preserved —
+  # and we only reach here on a complete, non-empty enumeration. The empty clause
+  # guards the pathological "everything got blacklisted" case so it can't
+  # `NOT IN ()` the whole table away, and `Api.prune/2` refuses a prune that
+  # would keep too few of the existing rows.
   @doc false
   # Public because it is the destructive step: it deletes every row whose slug is
   # absent from the keep-set, so the keep-set being wrong is how the whole table
   # goes away. Tested directly rather than inferred.
   def prune([]), do: 0
 
-  def prune(keep_slugs) do
-    {deleted, _} =
-      Repo.delete_all(from(q in QuestPage, where: q.normalized_name not in ^keep_slugs))
-
-    deleted
-  end
+  def prune(keep_slugs), do: Api.prune(QuestPage, keep_slugs)
 
   # ── Injected write: upsert one quest's manifest as a row ───────────
 
   defp upsert_quest(quest, manifest, rosters, revisions) do
+    roster = Map.get(rosters, quest.wiki_title)
+    if roster == :unavailable, do: PageGaps.note(:contributors)
+
     # Round-trip the atom-keyed manifest through JSON so `content` is
     # stored string-keyed (exactly what a JSONB read returns) and the
     # projection/karma parsing below see the same shape as at read time.
     content =
       manifest
-      |> Contributors.merge(Map.get(rosters, quest.wiki_title))
+      |> Contributors.merge(roster)
       |> Jason.encode!()
       |> Jason.decode!()
 
@@ -399,11 +381,7 @@ defmodule EftBuddy.Wiki.Sync do
       # manifest for the detail panel; this is the same value, reachable without
       # projecting every page at mount.
       banner_url: banner_url(content),
-      # Stamped from the SAME probe that decided this page needed scraping, not
-      # re-fetched here. A second read could see a newer revision than the one
-      # these sections came from, and the row would then claim to be current for
-      # an edit it does not contain — skipped on every subsequent run.
-      revision_id: Map.get(revisions, quest.wiki_title),
+      revision_id: revision_to_stamp(quest, revisions),
       content: content
     }
 
@@ -416,6 +394,29 @@ defmodule EftBuddy.Wiki.Sync do
     |> case do
       {:ok, _row} -> :ok
       {:error, changeset} -> {:error, changeset.errors}
+    end
+  end
+
+  # Stamped from the SAME probe that decided this page needed scraping, not
+  # re-fetched here. A second read could see a newer revision than the one these
+  # sections came from, and the row would then claim to be current for an edit it
+  # does not contain — skipped on every subsequent run.
+  #
+  # And only when every part of the page was fetched. A section, image or roster
+  # that failed was stored empty, and a stamped revision would make the next runs
+  # skip the page until an editor touched it (audit H11). `nil` means "scrape it
+  # again", which is what an incomplete page needs.
+  defp revision_to_stamp(quest, revisions) do
+    case PageGaps.gaps() do
+      [] ->
+        Map.get(revisions, quest.wiki_title)
+
+      gaps ->
+        Reporter.silent_warn(
+          "[#{prefix()}] #{quest.wiki_title}: stored without a revision, will retry (#{inspect(gaps)})"
+        )
+
+        nil
     end
   end
 
@@ -441,16 +442,14 @@ defmodule EftBuddy.Wiki.Sync do
     )
   end
 
-  # ── Wiki HTTP (impure glue, mirrors the old runner) ────
-
-  defp http_opts, do: [url: @api_url, user_agent: DumpScript.user_agent()]
-
-  defp enumerate_quest_titles do
-    DumpScript.enumerate_category_members(@category, http_opts())
-  end
+  # ── Wiki HTTP (the shared requests live in `EftBuddy.Wiki.Api`) ────
 
   defp fetch_quest_sections(quest) do
-    case fetch_sections(quest.wiki_title) do
+    # Each page is fetched, resolved and written before the next starts, so
+    # what failed for this one is recorded from here until `upsert_quest/4`.
+    PageGaps.reset()
+
+    case Api.section_list(quest.wiki_title) do
       {:error, reason} -> {:error, reason}
       {:ok, sections_list} -> classify_and_fetch(quest, sections_list)
     end
@@ -464,12 +463,20 @@ defmodule EftBuddy.Wiki.Sync do
   # writer is never reached, so no row is upserted, and the prune deletes
   # any row a previous run left behind. Skipping them is what shortens the
   # run.
+  #
+  # A lead that cannot be fetched fails the page. It carries the infobox (giver,
+  # karma, banner), so storing the page without it would store wrong data, and
+  # the page's existing row is kept instead.
   defp classify_and_fetch(quest, sections_list) do
-    lead_wikitext = fetch_wikitext_section(quest.wiki_title, "0")
+    case Api.section_wikitext(quest.wiki_title, "0") do
+      {:error, reason} ->
+        {:error, {:lead, reason}}
 
-    case Dump.blacklist_reason(lead_wikitext) do
-      nil -> {:ok, [lead_section(lead_wikitext) | fetch_rest_sections(quest, sections_list)]}
-      reason -> {:skip, reason}
+      {:ok, lead_wikitext} ->
+        case Dump.blacklist_reason(lead_wikitext) do
+          nil -> {:ok, [lead_section(lead_wikitext) | fetch_rest_sections(quest, sections_list)]}
+          reason -> {:skip, reason}
+        end
     end
   end
 
@@ -488,51 +495,16 @@ defmodule EftBuddy.Wiki.Sync do
     end)
   end
 
-  defp fetch_sections(title) do
-    case DumpScript.api_get(
-           %{
-             "action" => "parse",
-             "page" => title,
-             "prop" => "sections",
-             "format" => "json",
-             "formatversion" => "2"
-           },
-           http_opts()
-         ) do
-      {:ok, %{"error" => %{"info" => msg}}} ->
-        {:error, msg}
-
-      {:ok, body} ->
-        list =
-          (get_in(body, ["parse", "sections"]) || [])
-          |> Enum.map(fn s -> %{index: s["index"], heading: s["line"], level: s["level"]} end)
-
-        {:ok, list}
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
+  # A section we can't fetch doesn't fail the whole quest: it is stored empty,
+  # counted on the run's `warnings=`, and noted so the page is not marked current.
   defp fetch_wikitext_section(title, section_index) do
-    case DumpScript.api_get(
-           %{
-             "action" => "parse",
-             "page" => title,
-             "prop" => "wikitext",
-             "section" => section_index,
-             "format" => "json",
-             "formatversion" => "2"
-           },
-           http_opts()
-         ) do
-      {:ok, body} ->
-        get_in(body, ["parse", "wikitext"]) || ""
+    case Api.section_wikitext(title, section_index) do
+      {:ok, wikitext} ->
+        wikitext
 
-      # A single section we can't fetch shouldn't fail the whole quest;
-      # it's swallowed to "" but counted on the run summary so a page
-      # that quietly lost a section still shows up as warnings=N.
       {:error, reason} ->
+        PageGaps.note({:section, section_index})
+
         Reporter.silent_warn(
           "[#{prefix()}] wikitext section #{section_index} of #{title} failed: #{inspect(reason)}"
         )
@@ -541,66 +513,16 @@ defmodule EftBuddy.Wiki.Sync do
     end
   end
 
+  # Images with their file licences, keyed by `"File:"` title. A failed batch
+  # leaves those images without a url or credit, so it is a gap in the page.
   defp resolve_image_urls(file_titles) do
-    file_titles
-    |> Enum.uniq()
-    |> Enum.chunk_every(@imageinfo_batch)
-    |> Enum.flat_map(&resolve_image_batch/1)
-    |> Map.new()
-    |> merge_file_licenses()
-  end
+    {info, failed} = Api.images_with_licenses(file_titles, @iiprop)
 
-  # Only a handful of files on the whole wiki declare a licence of their
-  # own; those are the contributor-authored ones we credit. Keys here are
-  # already `"File:"`-prefixed titles, which is what FileLicense expects.
-  defp merge_file_licenses(info) do
-    licenses = FileLicense.fetch(Map.keys(info), http_opts())
-
-    Map.new(info, fn {title, iinfo} ->
-      {title, Map.put(iinfo, "license", Map.get(licenses, title))}
-    end)
-  end
-
-  defp resolve_image_batch(batch) do
-    case DumpScript.api_get(
-           %{
-             "action" => "query",
-             "titles" => Enum.join(batch, "|"),
-             "prop" => "imageinfo",
-             # `url` also returns `descriptionurl` (the File: page), and
-             # `user` is the uploader - both needed for the image credit.
-             "iiprop" => "url|size|mime|sha1|user|extmetadata",
-             "format" => "json",
-             "formatversion" => "2",
-             "redirects" => "1"
-           },
-           http_opts()
-         ) do
-      {:ok, body} ->
-        rewrites =
-          ((get_in(body, ["query", "normalized"]) || []) ++
-             (get_in(body, ["query", "redirects"]) || []))
-          |> Map.new(fn %{"from" => from, "to" => to} -> {to, from} end)
-
-        original_for = fn title ->
-          Enum.reduce_while(1..5, title, fn _, current ->
-            case Map.get(rewrites, current) do
-              nil -> {:halt, current}
-              prev -> {:cont, prev}
-            end
-          end)
-        end
-
-        (get_in(body, ["query", "pages"]) || [])
-        |> Enum.flat_map(fn
-          %{"missing" => true} -> []
-          %{"title" => t, "imageinfo" => [iinfo | _]} -> [{original_for.(t), iinfo}]
-          _ -> []
-        end)
-
-      {:error, reason} ->
-        Reporter.silent_warn("[#{prefix()}] imageinfo batch failed: #{inspect(reason)}")
-        []
+    if failed > 0 do
+      PageGaps.note({:images, failed})
+      Reporter.silent_warn("[#{prefix()}] #{failed} image or licence batch(es) failed")
     end
+
+    info
   end
 end

@@ -55,15 +55,11 @@ defmodule EftBuddy.Chapters.Sync do
     config_key: :chapters
 
   require Logger
-  import Ecto.Query
 
   alias EftBuddy.Repo
   alias EftBuddy.Chapters.{ChapterPage, Dump, Projection}
-  alias EftBuddy.Wiki.{Contributors, DumpScript, FileLicense}
+  alias EftBuddy.Wiki.{Api, Contributors}
   alias EftBuddy.Sync.Reporter
-
-  @api_url "https://escapefromtarkov.fandom.com/api.php"
-  @imageinfo_batch 50
 
   # Reference pages outside `Category:Story chapters` that we still want
   # scraped through the same pipeline. "Endings" is the wiki's overview
@@ -83,65 +79,64 @@ defmodule EftBuddy.Chapters.Sync do
   # Returns `{:ok, summary}`, `{:error, :empty_enumeration}` or
   # `{:error, reason}`. `run/0` (from `EftBuddy.Sync.Scheduler`) wraps this in the
   # cluster-wide lock.
+  #
+  # The enumeration runs inside the Reporter run (audit H14). Outside it, a
+  # failed enumeration was a log line and never a recorded failed run, so
+  # `/health/sync` could not see it.
   def do_run do
-    titles = DumpScript.enumerate_category_members(Dump.category(), http_opts())
+    Reporter.with_run("ChaptersSync", fn ->
+      case Api.category_members(Dump.category()) do
+        {:error, reason} ->
+          Logger.error(
+            "[#{prefix()}] could not enumerate #{Dump.category()} (#{inspect(reason)}); keeping existing rows."
+          )
 
-    if titles == [] do
-      Logger.error(
-        "[#{prefix()}] enumerated 0 chapters from #{Dump.category()} (API down or category renamed?); keeping existing rows."
-      )
+          {:error, {:enumeration_failed, reason}}
 
-      {:error, :empty_enumeration}
-    else
-      # Append the standalone reference pages only after a successful
-      # enumeration, and de-dupe by slug so a reference page that also
-      # happens to be a category member isn't scraped twice.
-      chapters =
-        (Dump.build_chapters(titles) ++ extra_pages())
-        |> Enum.uniq_by(& &1.normalized_name)
+        {:ok, []} ->
+          Logger.error(
+            "[#{prefix()}] enumerated 0 chapters from #{Dump.category()} (category renamed?); keeping existing rows."
+          )
 
-      scrape_and_upsert(chapters)
-    end
+          {:error, :empty_enumeration}
+
+        {:ok, titles} ->
+          # Append the standalone reference pages only after a successful
+          # enumeration, and de-dupe by slug so a reference page that also
+          # happens to be a category member isn't scraped twice.
+          (Dump.build_chapters(titles) ++ extra_pages())
+          |> Enum.uniq_by(& &1.normalized_name)
+          |> scrape_and_upsert()
+      end
+    end)
   end
 
   defp extra_pages, do: Enum.map(@extra_pages, &Dump.chapter_from_title/1)
 
   defp scrape_and_upsert(chapters) do
-    Reporter.with_run("ChaptersSync", fn ->
-      # One batched pass for all ~11 chapter pages, before the per-chapter
-      # scrape, so each chapter's credits name its own authors.
-      rosters = Contributors.fetch(Enum.map(chapters, & &1.wiki_title), http_opts())
+    # One batched pass for all ~11 chapter pages, before the per-chapter
+    # scrape, so each chapter's credits name its own authors.
+    rosters = Contributors.fetch(Enum.map(chapters, & &1.wiki_title), Api.http_opts())
 
-      result =
-        Dump.run(chapters,
-          fetch: &fetch_chapter/1,
-          resolve: &resolve_image_urls/1,
-          prune: &prune_sections/2,
-          write: &upsert_chapter(&1, &2, rosters)
-        )
+    result =
+      Dump.run(chapters,
+        fetch: &fetch_chapter/1,
+        resolve: &resolve_image_urls/1,
+        prune: &prune_sections/2,
+        write: &upsert_chapter(&1, &2, rosters)
+      )
 
-      pruned = prune(chapters)
+    # Rows for chapters no longer on the wiki. `chapters` covers every
+    # enumerated page (a page whose fetch failed is still in this set, so its
+    # prior row is preserved), we only get here after a complete, non-empty
+    # enumeration, and `Api.prune/2` refuses one that would drop most rows.
+    pruned = Api.prune(ChapterPage, Enum.map(chapters, & &1.normalized_name))
 
-      {:ok,
-       %{
-         processed: result.summary.processed,
-         failed: result.summary.failed,
-         pruned: pruned
-       }}
-    end)
-  end
-
-  # Delete rows for chapters no longer present on the wiki. Safe because
-  # `chapters` covers every enumerated page (a page whose fetch failed is
-  # still in this set, so its prior row is preserved), and we only get
-  # here when enumeration returned a non-empty set.
-  defp prune(chapters) do
-    slugs = Enum.map(chapters, & &1.normalized_name)
-
-    {deleted, _} =
-      Repo.delete_all(from(c in ChapterPage, where: c.normalized_name not in ^slugs))
-
-    deleted
+    Api.scrape_result(
+      %{processed: result.summary.processed, failed: result.summary.failed, pruned: pruned},
+      result.summary.processed + result.summary.failed,
+      result.summary.failed
+    )
   end
 
   # ── Injected prune: what is worth storing ──────────────────────────
@@ -221,9 +216,7 @@ defmodule EftBuddy.Chapters.Sync do
     end
   end
 
-  # ── Wiki HTTP (impure glue, mirrors the old runner) ────
-
-  defp http_opts, do: [url: @api_url, user_agent: DumpScript.user_agent()]
+  # ── Wiki HTTP (the shared requests live in `EftBuddy.Wiki.Api`) ────
 
   # Fetch and assemble a chapter's `parse_sections/1` payload: the
   # lead/infobox wikitext (section 0) plus the wikitext of every other
@@ -231,66 +224,9 @@ defmodule EftBuddy.Chapters.Sync do
   defp fetch_chapter(chapter) do
     title = chapter.wiki_title
 
-    with {:ok, raw_sections} <- fetch_sections(title),
-         {:ok, lead_wikitext} <- fetch_wikitext_section(title, "0") do
+    with {:ok, raw_sections} <- Api.section_list(title),
+         {:ok, lead_wikitext} <- Api.section_wikitext(title, "0") do
       {:ok, %{lead_wikitext: lead_wikitext, sections: fetch_section_bodies(title, raw_sections)}}
-    end
-  end
-
-  # `action=parse&prop=sections` — the non-lead section list. The lead /
-  # infobox is synthesized separately (it isn't in the API's list) by
-  # `EftBuddy.Chapters.Dump.parse_sections/1`.
-  defp fetch_sections(title) do
-    case DumpScript.api_get(
-           %{
-             "action" => "parse",
-             "page" => title,
-             "prop" => "sections",
-             "format" => "json",
-             "formatversion" => "2"
-           },
-           http_opts()
-         ) do
-      {:ok, %{"error" => %{"info" => msg}}} ->
-        {:error, msg}
-
-      {:ok, body} ->
-        list =
-          (get_in(body, ["parse", "sections"]) || [])
-          |> Enum.map(fn s ->
-            %{index: s["index"], heading: s["line"], level: s["level"], fromtitle: s["fromtitle"]}
-          end)
-
-        {:ok, list}
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  # `action=parse&prop=wikitext&section=N` — the raw wikitext of one
-  # section, returned byte-for-byte for `parse_sections/1` to retain
-  # unmodified.
-  defp fetch_wikitext_section(title, section_index) do
-    case DumpScript.api_get(
-           %{
-             "action" => "parse",
-             "page" => title,
-             "prop" => "wikitext",
-             "section" => section_index,
-             "format" => "json",
-             "formatversion" => "2"
-           },
-           http_opts()
-         ) do
-      {:ok, %{"error" => %{"info" => msg}}} ->
-        {:error, msg}
-
-      {:ok, body} ->
-        {:ok, get_in(body, ["parse", "wikitext"]) || ""}
-
-      {:error, reason} ->
-        {:error, reason}
     end
   end
 
@@ -351,7 +287,7 @@ defmodule EftBuddy.Chapters.Sync do
   defp integer_index?(index), do: to_string(index) =~ ~r/^\d+$/
 
   defp prepend_own_section(title, s, acc) do
-    case fetch_wikitext_section(title, s.index) do
+    case Api.section_wikitext(title, s.index) do
       {:ok, wikitext} ->
         [%{index: s.index, heading: s.heading, level: s.level, wikitext: wikitext} | acc]
 
@@ -371,7 +307,7 @@ defmodule EftBuddy.Chapters.Sync do
   # the `tmpl:` index is what tells the downstream parser to keep the
   # blob's own sub-headings — they are never dumped separately.
   defp prepend_template_section(tmpl, acc) do
-    case fetch_page_wikitext(tmpl) do
+    case Api.page_wikitext(tmpl) do
       {:ok, wikitext} ->
         [
           %{
@@ -392,107 +328,24 @@ defmodule EftBuddy.Chapters.Sync do
   defp template_heading("Template:" <> rest), do: rest
   defp template_heading(title), do: title
 
-  # `action=parse&prop=wikitext` for a whole page (no section), used for
-  # transcluded templates whose sections aren't individually fetchable.
-  defp fetch_page_wikitext(title) do
-    case DumpScript.api_get(
-           %{
-             "action" => "parse",
-             "page" => title,
-             "prop" => "wikitext",
-             "format" => "json",
-             "formatversion" => "2"
-           },
-           http_opts()
-         ) do
-      {:ok, %{"error" => %{"info" => msg}}} -> {:error, msg}
-      {:ok, body} -> {:ok, get_in(body, ["parse", "wikitext"]) || ""}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
   # ── Image resolution (metadata-only; no binaries downloaded) ───────
 
-  # Resolve a de-duplicated list of bare wiki filenames to their CDN
-  # image info via batched `action=query&prop=imageinfo`. The result is
-  # keyed by the SAME bare filename the caller passed, so
-  # `EftBuddy.Chapters.Dump.build_manifest/3` can look each one up. Files
-  # missing on the wiki, or whose batch fails, are simply absent from the
-  # map (the manifest records those with a `nil` url).
+  # Resolve a de-duplicated list of bare wiki filenames to their CDN image info
+  # and licence. The result is keyed by the SAME bare filename the caller passed,
+  # so `EftBuddy.Chapters.Dump.build_manifest/3` can look each one up. Files
+  # missing on the wiki, or whose batch fails, are simply absent from the map
+  # (the manifest records those with a `nil` url).
   defp resolve_image_urls(filenames) do
-    filenames
-    |> Enum.uniq()
-    |> Enum.chunk_every(@imageinfo_batch)
-    |> Enum.flat_map(&resolve_image_batch/1)
-    |> Map.new()
-    |> merge_file_licenses()
-  end
-
-  # Keys here are bare filenames, so prefix for the licence lookup and map
-  # the result back onto the bare key the manifest uses.
-  defp merge_file_licenses(info) do
-    licenses =
-      info
-      |> Map.keys()
+    {info, failed} =
+      filenames
+      |> Enum.uniq()
       |> Enum.map(&("File:" <> &1))
-      |> FileLicense.fetch(http_opts())
-      |> Map.new(fn {title, license} -> {strip_file_prefix(title), license} end)
+      |> Api.images_with_licenses("url|size|mime|user")
 
-    Map.new(info, fn {filename, iinfo} ->
-      {filename, Map.put(iinfo, "license", Map.get(licenses, filename))}
-    end)
-  end
+    if failed > 0,
+      do: Reporter.silent_warn("[#{prefix()}] #{failed} image or licence batch(es) failed")
 
-  defp resolve_image_batch(batch) do
-    titles = Enum.map(batch, &("File:" <> &1))
-
-    case DumpScript.api_get(
-           %{
-             "action" => "query",
-             "titles" => Enum.join(titles, "|"),
-             "prop" => "imageinfo",
-             "iiprop" => "url|size|mime|user",
-             "format" => "json",
-             "formatversion" => "2",
-             "redirects" => "1"
-           },
-           http_opts()
-         ) do
-      {:ok, body} ->
-        # MediaWiki normalizes titles and follows redirects before
-        # answering, surfacing both rewrites as `{from, to}` pairs. Invert
-        # them so each returned page title maps back to whatever we sent,
-        # then strip the "File:" prefix to recover the bare filename key.
-        rewrites =
-          ((get_in(body, ["query", "normalized"]) || []) ++
-             (get_in(body, ["query", "redirects"]) || []))
-          |> Map.new(fn %{"from" => from, "to" => to} -> {to, from} end)
-
-        original_for = fn title ->
-          Enum.reduce_while(1..5, title, fn _, current ->
-            case Map.get(rewrites, current) do
-              nil -> {:halt, current}
-              prev -> {:cont, prev}
-            end
-          end)
-        end
-
-        (get_in(body, ["query", "pages"]) || [])
-        |> Enum.flat_map(fn
-          %{"missing" => true} ->
-            []
-
-          %{"title" => t, "imageinfo" => [iinfo | _]} ->
-            [{strip_file_prefix(original_for.(t)), iinfo}]
-
-          _ ->
-            []
-        end)
-
-      {:error, reason} ->
-        Reporter.silent_warn("[#{prefix()}] imageinfo batch failed: #{inspect(reason)}")
-        []
-    end
+    Map.new(info, fn {title, iinfo} -> {strip_file_prefix(title), iinfo} end)
   end
 
   # MediaWiki accepts `Image:` as an alias for `File:`, so match either rather

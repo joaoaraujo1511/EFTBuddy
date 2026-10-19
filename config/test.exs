@@ -75,6 +75,11 @@ config :eft_buddy, start_sync: false
 # fails at once.
 config :eft_buddy, :tarkov_req_options, plug: {Req.Test, EftBuddy.TarkovApi}, retry: false
 
+# The same for the Fandom wiki: scraper tests serve a fake wiki through
+# `EftBuddy.WikiStub`, and the 250 ms politeness throttle is off.
+config :eft_buddy, :wiki_req_options, plug: {Req.Test, EftBuddy.Wiki.DumpScript}, retry: false
+config :eft_buddy, :wiki_throttle_ms, 0
+
 # The read cache is OFF in test. The suite's whole shape is "insert a fixture,
 # read it back", and a cache keyed on sync completion has no sync to invalidate
 # it here — so a value cached by one test would be served to the next and the

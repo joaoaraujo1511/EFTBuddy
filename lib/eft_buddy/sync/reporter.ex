@@ -555,6 +555,15 @@ defmodule EftBuddy.Sync.Reporter do
 
   def describe_error(:already_running), do: "another sync is already running"
 
+  # A Fandom scrape where too many pages failed (`EftBuddy.Wiki.Api.scrape_result/3`).
+  def describe_error({:pages_failed, failed, attempted, _summary}),
+    do: "#{failed} of #{attempted} pages failed to scrape"
+
+  def describe_error({:enumeration_failed, reason}),
+    do: "could not list the wiki's pages (#{describe_error(reason)})"
+
+  def describe_error({:api, code, info}), do: "wiki API error #{code}: #{info}"
+
   # A sub-step that declined to run inside a roll-up (Items' barters and crafts).
   def describe_error({:skipped, reason}) when is_binary(reason), do: "skipped: #{reason}"
   def describe_error({:skipped, reason}), do: "skipped: #{inspect(reason)}"

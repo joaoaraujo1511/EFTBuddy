@@ -95,13 +95,17 @@ defmodule EftBuddy.Wiki.SyncConditionalFetchTest do
   end
 
   describe "the keep-set and the prune" do
-    test "a row whose slug is in the keep-set survives" do
-      stored("kept", 1)
+    # Ten stored pages, so dropping one keeps 90% and passes the prune guard
+    # (`Api.prune/2` refuses a prune that keeps fewer of the existing rows).
+    defp nine_kept, do: for(i <- 1..9, do: "kept-#{i}")
+
+    test "a row whose slug is not in the keep-set is deleted" do
+      Enum.each(nine_kept(), &stored(&1, 1))
       stored("gone", 1)
 
-      assert Sync.prune(["kept"]) == 1
-      assert Repo.aggregate(QuestPage, :count, :id) == 1
-      assert Repo.get_by!(QuestPage, normalized_name: "kept")
+      assert Sync.prune(nine_kept()) == 1
+      assert Repo.aggregate(QuestPage, :count, :id) == 9
+      refute Repo.get_by(QuestPage, normalized_name: "gone")
     end
 
     test "an empty keep-set deletes nothing rather than the whole table" do
@@ -114,19 +118,33 @@ defmodule EftBuddy.Wiki.SyncConditionalFetchTest do
       assert Repo.aggregate(QuestPage, :count, :id) == 2
     end
 
+    test "a keep-set that would drop most of the table is refused (audit H12)" do
+      # A category listing that came back short — the failed second page of
+      # `Category:Quests` used to look exactly like this.
+      ExUnit.CaptureLog.capture_log(fn ->
+        Enum.each(nine_kept(), &stored(&1, 1))
+        stored("also-kept", 1)
+
+        assert Sync.prune(["kept-1", "kept-2"]) == 0
+      end)
+
+      assert Repo.aggregate(QuestPage, :count, :id) == 10
+    end
+
     test "unchanged pages must be in the keep-set the scrape builds" do
-      # THE SHARP EDGE. This asserts the shape rather than running the scrape,
-      # because `scrape_and_upsert/2` fetches from the network — but the shape is
-      # the whole bug: build the keep-set from what was scraped and every skipped
-      # page is deleted.
-      all = [quest("scraped"), quest("unchanged")]
-      stored("scraped", 1)
+      # THE SHARP EDGE. This asserts the shape rather than running the scrape:
+      # build the keep-set from what was scraped and every skipped page is
+      # deleted. One skipped page in ten is within the guard's tolerance, so the
+      # guard does not hide this bug; only the keep-set's shape prevents it.
+      scraped = nine_kept()
+      all = Enum.map(scraped ++ ["unchanged"], &quest/1)
+      Enum.each(scraped, &stored(&1, 1))
       stored("unchanged", 2)
 
-      {scrape, unchanged} =
-        Sync.partition_by_revision(all, %{"scraped" => 99, "unchanged" => 2})
+      revisions = Map.new(scraped, &{&1, 99}) |> Map.put("unchanged", 2)
+      {scrape, unchanged} = Sync.partition_by_revision(all, revisions)
 
-      assert length(scrape) == 1
+      assert length(scrape) == 9
       assert length(unchanged) == 1
 
       # What the sync does: keep-set from ALL enumerated quests, not from
@@ -140,7 +158,7 @@ defmodule EftBuddy.Wiki.SyncConditionalFetchTest do
       # Put it back and prove the real keep-set preserves it.
       stored("unchanged", 2)
       assert Sync.prune(keep_from_all) == 0
-      assert Repo.aggregate(QuestPage, :count, :id) == 2
+      assert Repo.aggregate(QuestPage, :count, :id) == 10
     end
   end
 end

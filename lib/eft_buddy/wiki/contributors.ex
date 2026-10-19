@@ -31,8 +31,6 @@ defmodule EftBuddy.Wiki.Contributors do
   re-sync. The read-model projections deliberately do not expose it.
   """
 
-  require Logger
-
   alias EftBuddy.Wiki.DumpScript
 
   # Deliberately well under the 500-contributor `pclimit`: ~20 titles at
@@ -48,25 +46,31 @@ defmodule EftBuddy.Wiki.Contributors do
   @type roster :: %{names: [String.t()], anon: non_neg_integer()}
 
   @doc """
-  Fetch rosters for `titles`, returning `%{title => roster}`.
+  Fetch rosters for `titles`, returning `%{title => roster | :unavailable}`.
 
-  Titles absent from the result either don't exist or failed to fetch; the
-  caller treats a missing entry as "no credits captured" and renders the
-  generic credit line rather than failing.
+  A title absent from the result does not exist on the wiki. `:unavailable`
+  means its batch failed, so its credits are unknown rather than empty: a
+  scraper renders the generic credit line for it, and `EftBuddy.Wiki.Sync`
+  does not mark the page current, so the roster is fetched again next run.
   """
-  @spec fetch([String.t()], keyword()) :: %{String.t() => roster()}
+  @spec fetch([String.t()], keyword()) :: %{String.t() => roster() | :unavailable}
   def fetch(titles, http_opts) when is_list(titles) and is_list(http_opts) do
     titles
     |> Enum.reject(&(is_nil(&1) or &1 == ""))
     |> Enum.uniq()
     |> Enum.chunk_every(@batch)
     |> Enum.reduce(%{}, fn batch, acc ->
-      batch
-      |> fetch_batch(%{}, %{}, http_opts, 1)
-      |> Map.merge(acc, fn _title, a, b -> merge_roster(a, b) end)
-    end)
-    |> Map.new(fn {title, roster} ->
-      {title, %{roster | names: roster.names |> Enum.uniq() |> Enum.sort()}}
+      case fetch_batch(batch, %{}, %{}, http_opts, 1) do
+        {:ok, rosters} ->
+          rosters
+          |> Map.new(fn {title, roster} ->
+            {title, %{roster | names: roster.names |> Enum.uniq() |> Enum.sort()}}
+          end)
+          |> Map.merge(acc)
+
+        :error ->
+          Map.merge(acc, Map.new(batch, &{&1, :unavailable}))
+      end
     end)
   end
 
@@ -74,12 +78,11 @@ defmodule EftBuddy.Wiki.Contributors do
   Merge a roster into a scraper manifest, before it is JSON round-tripped
   into the `content` column.
 
-  A `nil` roster still writes the keys, so a page whose fetch failed is
-  distinguishable from one that predates this feature only by the sync
-  timestamp — and the UI treats both the same way.
+  A `nil` or `:unavailable` roster still writes the keys, empty, and the UI
+  renders the generic credit line for both.
   """
-  @spec merge(map(), roster() | nil) :: map()
-  def merge(manifest, nil) when is_map(manifest) do
+  @spec merge(map(), roster() | :unavailable | nil) :: map()
+  def merge(manifest, roster) when is_map(manifest) and roster in [nil, :unavailable] do
     Map.merge(manifest, %{contributors: [], anon_contributors: 0})
   end
 
@@ -89,9 +92,12 @@ defmodule EftBuddy.Wiki.Contributors do
 
   # ── Internals ──────────────────────────────────────────────────────
 
-  defp fetch_batch(_batch, _continue, acc, _http_opts, page) when page > @max_pages do
-    Logger.warning("[Contributors] continuation limit hit; roster may be partial")
-    acc
+  # `{:ok, rosters}` or `:error`. A batch whose continuation fails part way is
+  # an error as a whole: its rosters would be missing names, and a partial
+  # credit list is not one we can pass off as complete.
+  defp fetch_batch(_batch, _continue, _acc, _http_opts, page) when page > @max_pages do
+    EftBuddy.Sync.Reporter.silent_warn("[Contributors] continuation limit hit; batch dropped")
+    :error
   end
 
   defp fetch_batch(batch, continue, acc, http_opts, page) do
@@ -114,15 +120,14 @@ defmodule EftBuddy.Wiki.Contributors do
         acc = collect(body, acc)
 
         case body["continue"] do
-          nil -> acc
+          nil -> {:ok, acc}
           next -> fetch_batch(batch, stringify(next), acc, http_opts, page + 1)
         end
 
       {:error, reason} ->
-        # One failed batch must not sink the whole scrape: the pages in it
-        # simply keep the credit line they already had.
-        Logger.warning("[Contributors] batch failed: #{inspect(reason)}")
-        acc
+        # Counted on the run's `warnings=` rather than logged per batch.
+        EftBuddy.Sync.Reporter.silent_warn("[Contributors] batch failed: #{inspect(reason)}")
+        :error
     end
   end
 
