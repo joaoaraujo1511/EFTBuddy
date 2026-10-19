@@ -64,7 +64,6 @@ defmodule EftBuddy.Chapters.Projection do
           banner: %{url: String.t()} | nil,
           summary: String.t() | nil,
           related_links: [%{title: String.t(), slug: String.t()}],
-          sections: [map()],
           content_sections: [content_section()],
           items: [
             %{
@@ -84,8 +83,8 @@ defmodule EftBuddy.Chapters.Projection do
 
   Pre-computes everything the LiveView renders — the parsed
   content_sections, de-duplicated item overview, infobox banner, lore
-  summary, and the objective/image counts — and keeps the raw `sections`
-  for search / future use.
+  summary, and the objective/image counts. The raw `sections` themselves
+  are not kept.
   """
   @spec project(map()) :: chapter()
   def project(manifest) when is_map(manifest) do
@@ -97,7 +96,8 @@ defmodule EftBuddy.Chapters.Projection do
       normalized_name: manifest["normalized_name"],
       chapter_name: manifest["chapter_name"],
       wiki_title: manifest["wiki_title"],
-      wiki_link: manifest["wiki_link"],
+      # Re-encoded on read; see `EftBuddy.Wiki.Url.normalize/1`.
+      wiki_link: EftBuddy.Wiki.Url.normalize(manifest["wiki_link"]),
       # Authors of this chapter's wiki page (see `EftBuddy.Wiki.Contributors`).
       contributors: manifest["contributors"] || [],
       # See `EftBuddy.Wiki.Projection` — uploaders of contributor-licensed
@@ -111,8 +111,9 @@ defmodule EftBuddy.Chapters.Projection do
       # `[%{title, slug}]`. The LiveView intersects these slugs with
       # real task slugs to render cross-links into the tasks tab.
       related_links: normalize_related(manifest["related_links"]),
-      # Raw sections retained for search / future use.
-      sections: sections,
+      # The raw sections are not carried: nothing read them (search uses
+      # `content_sections`), and each held its full wikitext in every cached
+      # projection (audit M23).
       # The walkthrough, rendered faithfully: every non-lead section
       # parsed into ordered heading/prose/list/gallery/items blocks.
       content_sections: content_sections,

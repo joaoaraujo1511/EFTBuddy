@@ -9,9 +9,10 @@ defmodule EftBuddy.Events.EventQuest do
   shape `wiki_quests.content` does. `EftBuddy.Wiki.Projection` therefore
   renders an event quest's objectives/guide exactly like the Tasks tab.
 
-  These quests are deliberately blacklisted from `EftBuddy.Wiki.Sync`
-  (so they no longer surface as WIP on the Tasks tab); this table is the
-  source of truth that drives that blacklist.
+  The ones tarkov.dev does not serve as tasks are blacklisted from
+  `EftBuddy.Wiki.Sync`, so they do not surface as WIP on the Tasks tab; this
+  table is the source of truth for that blacklist. Those that ARE real tasks
+  keep their wiki guide on the Tasks tab as well.
 
   Keyed by `(event_id, normalized_name)` — a quest added by two
   different events gets a row under each. `task_id` is a best-effort FK
@@ -29,6 +30,10 @@ defmodule EftBuddy.Events.EventQuest do
     field :name, :string
     field :position, :integer, default: 0
     field :content, :map, default: %{}
+    # The wiki revision `content` was scraped at, so unchanged pages are not
+    # fetched again. NULL means "scrape it": never scraped, or scraped with a
+    # section, image or roster missing.
+    field :revision_id, :integer
 
     belongs_to :event, EftBuddy.Events.Event
     belongs_to :task, EftBuddy.Tasks.Task
@@ -36,7 +41,7 @@ defmodule EftBuddy.Events.EventQuest do
     timestamps()
   end
 
-  @fields [:event_id, :normalized_name, :name, :task_id, :position, :content]
+  @fields [:event_id, :normalized_name, :name, :task_id, :position, :content, :revision_id]
 
   def changeset(quest, attrs) do
     quest

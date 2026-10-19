@@ -54,7 +54,6 @@ defmodule EftBuddy.Events.Dump do
   alias EftBuddy.Wiki.Slug
   import EftBuddy.Wiki.Markup, only: [clean_text: 1, strip_inline_file_refs: 1]
 
-  @wiki_base "https://escapefromtarkov.fandom.com/wiki/"
   @past_divider "This section describes past events"
 
   @months %{
@@ -181,7 +180,7 @@ defmodule EftBuddy.Events.Dump do
       availability_note: extract_availability_note(body_lines),
       quests: quests,
       gameplay_changes: gameplay_changes,
-      wiki_link: @wiki_base <> String.replace(title, " ", "_")
+      wiki_link: EftBuddy.Wiki.Url.page(title)
     }
   end
 
@@ -334,7 +333,7 @@ defmodule EftBuddy.Events.Dump do
           name: display_name(display),
           slug: slug,
           wiki_title: target,
-          wiki_link: @wiki_base <> String.replace(target, " ", "_")
+          wiki_link: EftBuddy.Wiki.Url.page(target)
         }
       end
     else

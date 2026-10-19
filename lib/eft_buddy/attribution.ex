@@ -28,9 +28,8 @@ defmodule EftBuddy.Attribution do
     * **tarkov.dev's API data**, which carries no published data licence at
       all, so nothing is owed for it
 
-  The full licence research behind these — including why the wiki's licence is
-  pinned at 3.0 when the wiki itself no longer states a version — is in
-  `docs/attribution/CONTEXT.md`.
+  Why the wiki's licence is pinned at 3.0 when the wiki itself no longer states
+  a version is set out below.
 
   ## What a wiki can and cannot license
 

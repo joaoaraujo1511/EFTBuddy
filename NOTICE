@@ -131,8 +131,8 @@ The Escape from Tarkov Wiki licenses its contributors' **prose** under
 application credits beside the content it renders. The wiki **cannot** sublicense
 Battlestate's own material, so screenshots and extracted game icons hosted there
 are *not* covered by that grant and are never labelled as if they were. See
-`EftBuddy.Attribution` and [`docs/attribution/CONTEXT.md`](docs/attribution/CONTEXT.md)
-for the full reasoning.
+`EftBuddy.Attribution` (`lib/eft_buddy/attribution.ex`) for the full reasoning,
+including why the wiki's licence is recorded as 3.0.
 
 Corrections and takedown requests: see the contact link in the application
 footer.

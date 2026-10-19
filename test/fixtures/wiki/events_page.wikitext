@@ -1,0 +1,184 @@
+''For the [[Arena]], see [[Arena Events]].''
+
+'''{{PAGENAME}}''' in ''[[Escape from Tarkov]]'' are limited time activities that give players new challenges, adjust gameplay & mechanics, and introduce new items that are being tested by the developers for a limited time. Some events are "lore-oriented" which give an insight or backstory to the Tarkov/Norvinsk region, while other events are seasonal holiday events that are done just for fun. 
+This is not a complete list, and there are many events missing.
+
+{{TOC limit|2|right}}
+
+==Scourge Incursion (16 October 2026)==
+<li style="display: inline-block;"><gallery widths="300" heights="169" mode="packed">
+File:Hidden Route Banner.png
+</gallery></li>
+{{quote|A squad of unidentified operatives has infiltrated the TerraGroup underground complex. They’re well-armed and even better trained. Their actions seem almost rehearsed. Rumor has it that they’re led by one of the Arena champions. Take part in the investigation to uncover what they’re looking for in the Lab.}}
+'''Gameplay Changes'''
+* New boss [[Scourge]] in [[The Lab]].
+* Quest [[Hidden Route]] has been added.
+* Quest [[A Simple Task in a Difficult Place]] has been added.
+* Quest [[Extending the Operation]] has been added.
+* Quest [[Information Trail]] has been added.
+* Quest [[Side Hustle]] has been added.
+* Quest [[Doxed]] has been added.
+
+==Shifting Balance (8 September 2026)==
+<li style="display: inline-block;"><gallery widths="300" heights="169" mode="packed">
+File:Huntsman path Eraser Banner.png
+</gallery></li>
+'''Gameplay Changes'''
+* [[Glukhar]] has moved from [[Reserve]] to [[Lighthouse]] and appears in every raid in the water treatment plant. He always has 3 followers, one of each type.
+* Quest [[Fog of War]] has been added.
+* Quest [[Number Temporarily Unavailable]] has been added.
+* Quest [[All-Inclusive Support]] has been added.
+* Quest [[A Familiar Face...]] has been added.
+* Quest [[Scope the Clearing]] has been added.
+* Quest [[Lose the Tail]] has been added.
+* Quest [[Callsign Malachite]] has been added.
+* Quest [[Ease the Move]] has been added.
+* Quest [[Cut Down to the Root]] has been added.
+* Quest [[Preserve a Valuable Piece]] has been added.
+
+{| style="border:1px solid #228b22; width:750px; margin:1em auto 1em auto; padding:5px; box-shadow: 0 0 15px rgba(65,61,52,1), 0 0 6px rgba(34,139,34,0.8);"
+| [[Image:Event_Icon.png|center|50px|link=]]
+| style="text-align:center; font-size: 132%;" | This section describes past events.
+| [[Image:Event_Icon.png|center|50px|link=]]
+|}
+
+==Icebreaker (25 May 2026)==
+<li style="display: inline-block;"><gallery widths="300" heights="169" mode="packed">
+File:Icebreaker Event.jpg
+</gallery></li>
+{{quote|How did the Paradigm Shipping icebreaker end up trapped inside Tarkov’s blockade ring? What happened to its crew? Who is behind it all? You’ll uncover the answers by completing a new story chapter during an expedition focused on exploration and PvE gameplay. And if answers alone are not enough, the loot will make it worth your while.}}
+'''Gameplay Changes'''
+* [[Icebreaker]] location has been added.
+* Story chapter [[Boreas]] has been added.
+* [[Sanitar]] only spawns at the port/pier area and near the cottages on [[Shoreline]].
+* Quest [[Stick to It]] has been added.
+* Quest [[Saving Private Roman]] has been added.
+* Quest [[A Bitter Victory]] has been added.
+* Quest [[Hangover]] has been added.
+* Quest [[A Wedge Between Us]] has been added.
+* Quest [[Oil Change]] has been added.
+* Quest [[Peaceful Atom]] has been added.
+* Quest [[Wiring the Vessel]] has been added.
+* Quest [[War Never Changes]] has been added.
+* Quest [[Biochemistry]] has been added.
+* Quest [[Fresh Stock]] has been added.
+
+==The Labyrinth (27 March 2025)==
+<li style="display: inline-block;"><gallery widths="300" heights="169" mode="packed">
+File:The Labyrinth Event.png
+</gallery></li>
+* [[The Labyrinth]] location has been added.
+** Roamed by [[Shadow of Tagilla]] carrying a [[Chained Labrys|Labrys]] and wearing a modified [[Tagilla's welding mask "ZABEY"|welding mask]].
+<li style="display: inline-block;"><gallery widths="300" heights="169" mode="packed">
+File:ShadowOfTagilla.png|Shadow of Tagilla
+</gallery></li>
+* Quest [[Shady Contractor]] has been added.
+* Quest [[Needle in a Haystack]] has been added.
+* Quest [[Hidden Layer]] has been added.
+* Quest [[Sensory Analysis - Part 1]] has been added.
+* Quest [[Sensory Analysis - Part 2]] has been added.
+* Quest [[Hot Zone]] has been added.
+* Quest [[Competition Protection]] has been added.
+* Quest [[Forced Alliance]] has been added.
+* Quest [[The Tarkov Butcher]] has been added.
+* Quest [[Offensive Reconnaissance]] has been added.
+* Quest [[Hypotheses Testing]] has been added.
+* Quest [[Vacate the Premises]] has been added.
+* Quest [[Confidential Info]] has been added.
+* Quest [[Indisputable Authority]] has been added.
+* Quest [[This Tape Sucks]] has been added.
+* Quest [[Keeper's Word]] has been added.
+* [[Pointy guy figurine]] has been added.
+* [[Xenoalien figurine]] has been added.
+* [[Petya Crooker figurine]] has been added.
+* [[Nailhead figurine]] has been added.
+* [[Count Bloodsucker figurine]] has been added.
+* [[Tagilla's welding mask "ZABEY" (Replica)]] has been added.
+
+==Marathon (20 August 2024)==
+'''Not available in the [[Game_modes#PvE_and_PvE_Co-op_game_mode|PvE game mode]].'''
+<li style="display: inline-block;"><gallery widths="300" heights="169" mode="packed">
+File:MarathonEventBanner.jpg
+</gallery></li>
+'''Gameplay Changes'''
+* Added the "Marathon" game mode in which it is possible to transit between locations in the following ways:
+**[[Ground Zero]] <big>→</big> [[Streets of Tarkov]] (<big>↔</big> [[The Lab]]) <big>→</big> [[Interchange]] <big>→</big> [[Customs]] <big>→</big> [[Factory]] <big>→</big> [[Woods]] <big>→</big> [[Reserve]] <big>→</big> [[Lighthouse]] <big>→</big> [[Shoreline]]
+* Quest [[From Beginning To End|Marathon - From Beginning To End]] has been added.
+* Quest [[Sightseeing|Marathon - Sightseeing]] has been added.
+
+==Sanitar Event (11 November 2022)==
+<li style="display: inline-block;"><gallery widths="300" heights="169" mode="packed">
+sanitar_event.png
+</gallery></li>
+'''Gameplay Changes'''
+*[[Sanitar]] can be encountered on [[Customs]] with 4-5 [[Sanitar#Followers|Guards]], and has a 100% spawn chance.
+*Temporary Quest [[Letters]] can be started from [[Mechanic]].
+
+==Halloween 2022 (27 October 2022)==
+<li style="display: inline-block;"><gallery widths="300" heights="169" mode="packed">
+halloween2022_event.png
+</gallery></li>
+'''Gameplay Changes'''
+*[[Tagilla]] can be encountered on all locations, has an increased health pool of 1900 and is armed with a [[Scythe]], wears a [[Spooky skull mask]] and has an increased spawn chance.
+*[[Cultists]] can be encountered on all locations besides [[The Lab]] and have an increased spawn chance.
+*A random negative [[Health system#Temporary_status_effects|status effect]] is given to your PMC at the start a raid.
+*[[Traders]] pictures have been "spookified". 👻
+*[[Unknown toxin]] is removed upon death for free.
+*[[Weapons]] will jam more frequently.
+*The Escape from Tarkov website halloween "Dooomed" counter will trigger some events when it hits 666,666 and lasts for 30 minutes before resetting.
+*Some [[Provisions]] no longer replenish hydration or energy.
+*[[Pumpkin with sweets|Pumpkins with sweets]] can be found in the world.
+
+==June 2022 Pre-Wipe Event (20-27 June 2022)==
+===Airdrop Traffic (Day 1)===
+<li style="display: inline-block;"><gallery widths="300" heights="169" mode="packed">
+Airdrops2022_event.png
+</gallery></li>
+'''Gameplay Changes'''
+*Significantly increased the chance and count of [[airdrops]] that spawn on outdoor maps.
+
+===Obdolbos Roulette (Day 2)===
+<li style="display: inline-block;"><gallery widths="300" heights="169" mode="packed">
+Obdolbos2022_event.png
+</gallery></li>
+'''Gameplay Changes'''
+*Huge Buff to the [[Obdolbos cocktail injector]] but gave it a 5% chance of killing your character.
+
+===Meeting of the Bosses (Day 3)===
+<li style="display: inline-block;"><gallery widths="300" heights="169" mode="packed">
+bosses2022_event.png
+</gallery></li>
+'''Gameplay Changes'''
+*All [[Bosses]] are spawning on [[Customs]].
+
+===Barter Only (Day 4)===
+<li style="display: inline-block;"><gallery widths="300" heights="169" mode="packed">
+barter2022_event.png
+</gallery></li>
+'''Gameplay Changes'''
+*Removed all cash-offers from the [[Trading|Traders]] (except for [[Fence]]) - you can only barter with them now.
+*New Barters for [[Dogtag|Dogtags]] were added to the traders.
+
+===Free Labs (Day 5)===
+<li style="display: inline-block;"><gallery widths="300" heights="169" mode="packed">
+freelabs2022_event.png
+</gallery></li>
+'''Gameplay Changes'''
+*Entry to [[The Lab]] doesn't require a [[TerraGroup Labs access keycard]] for the duration of the event.
+
+===Unlocked Traders & Discounts (Day 6)===
+<li style="display: inline-block;"><gallery widths="300" heights="169" mode="packed">
+unlockedtraders2022_event.png
+</gallery></li>
+'''Gameplay Changes'''
+*Unlocked all [[Trading|Traders]] and heavily discounted their items.
+
+===Deadly Toxin (Day 7)===
+<li style="display: inline-block;"><gallery widths="300" heights="169" mode="packed">
+toxic2022_event.png
+</gallery></li>
+'''Gameplay Changes'''
+*Players are given infinite Stamina.
+*All extracts except one are locked.
+*The [[Unknown toxin]] debuff is given to your PMC at the start of the raid, which gives you 8 minutes to live unless you find an [[xTG-12 antidote injector|antidote]] on [[Bosses]] or [[airdrops]].
+

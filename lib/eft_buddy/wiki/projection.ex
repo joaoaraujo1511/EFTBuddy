@@ -29,7 +29,6 @@ defmodule EftBuddy.Wiki.Projection do
           image_uploaders: [String.t()],
           wip: boolean(),
           given_by: String.t() | nil,
-          sections: [map()],
           guide: [map()],
           objectives_text: [%{index: integer(), text: String.t()}],
           objective_images: %{integer() => [map()]},
@@ -56,7 +55,9 @@ defmodule EftBuddy.Wiki.Projection do
       # The wiki page this guide was captured from. Stored by the scraper
       # but dropped here until now, which is why nothing in the UI could
       # link back to the source — see `EftBuddyWeb.CoreComponents.source_credit/1`.
-      wiki_link: manifest["wiki_link"],
+      # Re-encoded on read: stored before links were encoded (audit M20), and an
+      # unchanged page is not rescraped, so the stored copy can be broken.
+      wiki_link: EftBuddy.Wiki.Url.normalize(manifest["wiki_link"]),
       # The people who wrote this page, captured by `EftBuddy.Wiki.Contributors`.
       # Empty for manifests scraped before contributors were collected, which
       # the UI treats as "no credits captured" rather than "no contributors".
@@ -68,7 +69,9 @@ defmodule EftBuddy.Wiki.Projection do
       image_uploaders: FileLicense.image_uploaders(manifest),
       wip: manifest["wip"] == true,
       given_by: manifest["given_by"],
-      sections: sections,
+      # The raw sections are NOT carried into the projection: every field the UI
+      # reads is extracted from them above, and keeping each section's wikitext
+      # alongside cost memory in every cached projection for nothing (audit M23).
       guide: extract_guide(sections),
       objectives_text: extract_objectives_text(sections),
       objective_images: extract_objective_images(sections),

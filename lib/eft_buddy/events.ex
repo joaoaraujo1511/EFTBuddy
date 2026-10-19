@@ -188,7 +188,7 @@ defmodule EftBuddy.Events do
       # (see events_live/index.html.heex), which is what satisfies the wiki's
       # CC BY-NC-SA attribution condition for the event's own prose. The event
       # *quests* carry their own credit, each pointing at its own page.
-      wiki_link: get_in(event.content, ["wiki_link"]),
+      wiki_link: EftBuddy.Wiki.Url.normalize(get_in(event.content, ["wiki_link"])),
       availability_note: get_in(event.content, ["availability_note"]),
       gameplay_changes: parse_changes(event.content),
       quests: quests

@@ -43,6 +43,10 @@ defmodule EftBuddy.Wiki.ProjectionTest do
 
     p = Projection.project(manifest(sections))
     assert p.objectives_text == [%{index: 1, text: "Find the key"}]
+
+    # Extracted from, not carried: the raw sections' wikitext was held in every
+    # cached projection and read by nothing (audit M23).
+    refute Map.has_key?(p, :sections)
   end
 
   test "builds guide blocks (prose + gallery) from the guide wikitext" do
