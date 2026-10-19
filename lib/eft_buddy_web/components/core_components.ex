@@ -148,10 +148,14 @@ defmodule EftBuddyWeb.CoreComponents do
   def input(%{type: "select"} = assigns) do
     ~H"""
     <div class="mb-3">
-      <label :if={@label} class="t-label text-[10px] text-fog-500 block mb-1.5">{@label}</label>
+      <label :if={@label} for={@id} class="t-label text-[10px] text-fog-500 block mb-1.5">
+        {@label}
+      </label>
       <select
         id={@id}
         name={@name}
+        aria-describedby={error_id(@id, @errors)}
+        aria-invalid={@errors != [] && "true"}
         class={[@class || base_input_class(@errors), "appearance-none"]}
         multiple={@multiple}
         {@rest}
@@ -159,7 +163,7 @@ defmodule EftBuddyWeb.CoreComponents do
         <option :if={@prompt} value="">{@prompt}</option>
         {Phoenix.HTML.Form.options_for_select(@options, @value)}
       </select>
-      <.error :for={msg <- @errors}>{msg}</.error>
+      <.field_errors id={@id} errors={@errors} />
     </div>
     """
   end
@@ -167,9 +171,18 @@ defmodule EftBuddyWeb.CoreComponents do
   def input(%{type: "textarea"} = assigns) do
     ~H"""
     <div class="mb-3">
-      <label :if={@label} class="t-label text-[10px] text-fog-500 block mb-1.5">{@label}</label>
-      <textarea id={@id} name={@name} class={[@class || base_input_class(@errors)]} {@rest}>{Phoenix.HTML.Form.normalize_value("textarea", @value)}</textarea>
-      <.error :for={msg <- @errors}>{msg}</.error>
+      <label :if={@label} for={@id} class="t-label text-[10px] text-fog-500 block mb-1.5">
+        {@label}
+      </label>
+      <textarea
+        id={@id}
+        name={@name}
+        aria-describedby={error_id(@id, @errors)}
+        aria-invalid={@errors != [] && "true"}
+        class={[@class || base_input_class(@errors)]}
+        {@rest}
+      >{Phoenix.HTML.Form.normalize_value("textarea", @value)}</textarea>
+      <.field_errors id={@id} errors={@errors} />
     </div>
     """
   end
@@ -177,16 +190,20 @@ defmodule EftBuddyWeb.CoreComponents do
   def input(assigns) do
     ~H"""
     <div class="mb-3">
-      <label :if={@label} class="t-label text-[10px] text-fog-500 block mb-1.5">{@label}</label>
+      <label :if={@label} for={@id} class="t-label text-[10px] text-fog-500 block mb-1.5">
+        {@label}
+      </label>
       <input
         type={@type}
         name={@name}
         id={@id}
+        aria-describedby={error_id(@id, @errors)}
+        aria-invalid={@errors != [] && "true"}
         value={Phoenix.HTML.Form.normalize_value(@type, @value)}
         class={[@class || base_input_class(@errors)]}
         {@rest}
       />
-      <.error :for={msg <- @errors}>{msg}</.error>
+      <.field_errors id={@id} errors={@errors} />
     </div>
     """
   end
@@ -240,6 +257,24 @@ defmodule EftBuddyWeb.CoreComponents do
     </button>
     """
   end
+
+  # A field's errors, in a container the field names with `aria-describedby`, so
+  # a screen reader announces them with the field rather than leaving them as
+  # unrelated text after it (audit L30). The label's `for` does the same for
+  # the label.
+  attr :id, :any, required: true
+  attr :errors, :list, required: true
+
+  defp field_errors(assigns) do
+    ~H"""
+    <div :if={@errors != []} id={@id && "#{@id}-error"}>
+      <.error :for={msg <- @errors}>{msg}</.error>
+    </div>
+    """
+  end
+
+  defp error_id(id, errors) when is_binary(id) and errors != [], do: "#{id}-error"
+  defp error_id(_id, _errors), do: nil
 
   defp error(assigns) do
     ~H"""

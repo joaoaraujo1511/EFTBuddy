@@ -1,6 +1,7 @@
 defmodule EftBuddyWeb.ItemsLive.Index do
   use EftBuddyWeb, :live_view
 
+  alias EftBuddyWeb.LoadState
   alias EftBuddy.Chapters
   alias EftBuddy.ItemCategories
   alias EftBuddy.Items
@@ -146,7 +147,7 @@ defmodule EftBuddyWeb.ItemsLive.Index do
      socket
      |> assign_favorites(new_slugs)
      |> persist_watchlist()
-     |> reset_items()}
+     |> refresh_items_in_place()}
   end
 
   def handle_event("toggle_watchlist", _params, socket), do: {:noreply, socket}
@@ -273,6 +274,15 @@ defmodule EftBuddyWeb.ItemsLive.Index do
      |> reset_items()}
   end
 
+  # A feed this page waits on finished while it had nothing to show (see
+  # `EftBuddyWeb.SyncAware`): count and list what the sync wrote.
+  def handle_info(:reload_after_sync, socket) do
+    {:noreply,
+     socket
+     |> assign(:scope_counts, Items.scope_counts(socket.assigns.mode))
+     |> reset_items()}
+  end
+
   def handle_info(_msg, socket), do: {:noreply, socket}
 
   # Keep the slug list and the tab-badge count in lock-step; they must never
@@ -304,6 +314,47 @@ defmodule EftBuddyWeb.ItemsLive.Index do
   # `:sort` and `:scope` assigns, replacing any items already on
   # screen. Resets the expanded set since the visible rows may have
   # changed entirely (e.g. switching scope from :all to :hideout).
+  # After starring an item, the listing is re-run (a starred item floats to the
+  # top, or leaves the watchlist view) but the reader stays where they were: as
+  # many rows loaded as before, the same rows open, their details still cached.
+  # The star used to go through `reset_items/1`, which is right for a new search,
+  # scope or sort but sent the reader back to the first page with everything
+  # collapsed after every click.
+  defp refresh_items_in_place(socket) do
+    %{query: query, sort: sort, scope: scope, items_loaded: loaded} = socket.assigns
+    limit = max(loaded, @page_size)
+
+    items =
+      Items.list_all_items(
+        limit: limit,
+        offset: 0,
+        query: query,
+        sort: sort,
+        scope: scope,
+        category_names: ItemCategories.names_for(socket.assigns.active_category),
+        game_mode: socket.assigns.mode,
+        favorite_slugs: socket.assigns.favorite_slugs
+      )
+
+    ids = MapSet.new(items, & &1.id)
+
+    socket =
+      socket
+      # A row the star moved out of this view (unstarred, under "Watchlist") closes.
+      |> assign(:expanded_ids, MapSet.intersection(socket.assigns.expanded_ids, ids))
+      |> assign(
+        :category_flags,
+        Items.category_flags_for(MapSet.to_list(ids), socket.assigns.mode)
+      )
+
+    rows = Enum.map(items, &build_row(&1, socket.assigns))
+
+    socket
+    |> stream(:items, rows, reset: true)
+    |> assign(:items_loaded, length(items))
+    |> assign(:end_of_items?, end_of_items?(items, limit))
+  end
+
   defp reset_items(socket) do
     %{query: query, sort: sort, scope: scope} = socket.assigns
 
@@ -329,6 +380,7 @@ defmodule EftBuddyWeb.ItemsLive.Index do
       |> assign(:expanded_ids, MapSet.new())
       |> assign(:details_cache, %{})
       |> assign(:category_flags, flags)
+      |> LoadState.assign_load_state((socket.assigns.scope_counts[:all] || 0) > 0, :items)
 
     rows = Enum.map(items, &build_row(&1, socket.assigns))
 

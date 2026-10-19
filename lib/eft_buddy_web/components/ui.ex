@@ -63,6 +63,53 @@ defmodule EftBuddyWeb.UI do
   def item_search_url(name) when is_binary(name), do: "/items?" <> URI.encode_query(q: name)
   def item_search_url(_), do: "/items"
 
+  @doc """
+  How old the data on a page is: "Prices updated 4 min ago".
+
+  The pages presented their data as current with no timestamp at all (the Flea
+  Market's description even called its prices "Live"), while the feeds behind
+  them run every ten minutes to every twelve hours and can fail. `at` is the
+  feed's last success, from `EftBuddyWeb.SyncAware`'s `@sync_ok_at`; nothing
+  renders when the feed has not succeeded since boot.
+
+  The server renders the text, and the `RelativeTime` hook in `app.js` keeps it
+  current on an open page; when the feed finishes again, `@sync_ok_at` moves
+  and the line follows.
+  """
+  attr :id, :string, required: true
+  attr :at, :any, required: true, doc: "a `DateTime`, or nil"
+  attr :label, :string, default: "Updated"
+  attr :class, :any, default: nil
+
+  def data_age(%{at: %DateTime{}} = assigns) do
+    ~H"""
+    <p class={["t-label text-[10px] text-fog-500 text-right", @class]}>
+      {@label}
+      <time id={@id} datetime={DateTime.to_iso8601(@at)} phx-hook="RelativeTime">
+        {relative_time(@at)}
+      </time>
+    </p>
+    """
+  end
+
+  def data_age(assigns), do: ~H""
+
+  @doc """
+  "just now", "4 min ago", "3 h ago", "2 d ago". The `RelativeTime` hook in
+  `app.js` produces the same wording.
+  """
+  @spec relative_time(DateTime.t(), DateTime.t()) :: String.t()
+  def relative_time(%DateTime{} = at, now \\ DateTime.utc_now()) do
+    minutes = max(div(DateTime.diff(now, at), 60), 0)
+
+    cond do
+      minutes < 1 -> "just now"
+      minutes < 60 -> "#{minutes} min ago"
+      minutes < 48 * 60 -> "#{div(minutes, 60)} h ago"
+      true -> "#{div(minutes, 1440)} d ago"
+    end
+  end
+
   @doc "A thin stencil section eyebrow with an amber tick + trailing rule."
   attr :class, :any, default: nil
   slot :inner_block, required: true
@@ -209,7 +256,8 @@ defmodule EftBuddyWeb.UI do
   defp pill_tone(:amber), do: "bg-amber/15 text-amber border-amber/40"
   defp pill_tone(:go), do: "bg-go/15 text-go border-go/40"
   defp pill_tone(:warn), do: "bg-warn/15 text-warn border-warn/40"
-  defp pill_tone(:rust), do: "bg-rust/15 text-rust border-rust/40"
+  # A 10% tint, not 15%: rust text on a 15% rust tint falls under 4.5:1.
+  defp pill_tone(:rust), do: "bg-rust/10 text-rust border-rust/40"
   defp pill_tone(:signal), do: "bg-signal/15 text-signal border-signal/40"
   defp pill_tone(:olive), do: "bg-olive/15 text-olive-bright border-olive/40"
   defp pill_tone(:purple), do: "bg-purple/15 text-purple border-purple/40"

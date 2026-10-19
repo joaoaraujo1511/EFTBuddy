@@ -65,7 +65,10 @@
   /* Status semantics. */
   --color-go: #6cae5a;       /* available / ready / price-up */
   --color-warn: #d8b53f;     /* WIP / caution (distinct yellow) */
-  --color-rust: #c0533c;     /* locked-blocking / missing / price-down */
+  /* locked-blocking / missing / price-down. Mostly small text, so it has to
+     clear 4.5:1: #c0533c measured 3.4-4.0:1 on the panels (audit L30). This is
+     4.7:1 on a panel under a 10% rust tint, the chip it most often sits in. */
+  --color-rust: #da7662;
   /* The secondary accent, and the app's only blue: PVE mode, raid
      time / player counts, Lightkeeper, barters, and the neutral count
      pills on the browse tabs all read in this one colour. */

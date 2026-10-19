@@ -1,4 +1,3 @@
-<% load_state = EftBuddyWeb.LoadState.resolve((@total_flea_count || 0) > 0, :flea_market) %>
 <Layouts.app
   flash={@flash}
   active={@active}
@@ -8,11 +7,11 @@
   scav_karma={@scav_karma}
   page_title="Flea Market"
   search_query={@query}
-  search_placeholder={if load_state == :loaded, do: "Search for items, weapons, armor..."}
+  search_placeholder={if @load_state == :loaded, do: "Search for items, weapons, armor..."}
   rail_collapsed={@rail_collapsed}
 >
   <div class="max-w-[1800px] mx-auto px-4 sm:px-6 py-8 space-y-6">
-    <.controls :if={load_state == :loaded}>
+    <.controls :if={@load_state == :loaded}>
       <:tabs>
         <.tabs
           active={@flea_status}
@@ -76,11 +75,14 @@
         />
       </:filters>
     </.controls>
+    <.data_age
+      :if={@load_state == :loaded}
+      id="flea-data-age"
+      label="Prices updated"
+      at={@sync_ok_at["PricesSync"]}
+    />
 
-    <% active_group = Enum.find(@category_groups, &(&1.id == @active_group_id)) %>
-    <% has_filters? = @query != "" or active_group != nil or @flea_status != :all %>
-
-    <.standby :if={load_state != :loaded} state={load_state} retry_to={~p"/flea-market"} />
+    <.standby :if={@load_state != :loaded} state={@load_state} retry_to={~p"/flea-market"} />
 
     <.watchlist_empty
       :if={@flea_status == :watchlist and @items_loaded == 0 and (@total_flea_count || 0) > 0}
@@ -212,7 +214,10 @@
     </div>
 
     <p
-      :if={@end_of_items? and @items_loaded > 0 and not has_filters?}
+      :if={
+        @end_of_items? and @items_loaded > 0 and
+          not filtered?(@query, @active_group_id, @flea_status)
+      }
       class="mt-8 text-center text-sm text-fog-500"
     >
       End of the live preview - search above to look up any item on the market.

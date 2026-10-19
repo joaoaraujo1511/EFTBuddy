@@ -1,4 +1,3 @@
-<% load_state = EftBuddyWeb.LoadState.resolve(@maps != [], :maps) %>
 <Layouts.app
   flash={@flash}
   active={@active}
@@ -8,11 +7,11 @@
   scav_karma={@scav_karma}
   page_title="Maps"
   search_query={@query}
-  search_placeholder={if load_state == :loaded, do: "Search maps..."}
+  search_placeholder={if @load_state == :loaded, do: "Search maps..."}
   rail_collapsed={@rail_collapsed}
 >
   <div class="max-w-[1800px] mx-auto px-4 sm:px-6 py-8 space-y-6">
-    <.controls :if={load_state == :loaded}>
+    <.controls :if={@load_state == :loaded}>
       <:tabs>
         <%!-- Entry-requirement filter. This was a placeholder that tracked its
              selection but filtered nothing, with a hardcoded 0 on "Locked".
@@ -49,8 +48,14 @@
         />
       </:tabs>
     </.controls>
+    <.data_age
+      :if={@load_state == :loaded}
+      id="maps-data-age"
+      label="Map data updated"
+      at={@sync_ok_at["MapsSync"]}
+    />
 
-    <.standby :if={load_state != :loaded} state={load_state} retry_to={~p"/maps"} />
+    <.standby :if={@load_state != :loaded} state={@load_state} retry_to={~p"/maps"} />
 
     <.no_results :if={@maps != [] && @visible_maps == []} noun="maps" />
 

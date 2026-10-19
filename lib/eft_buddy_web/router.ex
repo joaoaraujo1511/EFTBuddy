@@ -140,7 +140,7 @@ defmodule EftBuddyWeb.Router do
     # operator assigns, then `ClientBridge` attaches the transport events that
     # depend on that token.
     live_session :operator,
-      on_mount: [EftBuddyWeb.OperatorState, EftBuddyWeb.ClientBridge] do
+      on_mount: [EftBuddyWeb.OperatorState, EftBuddyWeb.ClientBridge, EftBuddyWeb.SyncAware] do
       live("/items", ItemsLive.Index, :index)
       live("/ammo", AmmoLive.Index, :index)
       live("/tasks", TasksLive.Index, :index)

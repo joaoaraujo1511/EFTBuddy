@@ -221,20 +221,36 @@ defmodule EftBuddy.Maps do
   """
   def get_map_by_slug(slug, game_mode \\ GameMode.default())
 
+  # Cached (audit L23): the map page needs the map on its static first render
+  # (title, a 404 for an unknown slug, content a crawler can read) and again on
+  # the live mount, and this is a twelve-association preload. The preload pulls
+  # item rows (keys, transfer items) as well as map rows, hence both sources.
+  #
+  # Only slugs that exist are looked up in the cache. Caching by whatever slug a
+  # URL carries would let anyone fill it with misses for maps that do not exist.
   def get_map_by_slug(slug, game_mode) when is_binary(slug) do
-    if Map.has_key?(@blacklisted_slugs, slug) do
+    if Map.has_key?(@blacklisted_slugs, slug) or not MapSet.member?(known_slugs(), slug) do
       nil
     else
       mode = GameMode.to_db(game_mode)
 
-      from(m in GameMap, where: m.normalized_name == ^slug)
-      |> preload(^detail_preloads(mode))
-      |> Repo.one()
-      |> then(fn map -> if map && visible?(map), do: overlay_mode_details(map), else: nil end)
+      Cache.fetch({__MODULE__, :map_by_slug, slug, mode}, ["MapsSync", "ItemsSync"], fn ->
+        from(m in GameMap, where: m.normalized_name == ^slug)
+        |> preload(^detail_preloads(mode))
+        |> Repo.one()
+        |> then(fn map -> if map && visible?(map), do: overlay_mode_details(map), else: nil end)
+      end)
     end
   end
 
   def get_map_by_slug(_, _), do: nil
+
+  # Every map slug in the catalogue, the gate on what `get_map_by_slug/2` caches.
+  defp known_slugs do
+    Cache.fetch({__MODULE__, :known_slugs}, ["MapsSync"], fn ->
+      from(m in GameMap, select: m.normalized_name) |> Repo.all() |> MapSet.new()
+    end)
+  end
 
   @doc """
   Returns a `%{map_id => quest_count}` map for the index badges, counting

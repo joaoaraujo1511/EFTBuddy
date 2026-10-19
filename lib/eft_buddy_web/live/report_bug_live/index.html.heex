@@ -50,6 +50,7 @@
           label="Title *"
           required
           maxlength="150"
+          phx-debounce="400"
           placeholder="Short summary of the problem"
         />
         <.input
@@ -59,6 +60,7 @@
           required
           rows="7"
           maxlength="5000"
+          phx-debounce="400"
           placeholder="What happened? What did you expect? Steps to reproduce, the page you were on, and anything else that helps."
         />
 

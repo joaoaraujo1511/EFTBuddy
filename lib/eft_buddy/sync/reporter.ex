@@ -771,8 +771,31 @@ defmodule EftBuddy.Sync.Reporter do
       )
     end
 
+    broadcast_finished(label, outcome)
     :ok
   rescue
+    ArgumentError -> :ok
+  end
+
+  @sync_topic "sync:finished"
+
+  @doc """
+  The PubSub topic a `{:sync_finished, base_label, outcome}` message is
+  broadcast on whenever a run is recorded. `base_label` drops the mode suffix
+  (`"TasksSync:pve"` arrives as `"TasksSync"`).
+
+  Pages subscribe through `EftBuddyWeb.SyncAware`, so one waiting on a feed
+  that is still syncing fills in when the feed finishes instead of sitting in
+  standby until reloaded (audit L18), and its "updated N min ago" line moves.
+  """
+  @spec sync_topic() :: String.t()
+  def sync_topic, do: @sync_topic
+
+  defp broadcast_finished(label, outcome) do
+    base = label |> String.split(":", parts: 2) |> hd()
+    Phoenix.PubSub.broadcast(EftBuddy.PubSub, @sync_topic, {:sync_finished, base, outcome})
+  rescue
+    # PubSub not started (a script with no application).
     ArgumentError -> :ok
   end
 

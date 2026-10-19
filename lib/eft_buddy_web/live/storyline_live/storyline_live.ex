@@ -26,12 +26,16 @@ defmodule EftBuddyWeb.StorylineLive.Index do
   # Derive the search-filtered chapter timeline into an assign so the
   # template stays declarative. Chapters are loaded once (they don't mutate
   # after mount), so this only needs recomputing when the search changes.
+  #
+  # Also resolves `:load_state`: Storyline has two views (chapters / endings), and
+  # the page counts as loaded once the active view has its data.
   defp assign_visible_chapters(socket) do
-    assign(
-      socket,
-      :visible_chapters,
-      visible_chapters(socket.assigns.chapters, socket.assigns.query)
-    )
+    %{chapters: chapters, branch_objectives: branch, view: view} = socket.assigns
+    loaded? = (view == "chapters" and chapters != []) or (view == "endings" and branch != [])
+
+    socket
+    |> assign(:visible_chapters, visible_chapters(chapters, socket.assigns.query))
+    |> EftBuddyWeb.LoadState.assign_load_state(loaded?, :storyline)
   end
 
   # Load the chapter timeline + endings only on the connected mount so
@@ -101,6 +105,15 @@ defmodule EftBuddyWeb.StorylineLive.Index do
     {:noreply,
      socket |> assign(:view, view) |> assign(:query, query) |> assign_visible_chapters()}
   end
+
+  # A feed this page waits on finished while it had nothing to show (see
+  # `EftBuddyWeb.SyncAware`): load what the sync wrote.
+  @impl true
+  def handle_info(:reload_after_sync, socket) do
+    {:noreply, socket |> load_storyline_data() |> assign_visible_chapters()}
+  end
+
+  def handle_info(_msg, socket), do: {:noreply, socket}
 
   # The search box patches the URL (preserving the active view) so
   # `handle_params/3` stays the single source of truth and the view is

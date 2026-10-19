@@ -41,6 +41,13 @@ defmodule EftBuddyWeb.Layouts do
   attr :current_scope, :map, default: nil
   attr :active, :atom, default: nil
   attr :page_title, :string, default: nil
+
+  attr :heading_in_page, :boolean,
+    default: false,
+    doc:
+      "the page renders its own <h1>, so the top bar shows the title as plain text " <>
+        "(one <h1> per page; audit L30)"
+
   attr :search_query, :string, default: nil
   attr :search_placeholder, :string, default: nil
   attr :pmc_level, :integer, default: 1
@@ -58,6 +65,15 @@ defmodule EftBuddyWeb.Layouts do
       |> assign(:bar_left, if(assigns.rail_collapsed, do: @bar_l_collapsed, else: @bar_l))
 
     ~H"""
+    <%!-- First thing a keyboard reaches: otherwise every page starts with the
+         whole rail (operator controls and nine nav links) before its content
+         (audit L30). Visible only while focused. --%>
+    <a
+      href="#main-content"
+      class="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-[60] focus:px-3 focus:py-2 bg-ink-900 border border-amber text-amber t-label text-xs"
+    >
+      Skip to content
+    </a>
     <.flash_group flash={@flash} />
     <%!-- Per-browser persistence bridge (cookie prefs + localStorage progress);
          present on every page so the Hud hook is always mounted. --%>
@@ -71,7 +87,7 @@ defmodule EftBuddyWeb.Layouts do
         "min-h-screen flex flex-col pt-14",
         @content_pad_l
       ]}>
-        <main class="flex-1">
+        <main id="main-content" tabindex="-1" class="flex-1 focus:outline-none">
           {render_slot(@inner_block)}
         </main>
 
@@ -98,11 +114,18 @@ defmodule EftBuddyWeb.Layouts do
       id="left-rail"
       data-shell-rail
       aria-label="Primary navigation"
-      class={[
-        "fixed top-0 left-0 bottom-0 z-40 flex flex-col bg-ink-900 border-r border-line",
-        "transition-transform duration-200 ease-out -translate-x-full lg:translate-x-0",
-        if(@rail_collapsed, do: "w-60 lg:w-[4.5rem]", else: "w-60")
-      ]}
+      class={
+        [
+          "fixed top-0 left-0 bottom-0 z-40 flex flex-col bg-ink-900 border-r border-line",
+          "transition-[translate,visibility] duration-200 ease-out -translate-x-full lg:translate-x-0",
+          # Off-canvas is not hidden: the closed mobile rail's links stayed in the
+          # tab order, so a keyboard walked through invisible nav (audit L30).
+          # `invisible` takes it out; the Shell hook shows it while open, and the
+          # visibility transition holds it visible until the slide-out finishes.
+          "invisible lg:visible",
+          if(@rail_collapsed, do: "w-60 lg:w-[4.5rem]", else: "w-60")
+        ]
+      }
     >
       <%!-- amber tracer along the inner edge (matches the top bar's rule) --%>
       <div class="absolute top-0 right-0 bottom-0 w-px hud-rule-v opacity-60"></div>
@@ -280,13 +303,24 @@ defmodule EftBuddyWeb.Layouts do
             type="button"
             data-shell-rail-open
             aria-label="Open navigation"
+            aria-controls="left-rail"
+            aria-expanded="false"
             class="lg:hidden -ml-1 w-9 h-9 flex items-center justify-center text-fog-300 hover:text-amber transition-colors hud-focus"
           >
             <.icon name="hero-bars-3" class="w-6 h-6" />
           </button>
-          <h1 :if={@page_title} class="t-head text-lg sm:text-xl text-fog-100 truncate">
+          <h1
+            :if={@page_title && !@heading_in_page}
+            class="t-head text-lg sm:text-xl text-fog-100 truncate"
+          >
             {@page_title}
           </h1>
+          <p
+            :if={@page_title && @heading_in_page}
+            class="t-head text-lg sm:text-xl text-fog-100 truncate"
+          >
+            {@page_title}
+          </p>
         </div>
 
         <%!-- center: global search (only on pages that opt in via placeholder) --%>
@@ -707,7 +741,7 @@ defmodule EftBuddyWeb.Layouts do
         </p>
 
         <p class="t-label text-[10px] text-fog-600">
-          EFT Buddy © 2026 · v{app_version()}
+          EFT Buddy © 2026 · build {build_id()}
         </p>
 
         <%!-- Battlestate's marks appear on any page that renders an item icon or
@@ -752,14 +786,11 @@ defmodule EftBuddyWeb.Layouts do
       "hover:decoration-amber/60 underline-offset-2 transition-colors"
   end
 
-  # Read from the built application rather than hardcoded, so a release bump
-  # cannot leave a stale build number sitting in the footer of every page.
-  defp app_version do
-    case Application.spec(:eft_buddy, :vsn) do
-      nil -> "dev"
-      vsn -> to_string(vsn)
-    end
-  end
+  # The commit the image was built from, as `/health` reports it. The app's
+  # `vsn` was here before and has said 0.1.0 for every build there has ever
+  # been, so it told a reader nothing about which code they were looking at
+  # (audit L31). Short form: a footer is not where anyone needs all forty.
+  defp build_id, do: EftBuddy.BuildInfo.sha() |> String.slice(0, 7)
 
   # ── Shared marks / emblems ─────────────────────────────────────────
 

@@ -61,8 +61,15 @@
           "Track quests, hideout, flea prices, items, maps and lore for Escape from Tarkov. No account needed - your progress stays in your browser."
       }
     />
-    <meta property="og:image" content={url(~p"/images/logo.svg")} />
-    <meta name="twitter:card" content="summary" />
+    <%!-- A PNG card: link previews (Discord, Slack, X, Facebook) do not
+         render SVG, and the SVG this pointed at was Phoenix's stock logo, not
+         ours (audit L31). 1200x630 is the size they all crop to. --%>
+    <meta property="og:image" content={url(~p"/images/og-image.png")} />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="EFT Buddy, an Escape from Tarkov companion" />
+    <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content={assigns[:page_title] || "EFT Buddy"} />
     <meta
       name="twitter:description"

@@ -49,11 +49,11 @@ defmodule EftBuddyWeb.EventsLive.Index do
   # repeated on the disconnected (static) render. `handle_params/3` then
   # derives the visible (filtered + sorted) list from it.
   defp load_events(socket) do
-    if connected?(socket) do
-      assign(socket, :all_events, Events.list_events())
-    else
-      assign(socket, :all_events, [])
-    end
+    events = if connected?(socket), do: Events.list_events(), else: []
+
+    socket
+    |> assign(:all_events, events)
+    |> EftBuddyWeb.LoadState.assign_load_state(events != [], :events)
   end
 
   # Read `?q=` (search) and `?view=` (all|active) from the URL into
@@ -196,6 +196,12 @@ defmodule EftBuddyWeb.EventsLive.Index do
      socket
      |> assign(:watchlist_slugs, read_watchlist_slugs(socket))
      |> refresh_events()}
+  end
+
+  # A feed this page waits on finished while it had nothing to show (see
+  # `EftBuddyWeb.SyncAware`): load what the sync wrote.
+  def handle_info(:reload_after_sync, socket) do
+    {:noreply, socket |> load_events() |> refresh_events()}
   end
 
   # The remaining operator/HUD pings (faction/level/karma) don't change the event

@@ -290,22 +290,40 @@ defmodule EftBuddy.Wiki.Sync do
   # revision, or no revision reported by the API. Unknown resolves to "scrape it"
   # in every direction, because the cost of a needless scrape is one page fetch
   # and the cost of a wrongly-skipped one is a walkthrough that never updates.
+  #
+  # It is also scraped when it moved between WIP and matched, edited or not. The
+  # row stores more than the page: `task_id` and `wip`, and the sections were
+  # parsed for a WIP or a real quest (`Dump.parse_raw_section/2`). Comparing
+  # revisions alone kept a quest that tarkov.dev had since added stored as WIP,
+  # unmatched, until someone happened to edit its wiki page; 143 rows sat like
+  # that in a dev database, every one of them a live task (found verifying audit
+  # H13).
+  #
+  # `wip`, not `task_id`: every quest has one task row per game mode under the
+  # same slug, and the index adopts whichever sorts first, so the stored id can
+  # be either mode's. Comparing ids re-scraped about half the matched pages on
+  # every run.
   @doc false
   # Public so the "unknown means scrape it" rule can be tested directly; the
   # alternative is exercising it through a network call.
   def partition_by_revision(quests, revisions) do
-    stored = stored_revision_ids()
+    stored = stored_rows()
 
     Enum.split_with(quests, fn quest ->
       current = Map.get(revisions, quest.wiki_title)
-      previous = Map.get(stored, quest.normalized_name)
 
-      is_nil(current) or is_nil(previous) or current != previous
+      case Map.get(stored, quest.normalized_name) do
+        {previous, wip} ->
+          is_nil(current) or is_nil(previous) or current != previous or wip != quest.wip
+
+        nil ->
+          true
+      end
     end)
   end
 
-  defp stored_revision_ids do
-    Repo.all(from(q in QuestPage, select: {q.normalized_name, q.revision_id}))
+  defp stored_rows do
+    Repo.all(from(q in QuestPage, select: {q.normalized_name, {q.revision_id, q.wip}}))
     |> Map.new()
   end
 

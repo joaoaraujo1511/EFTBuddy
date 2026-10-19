@@ -141,6 +141,54 @@ defmodule EftBuddyWeb.TasksLive.Index do
     socket
     |> then(&assign(&1, :watchlist_slugs, read_watchlist_slugs(&1)))
     |> apply_progress_from_client_state()
+    |> migrate_wip_progress()
+  end
+
+  # A quest ticked or starred while it was WIP was saved under its wiki slug.
+  # When tarkov.dev adds it, the real task's slug is usually the same, but not
+  # always (a disambiguated wiki title, an event-zone tag), and a slug no task
+  # carries renders as nothing: the visitor's tick was effectively lost.
+  #
+  # The page already knows which wiki slugs a real task stands for, because the
+  # same slugs hide the WIP row (`task_dedup_slugs/1`). A saved slug that names
+  # no task but is one of those is moved to the task's own slug and written back
+  # to localStorage through `ClientBridge` (your decision: migrate in the
+  # browser's copy, no server state). A slug that is some task's own slug is
+  # never moved, and nothing is written when nothing changed.
+  defp migrate_wip_progress(%{assigns: %{all_tasks: []}} = socket), do: socket
+
+  defp migrate_wip_progress(socket) do
+    renames = wip_renames(socket.assigns.all_tasks)
+    {completed, completed_moved?} = rename_slugs(socket.assigns.completed_slugs, renames)
+    {watchlist, watchlist_moved?} = rename_slugs(socket.assigns.watchlist_slugs, renames)
+
+    socket =
+      if completed_moved?,
+        do: socket |> assign_completed(completed) |> persist_tasks_progress(),
+        else: socket
+
+    if watchlist_moved?,
+      do: socket |> assign(:watchlist_slugs, watchlist) |> persist_watchlist(),
+      else: socket
+  end
+
+  # `%{wiki_slug => task_slug}` for the API-backed tasks.
+  @doc false
+  def wip_renames(all_tasks) do
+    own = MapSet.new(all_tasks, & &1.normalized_name)
+
+    for task <- all_tasks,
+        not Map.get(task, :wip?, false),
+        alias_slug <- task_dedup_slugs(task),
+        alias_slug != task.normalized_name,
+        not MapSet.member?(own, alias_slug),
+        into: %{},
+        do: {alias_slug, task.normalized_name}
+  end
+
+  defp rename_slugs(slugs, renames) do
+    renamed = MapSet.new(slugs, &Map.get(renames, &1, &1))
+    {renamed, renamed != slugs}
   end
 
   # Heavy data load - guarded to the connected mount only. The
@@ -290,7 +338,7 @@ defmodule EftBuddyWeb.TasksLive.Index do
          socket
          |> assign_completed(new_slugs)
          |> persist_tasks_progress()
-         |> reset_pagination()}
+         |> refresh_in_place()}
     end
   end
 
@@ -315,7 +363,7 @@ defmodule EftBuddyWeb.TasksLive.Index do
      socket
      |> assign(:watchlist_slugs, new_slugs)
      |> persist_watchlist()
-     |> reset_pagination()}
+     |> refresh_in_place()}
   end
 
   def handle_event("toggle_watchlist", _params, socket), do: {:noreply, socket}
@@ -439,6 +487,12 @@ defmodule EftBuddyWeb.TasksLive.Index do
   # Faction / PMC level / scav karma only change which tasks are visible /
   # how they're gated, not the underlying set or progress - a reflow is
   # enough. Karma is owned by OperatorState, which pings us on change.
+  # A feed this page waits on finished while it had nothing to show (see
+  # `EftBuddyWeb.SyncAware`): load what the sync wrote.
+  def handle_info(:reload_after_sync, socket) do
+    {:noreply, socket |> load_task_data() |> hydrate_progress() |> reset_pagination()}
+  end
+
   def handle_info({:sidebar_state_changed, key, _value}, socket)
       when key in [:faction, :pmc_level, :scav_karma] do
     {:noreply, reset_pagination(socket)}
@@ -634,6 +688,41 @@ defmodule EftBuddyWeb.TasksLive.Index do
   # rows without an `:expanded?` flag, so any state we left in the
   # MapSet would drift from what the user actually sees. Cache stays
   # warm so reopening is instant.
+  # After ticking a quest done or starring it, the list is recomputed (counts,
+  # statuses, a starred quest moving to the top) but the reader stays where they
+  # were: as many rows loaded as before, and the same rows open. Both ticks used
+  # to go through `reset_pagination/1`, which is right for a new filter, search
+  # or sort but sent the reader back to the first page with everything
+  # collapsed after every click.
+  defp refresh_in_place(socket) do
+    %{tasks_loaded: loaded, expanded_ids: expanded, details_cache: cache} = socket.assigns
+    statused = statused_tasks(socket)
+
+    filtered =
+      statused
+      |> Enum.filter(&filter_match?(&1, socket.assigns.filter))
+      |> sort_tasks(socket.assigns.sort)
+
+    shown = Enum.take(filtered, max(loaded, @page_size))
+    # A row the tick moved out of this view (done, under "Available") closes.
+    expanded = MapSet.intersection(expanded, MapSet.new(shown, & &1.id))
+
+    rows =
+      Enum.map(shown, fn task ->
+        if MapSet.member?(expanded, task.id),
+          do: Map.merge(task, %{expanded?: true, details: Map.get(cache, task.id)}),
+          else: task
+      end)
+
+    socket
+    |> assign(:filter_counts, filter_counts(statused))
+    |> assign(:filtered_tasks, filtered)
+    |> assign(:expanded_ids, expanded)
+    |> stream(:tasks, rows, reset: true)
+    |> assign(:tasks_loaded, length(shown))
+    |> assign(:end_of_tasks?, length(shown) >= length(filtered))
+  end
+
   defp reset_pagination(socket) do
     # Compute the trader/faction/search-filtered list with per-task
     # status once, then derive BOTH the per-status counts (for the
@@ -649,6 +738,7 @@ defmodule EftBuddyWeb.TasksLive.Index do
     first_page = Enum.take(filtered, @page_size)
 
     socket
+    |> EftBuddyWeb.LoadState.assign_load_state(socket.assigns.all_tasks != [], :tasks)
     |> assign(:filter_counts, filter_counts(statused))
     |> assign(:filtered_tasks, filtered)
     |> assign(:expanded_ids, MapSet.new())

@@ -20,8 +20,6 @@ defmodule EftBuddyWeb.MapsLive.Index do
     # Defer the DB reads to the connected mount so the disconnected static
     # render doesn't run the same queries a second time. Until then the grid
     # is empty and the template shows the shared standby panel.
-    {maps, counts} = if connected?(socket), do: load_maps(socket.assigns.mode), else: {[], %{}}
-
     {:ok,
      socket
      |> assign(:page_title, "Maps")
@@ -32,9 +30,11 @@ defmodule EftBuddyWeb.MapsLive.Index do
      |> assign(:active, :maps)
      |> assign(:query, "")
      |> assign(:active_status, "all")
-     |> assign(:maps, maps)
-     |> assign(:quest_counts, counts)
-     |> assign_visible_maps()}
+     |> then(fn socket ->
+       if connected?(socket),
+         do: assign_maps(socket, socket.assigns.mode),
+         else: assign_maps_result(socket, {[], %{}, false})
+     end)}
   end
 
   # The search query lives in the URL (?q=) so views are shareable,
@@ -91,10 +91,13 @@ defmodule EftBuddyWeb.MapsLive.Index do
   # and PVE, so a mode flip reloads the grid for the new mode.
   @impl true
   def handle_info({:sidebar_state_changed, :mode, mode}, socket) do
-    {maps, counts} = load_maps(mode)
+    {:noreply, assign_maps(socket, mode)}
+  end
 
-    {:noreply,
-     socket |> assign(:maps, maps) |> assign(:quest_counts, counts) |> assign_visible_maps()}
+  # A feed this page waits on finished while it had nothing to show (see
+  # `EftBuddyWeb.SyncAware`), or the visitor is retrying after an error.
+  def handle_info(:reload_after_sync, socket) do
+    {:noreply, assign_maps(socket, socket.assigns.mode)}
   end
 
   # The HUD's other pings and the client bridge's `{:client_state_restored, ...}`
@@ -200,11 +203,22 @@ defmodule EftBuddyWeb.MapsLive.Index do
   # `raid_duration_label/1` is provided by the shared `EftBuddyWeb.Format`
   # module (imported into every template via `html_helpers/0`).
 
+  # The grid for `mode`. A database error leaves it empty AND says so: it used to
+  # be rescued into an empty list, which looks exactly like "still syncing", so a
+  # database outage showed the standby spinner forever with no Retry (audit L18).
+  defp assign_maps(socket, mode), do: assign_maps_result(socket, load_maps(mode))
+
+  defp assign_maps_result(socket, {maps, counts, db_error?}) do
+    socket
+    |> assign(:maps, maps)
+    |> assign(:quest_counts, counts)
+    |> EftBuddyWeb.LoadState.assign_load_state(maps != [], :maps, db_error?)
+    |> assign_visible_maps()
+  end
+
   defp load_maps(mode) do
-    maps = Maps.list_maps(mode)
-    counts = Maps.quest_counts(mode)
-    {maps, counts}
+    {Maps.list_maps(mode), Maps.quest_counts(mode), false}
   rescue
-    _ in [DBConnection.ConnectionError, Postgrex.Error, Ecto.QueryError] -> {[], %{}}
+    _ in [DBConnection.ConnectionError, Postgrex.Error, Ecto.QueryError] -> {[], %{}, true}
   end
 end

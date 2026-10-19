@@ -377,7 +377,7 @@ function reloadViaServerReset() {
 // drawer). The DESKTOP collapse states (rail width / drawer open) are owned by
 // the server and persisted through the cookie bridge, so all this hook manages
 // is the MOBILE, off-canvas rail: an ephemeral, client-only overlay that never
-// round-trips. The rail's mobile transform is re-applied on every LiveView
+// round-trips. The rail's mobile translate is re-applied on every LiveView
 // patch (via `updated()`) because morphdom would otherwise clobber the inline
 // style; on desktop the rail is pinned open by the `lg:translate-x-0` class so
 // this hook is effectively a no-op there.
@@ -389,12 +389,38 @@ const Shell = {
     this.railOpen = false
 
     this.apply = () => {
-      if (this.rail) this.rail.style.transform = this.railOpen ? "translateX(0)" : ""
+      if (this.rail) {
+        // `translate`, not `transform`: Tailwind v4's `-translate-x-full` is
+        // the standalone `translate` property, which a `transform` does not
+        // override, so setting `transform` here left the rail off-screen and
+        // the mobile nav could not be opened at all.
+        this.rail.style.translate = this.railOpen ? "0 0" : ""
+        // The closed rail is `invisible` below `lg` so it is out of the tab
+        // order; open, it has to be shown again.
+        this.rail.style.visibility = this.railOpen ? "visible" : ""
+      }
+      this.el.querySelectorAll("[data-shell-rail-open]").forEach((b) => {
+        b.setAttribute("aria-expanded", this.railOpen ? "true" : "false")
+      })
       if (this.backdrop) this.backdrop.style.display = this.railOpen ? "block" : "none"
       // Lock body scroll only while the mobile overlay is up.
       document.body.style.overflow = this.railOpen ? "hidden" : ""
     }
-    this.setRail = (v) => { this.railOpen = v; this.apply() }
+    this.setRail = (v) => {
+      this.railOpen = v
+      this.apply()
+      // Move focus with the overlay, so a keyboard lands in the rail it just
+      // opened and back on the button when it closes.
+      // Two frames on: the rail's visibility is transitioning, and until
+      // that has started it is still hidden and cannot take focus.
+      if (v) {
+        const first = this.rail && this.rail.querySelector("a[href], button")
+        if (first) requestAnimationFrame(() => requestAnimationFrame(() => first.focus()))
+      } else {
+        const opener = this.el.querySelector("[data-shell-rail-open]")
+        if (opener && this.rail && this.rail.contains(document.activeElement)) opener.focus()
+      }
+    }
 
     this.onClick = (e) => {
       const t = e.target
@@ -2018,13 +2044,13 @@ const KarmaSlider = {
 // table's horizontal overflow never clips it.
 // =============================================================================
 const PEN_SCALE = [
-  { rating: 0, color: "#8f342d", label: "Pointless", stopped: "20+" },
-  { rating: 1, color: "#8f4b2d", label: "It's possible, but...", stopped: "13 to 20" },
-  { rating: 2, color: "#8f632d", label: "Magdump only", stopped: "9 to 13" },
-  { rating: 3, color: "#8f7f2d", label: "Slightly effective", stopped: "5 to 9" },
-  { rating: 4, color: "#7c8f2d", label: "Effective", stopped: "3 to 5" },
-  { rating: 5, color: "#4e8f2d", label: "Very effective", stopped: "1 to 3" },
-  { rating: 6, color: "#2d8f41", label: "Usually ignores", stopped: "<1" },
+  { rating: 0, color: "#bc443b", label: "Pointless", stopped: "20+" },
+  { rating: 1, color: "#a55734", label: "It's possible, but...", stopped: "13 to 20" },
+  { rating: 2, color: "#90632d", label: "Magdump only", stopped: "9 to 13" },
+  { rating: 3, color: "#7a6c26", label: "Slightly effective", stopped: "5 to 9" },
+  { rating: 4, color: "#647324", label: "Effective", stopped: "3 to 5" },
+  { rating: 5, color: "#427926", label: "Very effective", stopped: "1 to 3" },
+  { rating: 6, color: "#277c38", label: "Usually ignores", stopped: "<1" },
 ]
 
 const PenScale = {
@@ -2044,14 +2070,39 @@ const PenScale = {
       this.hide()
     }
     this.onScroll = () => this.hide()
+    // The key button: the keyboard's way to the key. Focus or click opens it
+    // with no row highlighted (there is no hovered cell); blur and Escape
+    // close it.
+    this.onFocusIn = (e) => {
+      const key = e.target.closest && e.target.closest("[data-pen-key]")
+      if (key) this.show(key)
+    }
+    this.onFocusOut = (e) => {
+      if (e.target.closest && e.target.closest("[data-pen-key]")) this.hide()
+    }
+    // Opens, never toggles: a mouse click focuses the button first, so the
+    // key is already open by the time the click lands. (Escape closed it.)
+    this.onClick = (e) => {
+      const key = e.target.closest && e.target.closest("[data-pen-key]")
+      if (key) this.show(key)
+    }
+    this.onKey = (e) => { if (e.key === "Escape") this.hide() }
 
     this.el.addEventListener("mouseover", this.onOver)
     this.el.addEventListener("mouseout", this.onOut)
+    this.el.addEventListener("focusin", this.onFocusIn)
+    this.el.addEventListener("focusout", this.onFocusOut)
+    this.el.addEventListener("click", this.onClick)
+    document.addEventListener("keydown", this.onKey)
     window.addEventListener("scroll", this.onScroll, true)
   },
   destroyed() {
     this.el.removeEventListener("mouseover", this.onOver)
     this.el.removeEventListener("mouseout", this.onOut)
+    this.el.removeEventListener("focusin", this.onFocusIn)
+    this.el.removeEventListener("focusout", this.onFocusOut)
+    this.el.removeEventListener("click", this.onClick)
+    document.removeEventListener("keydown", this.onKey)
     window.removeEventListener("scroll", this.onScroll, true)
     if (this.tip && this.tip.parentNode) this.tip.parentNode.removeChild(this.tip)
   },
@@ -2069,6 +2120,8 @@ const PenScale = {
       fontSize: "10px", textTransform: "uppercase", letterSpacing: "0.2em",
       color: HUD.amber, fontFamily: "Oswald, sans-serif", margin: "0 4px 6px",
     })
+    tip.id = "pen-scale-key"
+    tip.setAttribute("role", "tooltip")
     tip.appendChild(title)
 
     const cols = "22px 1fr auto"
@@ -2131,7 +2184,14 @@ const PenScale = {
       this.rows[r].style.background = r === rating ? "rgba(154,136,102,0.16)" : "transparent"
     })
     this.tip.style.display = "block"
+    this.setExpanded(true)
     this.position(cell)
+  },
+  setExpanded(open) {
+    this.el.querySelectorAll("[data-pen-key]").forEach((b) => {
+      b.setAttribute("aria-expanded", open ? "true" : "false")
+      b.setAttribute("aria-describedby", "pen-scale-key")
+    })
   },
   position(cell) {
     const r = cell.getBoundingClientRect()
@@ -2143,7 +2203,10 @@ const PenScale = {
     this.tip.style.left = `${Math.round(left)}px`
     this.tip.style.top = `${Math.round(top)}px`
   },
-  hide() { if (this.tip) this.tip.style.display = "none" },
+  hide() {
+    if (this.tip) this.tip.style.display = "none"
+    this.setExpanded(false)
+  },
 }
 
 // =============================================================================
@@ -2167,7 +2230,7 @@ const PenScale = {
 //
 // Both values are inline styles, which morphdom clobbers on patch, so
 // `updated()` re-applies them - the same reason Shell re-applies the rail
-// transform.
+// translate.
 //
 // What this deliberately does NOT do is watch the neighbouring column for
 // changes. It used to, via a ResizeObserver, which meant expanding the
@@ -2278,6 +2341,24 @@ const FitList = {
 // =============================================================================
 // LiveSocket
 // =============================================================================
+// Keeps an "updated N min ago" line current on an open page (`UI.data_age/1`).
+// Same wording as `EftBuddyWeb.UI.relative_time/2`, which renders the first text.
+const RelativeTime = {
+  mounted() { this.render(); this.timer = setInterval(() => this.render(), 30000) },
+  updated() { this.render() },
+  destroyed() { clearInterval(this.timer) },
+  render() {
+    const at = Date.parse(this.el.getAttribute("datetime"))
+    if (Number.isNaN(at)) return
+    const minutes = Math.max(Math.floor((Date.now() - at) / 60000), 0)
+    this.el.textContent =
+      minutes < 1 ? "just now"
+        : minutes < 60 ? `${minutes} min ago`
+          : minutes < 48 * 60 ? `${Math.floor(minutes / 60)} h ago`
+            : `${Math.floor(minutes / 1440)} d ago`
+  },
+}
+
 const liveSocket = new LiveSocket("/live", Socket, {
   // How long a WebSocket upgrade may take before the client falls back to
   // long-polling. At 2.5 s, 74% of connections on the Pi ended up long-polling:
@@ -2288,7 +2369,7 @@ const liveSocket = new LiveSocket("/live", Socket, {
   hooks: {
     ...colocatedHooks,
     Hud, Shell, TacMap, LevelInput, NumberCap, KarmaSlider, PenScale, Backup,
-    FitList,
+    FitList, RelativeTime,
   },
 })
 

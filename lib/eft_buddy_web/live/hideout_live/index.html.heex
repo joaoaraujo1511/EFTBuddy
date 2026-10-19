@@ -1,4 +1,3 @@
-<% load_state = EftBuddyWeb.LoadState.resolve(@modules != [], :hideout) %>
 <Layouts.app
   flash={@flash}
   active={@active}
@@ -8,12 +7,11 @@
   scav_karma={@scav_karma}
   page_title="Hideout"
   search_query={@query}
-  search_placeholder={if load_state == :loaded, do: "Search modules..."}
+  search_placeholder={if @load_state == :loaded, do: "Search modules..."}
   rail_collapsed={@rail_collapsed}
 >
   <div class="max-w-[1800px] mx-auto px-4 sm:px-6 py-8 space-y-6">
-    <% searched_modules = search_modules(@modules, @query) %>
-    <.controls :if={load_state == :loaded}>
+    <.controls :if={@load_state == :loaded}>
       <:tabs>
         <.tabs
           active={@filter}
@@ -23,7 +21,7 @@
               icon: "hero-squares-2x2",
               patch: hideout_path(@query, :all),
               filter: "all",
-              count: length(searched_modules),
+              count: @module_counts.all,
               tone: :neutral
             },
             %{
@@ -31,7 +29,7 @@
               icon: "hero-bolt",
               patch: hideout_path(@query, :available),
               filter: "available",
-              count: length(filter_modules(searched_modules, :available)),
+              count: @module_counts.available,
               tone: :go
             },
             %{
@@ -39,7 +37,7 @@
               icon: "hero-lock-closed",
               patch: hideout_path(@query, :locked),
               filter: "locked",
-              count: length(filter_modules(searched_modules, :locked)),
+              count: @module_counts.locked,
               tone: :rust
             },
             %{
@@ -47,7 +45,7 @@
               icon: "hero-star",
               patch: hideout_path(@query, :maxed),
               filter: "maxed",
-              count: length(filter_modules(searched_modules, :maxed)),
+              count: @module_counts.maxed,
               tone: :amber
             }
           ]}
@@ -55,12 +53,11 @@
       </:tabs>
     </.controls>
 
-    <% filtered_modules = @modules |> filter_modules(@filter) |> search_modules(@query) %>
-    <.standby :if={load_state != :loaded} state={load_state} retry_to={~p"/hideout"} />
-    <.no_results :if={@modules != [] && filtered_modules == []} noun="modules" />
+    <.standby :if={@load_state != :loaded} state={@load_state} retry_to={~p"/hideout"} />
+    <.no_results :if={@modules != [] && @visible_modules == []} noun="modules" />
 
-    <div :if={filtered_modules != []} class="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
-      <%= for mod <- filtered_modules do %>
+    <div :if={@visible_modules != []} class="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+      <%= for mod <- @visible_modules do %>
         <% status = module_status(mod) %>
         <% prereqs_open? = expanded?(@expanded, mod.slug, "prerequisites") %>
         <% needed_open? = expanded?(@expanded, mod.slug, "needed") %>
