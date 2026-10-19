@@ -511,6 +511,10 @@ defmodule EftBuddy.Cache.WarmerTest do
 
       emit_sync_stop("HideoutSync")
       eventually(fn -> assert :counters.get(counter, 1) == 1 end)
+      # The counter ticks inside the build, before `fetch/4` stores the value.
+      # Clearing in that gap lets the late store land after the clear, so the
+      # tick finds the entry live and rightly skips it.
+      eventually(fn -> assert Cache.live?(key) end)
 
       Cache.clear()
       send(Process.whereis(Warmer), :repair)
