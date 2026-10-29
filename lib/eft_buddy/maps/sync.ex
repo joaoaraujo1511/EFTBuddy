@@ -77,8 +77,8 @@ defmodule EftBuddy.Maps.Sync do
   alias EftBuddy.Maps.Map, as: GameMap
 
   # tarkov.dev's frontend map metadata. The data API has no map
-  # imagery, so the interactive-map SVG URLs live here. Fetched
-  # best-effort each run; a failure just leaves `svg_path` nil.
+  # imagery, so the interactive-map SVG URLs live here. A failed fetch keeps
+  # every map's stored imagery (see `@media_fields`).
   @maps_json_url "https://raw.githubusercontent.com/the-hideout/tarkov-dev/main/src/data/maps.json"
   @http_timeout 60_000
 
@@ -96,14 +96,21 @@ defmodule EftBuddy.Maps.Sync do
         {:ok, _} ->
           by_mode = for {mode, {:ok, raw}} <- fetched, into: %{}, do: {mode, sanitize(raw)}
           failed = for {mode, {:error, reason}} <- fetched, do: {mode, reason}
-          media = fetch_map_media()
+
+          {media, failed} =
+            case fetch_map_media() do
+              {:ok, media} -> {media, failed}
+              {:error, reason} -> {:keep, failed ++ [{"maps.json", reason}]}
+            end
 
           case upsert_all(by_mode, media) do
             {:ok, counts} when failed == [] ->
               {:ok, counts}
 
             # Like Tasks and Prices: the modes that arrived are written, and a
-            # mode that didn't fails the run, so `/health/sync` sees it.
+            # mode that didn't fails the run, so `/health/sync` sees it. So
+            # does a failed `maps.json`, and the failed run is retried within
+            # minutes instead of waiting out the 12h cadence.
             {:ok, counts} ->
               {:error, {:partial, [{EftBuddy.GameMode.default(), counts}], failed}}
 
@@ -136,13 +143,16 @@ defmodule EftBuddy.Maps.Sync do
     EftBuddy.TarkovApi.maps(game_mode)
   end
 
-  # Best-effort fetch of tarkov.dev's frontend `maps.json` to recover the
-  # map imagery per map (keyed by normalizedName): the interactive SVG
-  # URL plus the flat 2D / 3D static renders. The GraphQL/JSON data API
-  # has no imagery, so this is the source of `svg_path` and
-  # `image_variants`. Any failure (network, shape drift) degrades to an
-  # empty map and the sync proceeds without images — the page just shows
-  # no viewer.
+  # Fetch tarkov.dev's frontend `maps.json` for the map imagery per map
+  # (keyed by normalizedName): the interactive SVG URL plus the flat 2D / 3D
+  # static renders. The GraphQL/JSON data API has no imagery, so this is the
+  # source of `svg_path` and `image_variants`.
+  #
+  # A failure (network, shape drift) is `{:error, reason}`, never an empty map.
+  # It used to be an empty map, which the upsert then wrote over every map's
+  # imagery, and `Maps.visible?/1` hides a map with no imagery: one failed
+  # GitHub request emptied the Maps page and redirected every map URL until
+  # the next run, 12 hours later, while the run reported success.
   #
   # Goes through `:tarkov_req_options` like every tarkov.dev request, so tests
   # serve it from a fixture instead of reaching GitHub.
@@ -164,33 +174,18 @@ defmodule EftBuddy.Maps.Sync do
         # raw.githubusercontent serves the file as text/plain, so Req
         # doesn't auto-decode it — handle both decoded and raw bodies.
         case decode_groups(body) do
-          [] ->
-            Reporter.silent_warn(
-              "[#{prefix()}] maps.json returned no usable groups; continuing without map images"
-            )
-
-            %{}
-
-          groups ->
-            build_map_media(groups)
+          [] -> {:error, :no_map_groups}
+          groups -> {:ok, build_map_media(groups)}
         end
 
-      other ->
-        Reporter.silent_warn(
-          "[#{prefix()}] maps.json fetch failed (#{inspect(elem_status(other))}); " <>
-            "continuing without map images"
-        )
+      {:ok, %{status: status, body: body}} ->
+        {:error, {:unexpected_response, status, body}}
 
-        %{}
+      {:error, reason} ->
+        {:error, {:crash, Exception.message(reason)}}
     end
   rescue
-    e ->
-      Reporter.silent_warn(
-        "[#{prefix()}] maps.json fetch crashed (#{Exception.message(e)}); " <>
-          "continuing without map images"
-      )
-
-      %{}
+    e -> {:error, {:crash, Exception.message(e)}}
   end
 
   defp decode_groups(body) when is_list(body), do: body
@@ -390,9 +385,6 @@ defmodule EftBuddy.Maps.Sync do
         String.upcase(projection)
     end
   end
-
-  defp elem_status({:ok, %{status: s}}), do: s
-  defp elem_status({:error, reason}), do: reason
 
   # ── Sanitize ───────────────────────────────────────────
 
@@ -657,7 +649,38 @@ defmodule EftBuddy.Maps.Sync do
 
   # ── Maps ───────────────────────────────────────────────
 
-  defp upsert_maps(repo, maps, media) do
+  # The columns `maps.json` supplies. On a failed fetch (`media == :keep`) the
+  # upsert leaves them out of `replace`, so a map keeps the imagery it had; a map
+  # first seen during the outage is inserted without any, and stays hidden by
+  # `Maps.visible?/1` until a run that has it.
+  @media_fields [
+    :svg_path,
+    :image_variants,
+    :projection,
+    :transform,
+    :coordinate_rotation,
+    :bounds,
+    :svg_bounds,
+    :min_zoom,
+    :max_zoom,
+    :tile_size,
+    :tile_path,
+    :height_range,
+    :layers,
+    :labels,
+    :image_author,
+    :image_author_link
+  ]
+
+  # The columns the data API supplies, replaced on every run.
+  @api_fields [:external_id, :name, :tarkov_data_id, :name_id, :wiki, :description, :updated_at]
+
+  defp upsert_maps(repo, maps, :keep), do: upsert_maps(repo, maps, %{}, @api_fields)
+
+  defp upsert_maps(repo, maps, media),
+    do: upsert_maps(repo, maps, media, @api_fields ++ @media_fields)
+
+  defp upsert_maps(repo, maps, media, replace) do
     now = now_naive()
 
     rows =
@@ -697,34 +720,7 @@ defmodule EftBuddy.Maps.Sync do
         }
       end)
 
-    bulk_upsert(repo, GameMap, rows,
-      conflict_target: :normalized_name,
-      replace: [
-        :external_id,
-        :name,
-        :tarkov_data_id,
-        :name_id,
-        :wiki,
-        :svg_path,
-        :image_variants,
-        :description,
-        :projection,
-        :transform,
-        :coordinate_rotation,
-        :bounds,
-        :svg_bounds,
-        :min_zoom,
-        :max_zoom,
-        :tile_size,
-        :tile_path,
-        :height_range,
-        :layers,
-        :labels,
-        :image_author,
-        :image_author_link,
-        :updated_at
-      ]
-    )
+    bulk_upsert(repo, GameMap, rows, conflict_target: :normalized_name, replace: replace)
   end
 
   # ── Variants ───────────────────────────────────────────
