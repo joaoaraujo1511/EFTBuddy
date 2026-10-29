@@ -13,6 +13,18 @@ on:
   push:
     branches: ["**"]
   pull_request:
+  # Daily, against main, with no code change. A security advisory published
+  # against a locked dependency turns `hex.audit`/`deps.audit` red on code that
+  # passed the day before, and without this nothing runs until the next push:
+  # thirteen bandit advisories surfaced only because an unrelated Dependabot PR
+  # failed, while the deployed app kept serving on the affected version. GitHub
+  # emails the failure of a scheduled run, so this is the alarm, not just a
+  # badge. It runs the whole workflow rather than only the audits, which also
+  # catches a test that starts failing on its own.
+  schedule:
+    - cron: "17 6 * * *"
+  # Re-run on demand from the Actions tab, e.g. right after an advisory lands.
+  workflow_dispatch:
 
 permissions:
   contents: read
