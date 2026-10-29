@@ -8,12 +8,14 @@ defmodule EftBuddy.TarkovFixtures do
   `stub/0` answers `/<mode>/<doc>` from `test/fixtures/tarkov/<mode>/<doc>.json`
   and counts each request, so a test can assert how often a document was
   fetched. An unknown path is a 404, which the adapter reports as an error.
+  `stub(%{path => status})` answers those paths with that status instead, to
+  simulate one upstream failing while the rest answer.
   """
 
   @dir Path.expand("../fixtures/tarkov", __DIR__)
 
   @doc "Install the fixture stub for the calling test process."
-  def stub do
+  def stub(failing \\ %{}) do
     counter = :counters.new(1, [])
     paths = Agent.start_link(fn -> [] end) |> elem(1)
 
@@ -21,13 +23,18 @@ defmodule EftBuddy.TarkovFixtures do
       :counters.add(counter, 1, 1)
       Agent.update(paths, &[conn.request_path | &1])
 
-      case File.read(fixture_path(conn.request_path)) do
-        {:ok, body} ->
+      case {failing[conn.request_path], File.read(fixture_path(conn.request_path))} do
+        {status, _} when is_integer(status) ->
+          conn
+          |> Plug.Conn.put_resp_content_type("text/plain")
+          |> Plug.Conn.send_resp(status, "simulated failure")
+
+        {nil, {:ok, body}} ->
           conn
           |> Plug.Conn.put_resp_content_type("application/json")
           |> Plug.Conn.send_resp(200, body)
 
-        {:error, _} ->
+        {nil, {:error, _}} ->
           Plug.Conn.send_resp(conn, 404, "no fixture for #{conn.request_path}")
       end
     end)
@@ -37,6 +44,9 @@ defmodule EftBuddy.TarkovFixtures do
       paths: fn -> Agent.get(paths, &Enum.reverse/1) end
     }
   end
+
+  @doc "The request path of tarkov.dev's frontend `maps.json`."
+  def maps_media_path, do: "/the-hideout/tarkov-dev/main/src/data/maps.json"
 
   # tarkov.dev's frontend `maps.json` (map imagery) is fetched from GitHub
   # rather than the JSON API, so it has its own file.

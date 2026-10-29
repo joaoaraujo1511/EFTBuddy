@@ -494,6 +494,8 @@ defmodule EftBuddy.Sync.Reporter do
 
   def describe_error(:already_running), do: "another sync is already running"
 
+  def describe_error(:no_map_groups), do: "no usable map groups in the response"
+
   # A Fandom scrape where too many pages failed (`EftBuddy.Wiki.Api.scrape_result/3`).
   def describe_error({:pages_failed, failed, attempted, _summary}),
     do: "#{failed} of #{attempted} pages failed to scrape"
