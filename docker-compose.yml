@@ -217,7 +217,7 @@ services:
     # from sufficiently old clients, so unlike the others this pin needs a
     # deliberate bump now and then rather than never — check the release notes
     # if the tunnel ever starts logging protocol or version warnings.
-    image: cloudflare/cloudflared:2026.10.1
+    image: cloudflare/cloudflared:2026.10.3
     restart: unless-stopped
     command: tunnel --no-autoupdate run
     environment:
