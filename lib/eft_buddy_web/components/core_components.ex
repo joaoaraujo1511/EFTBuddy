@@ -545,7 +545,7 @@ defmodule EftBuddyWeb.CoreComponents do
           :if={@popup?}
           type="button"
           phx-click={JS.toggle(to: "##{@popup_id}, ##{@popup_id}-sheet", display: "block")}
-          aria-controls={@popup_id}
+          aria-controls={"#{@popup_id} #{@popup_id}-sheet"}
           class="t-label text-[9px] px-1.5 py-0.5 border border-amber/35 bg-amber/10 text-amber hover:border-amber hover:bg-amber/20 transition-colors hud-focus"
         >
           <%!-- "contributors", not "credits": this chip is specifically the

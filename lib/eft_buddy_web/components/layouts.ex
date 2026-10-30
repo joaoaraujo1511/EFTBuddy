@@ -162,12 +162,19 @@ defmodule EftBuddyWeb.Layouts do
 
            Below `lg` (the overlay menu) the navigation comes first and the
            operator block after it: listed after the operator controls, the
-           links were off-screen on a small or landscape phone. --%>
-      <div class="flex-1 flex flex-col overflow-y-auto overflow-x-hidden rail-scroll">
+           links were off-screen on a small or landscape phone. The nav is
+           rendered twice (one copy per side, the other `display: none`) rather
+           than reordered with CSS `order`, which would have left the keyboard
+           walking the operator controls first on a menu that shows them last.
+           The operator block is the one that can't be doubled: its forms and
+           hooks carry ids. --%>
+      <div class="flex-1 overflow-y-auto overflow-x-hidden rail-scroll">
+        {rail_nav(Map.put(assigns, :class, "lg:hidden"))}
+
         <%!-- Operator / profile block. Full controls when the rail is expanded;
              hidden (in favour of the compact summary below) when collapsed to
              icons on desktop. The mobile overlay always uses the full rail. --%>
-        <div class={["max-lg:order-2", if(@rail_collapsed, do: "lg:hidden", else: "")]}>
+        <div class={[if(@rail_collapsed, do: "lg:hidden", else: "")]}>
           <%!-- Inset divider between the operator block and the nav: a hairline
                cut short at both ends (mx-4) rather than edge-to-edge, so the
                separation reads cleaner than a full-width rule. The vertical
@@ -201,17 +208,7 @@ defmodule EftBuddyWeb.Layouts do
           </span>
         </button>
 
-        <nav class="max-lg:order-1 pt-4 pb-3">
-          <div class={["px-4 pb-2", if(@rail_collapsed, do: "lg:hidden", else: "")]}>
-            <div class="t-label text-[9px] text-fog-500">Navigation</div>
-          </div>
-          <.nav_link
-            :for={entry <- nav_entries()}
-            entry={entry}
-            active={@active}
-            collapsed={@rail_collapsed}
-          />
-        </nav>
+        {rail_nav(Map.put(assigns, :class, "max-lg:hidden"))}
       </div>
 
       <%!-- Not a nav entry — there is no credits page to link to. Each source is
@@ -289,15 +286,19 @@ defmodule EftBuddyWeb.Layouts do
     ~H"""
     <header
       id="top-bar"
-      class={
-        [
-          "fixed top-0 right-0 left-0 z-40 h-14 bg-ink-900 border-b border-line",
-          @bar_left,
-          # Phones only (app.css `.top-search`): the search box opens as a bar
-          # under the top bar. Open from the start while a search is active, so
-          # a filtered list never hides what it is filtered by.
-          @search_query not in [nil, ""] && "is-search-open"
-        ]
+      class={[
+        "fixed top-0 right-0 left-0 z-40 h-14 bg-ink-900 border-b border-line",
+        @bar_left
+      ]}
+      phx-mounted={
+        # Phones only (app.css `.top-search`): the search box opens as a bar
+        # under the top bar. Open from the start while a search is active, so
+        # a filtered list never hides what it is filtered by. Set from the
+        # client, not rendered: a server-rendered class came off again when
+        # the query was cleared, closing the bar under the user's thumb.
+        @search_query not in [nil, ""] &&
+          JS.add_class("is-search-open")
+          |> JS.set_attribute({"aria-expanded", "true"}, to: "#top-search-toggle")
       }
     >
       <%!-- amber tracer line along the bottom edge --%>
@@ -358,22 +359,23 @@ defmodule EftBuddyWeb.Layouts do
         </div>
 
         <%!-- right: app-level actions --%>
-        <div class="flex items-center justify-end gap-2">
+        <div class="flex items-center justify-end gap-1.5 sm:gap-2">
           <%!-- Phones: opens the search bar. Squeezed between the title and the
                buttons, the box was too narrow to type in and its icon sat on
                the Backup button at 320px. --%>
           <button
             :if={@search_placeholder}
+            id="top-search-toggle"
             type="button"
             aria-label="Search"
             aria-controls="global-search"
-            aria-expanded={if @search_query not in [nil, ""], do: "true", else: "false"}
+            aria-expanded="false"
             phx-click={
               JS.toggle_class("is-search-open", to: "#top-bar")
               |> JS.toggle_attribute({"aria-expanded", "true", "false"})
               |> JS.focus(to: "#global-search input")
             }
-            class="sm:hidden inline-flex items-center px-3 py-2 border t-label text-[11px] transition-colors hud-focus text-fog-400 border-line hover:text-amber hover:border-amber/60"
+            class="sm:hidden inline-flex items-center px-2.5 py-2 border t-label text-[11px] transition-colors hud-focus text-fog-400 border-line hover:text-amber hover:border-amber/60"
           >
             <.icon name="hero-magnifying-glass" class="w-4 h-4" />
           </button>
@@ -381,7 +383,7 @@ defmodule EftBuddyWeb.Layouts do
           <.link
             navigate={~p"/report-bug"}
             class={[
-              "inline-flex items-center gap-1.5 px-3 py-2 border t-label text-[11px] transition-colors hud-focus",
+              "inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-2 border t-label text-[11px] transition-colors hud-focus",
               if(@active == :report_bug,
                 do: "text-amber border-amber bg-amber/5",
                 else: "text-fog-400 border-line hover:text-amber hover:border-amber/60"
@@ -408,7 +410,7 @@ defmodule EftBuddyWeb.Layouts do
     <div id="progress-backup" phx-hook="Backup" class="relative">
       <details class="group" data-backup-root>
         <summary class={[
-          "inline-flex items-center gap-1.5 px-3 py-2 border t-label text-[11px] transition-colors hud-focus",
+          "inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-2 border t-label text-[11px] transition-colors hud-focus",
           "cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden",
           "text-fog-400 border-line hover:text-amber hover:border-amber/60",
           "group-open:text-amber group-open:border-amber/60"
@@ -464,6 +466,22 @@ defmodule EftBuddyWeb.Layouts do
       <.icon name={@icon} class="w-4 h-4 shrink-0" />
       {@label}
     </button>
+    """
+  end
+
+  defp rail_nav(assigns) do
+    ~H"""
+    <nav class={["pt-4 pb-3", @class]}>
+      <div class={["px-4 pb-2", if(@rail_collapsed, do: "lg:hidden", else: "")]}>
+        <div class="t-label text-[9px] text-fog-500">Navigation</div>
+      </div>
+      <.nav_link
+        :for={entry <- nav_entries()}
+        entry={entry}
+        active={@active}
+        collapsed={@rail_collapsed}
+      />
+    </nav>
     """
   end
 

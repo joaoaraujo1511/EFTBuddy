@@ -721,7 +721,7 @@ defmodule EftBuddyWeb.HideoutLive.Index do
         phx-click="toggle_section"
         phx-value-slug={@slug}
         phx-value-section={@section}
-        aria-expanded={@open}
+        aria-expanded={if @open, do: "true", else: "false"}
         class={[
           "w-full flex items-center justify-between gap-2 px-3 py-2.5 text-left t-label text-xs transition-colors hud-focus",
           "hover:bg-ink-900 hover:text-amber",

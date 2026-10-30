@@ -777,6 +777,7 @@ const TacMap = {
         borderTop: `1px solid ${HUD.line}`, touchAction: "pan-y",
       })
 
+    this.leftStack.classList.toggle("tac-stacked", !docked)
     ;(this.hudPanels || []).forEach((p) => this.stylePanel(p))
     this.refit()
   },
@@ -1543,9 +1544,13 @@ const TacMap = {
     }, opts)
 
     if (typeof ResizeObserver !== "undefined") {
-      // Observes the host, not the viewport: the host's box is set entirely by
-      // its parent and never by our own mutations, so re-styling the column
-      // inside the callback can't feed back into another observation.
+      // Observes the host, not the viewport. Docked, the host's box is set
+      // entirely by its parent. Stacked, its HEIGHT follows our own content
+      // (`height: auto`; the Markers panel arrives later and grows it), so a
+      // callback can follow our own mutation - which is harmless only because
+      // layout() switches on the host's WIDTH and returns early when the mode
+      // is unchanged, and refit() never resizes the host. Keep it that way:
+      // anything here that changes the host's width would loop.
       this.ro = new ResizeObserver(() => { this.layout(); this.refit() })
       this.ro.observe(this.el)
       this.abort.signal.addEventListener("abort", () => this.ro.disconnect())

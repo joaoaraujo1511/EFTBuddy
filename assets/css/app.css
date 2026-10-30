@@ -292,7 +292,9 @@ button:disabled,
 /* Phones: the top bar has no room for a usable search box (the placeholder
    read "Sear…" and at 320px the icon sat on the Backup button), so the box
    leaves the row and the search button opens it as a full-width bar under the
-   top bar. `#main-content` moves down by the bar's height while it is open. */
+   top bar. `#main-content` moves down by the bar's height (a 42px input, 16px
+   of padding and the border) while it is open. The input is 16px there:
+   iOS zooms the page into any focused input under 16px. */
 @media (width < 40rem) {
   .top-search { display: none; }
   .is-search-open .top-search {
@@ -307,25 +309,31 @@ button:disabled,
     border-bottom: 1px solid var(--color-line);
   }
   .is-search-open .top-search > form { max-width: none; }
-  body:has(.is-search-open) #main-content { padding-top: 3.25rem; }
+  .is-search-open .top-search input { font-size: 1rem; }
+  body:has(.is-search-open) #main-content { padding-top: 3.75rem; }
 }
 
 /* The map toolbar spans the map so it can wrap on a phone, and lets drags
    through to the map; only its buttons take input. */
 .tac-bar > * { pointer-events: auto; }
+/* Stacked under the map, the option buttons sit in a grid of ~120px cells, so
+   a long label ("Stationary weapons") wraps instead of spilling into the next. */
+.tac-stacked button { white-space: normal !important; }
 
-/* A tap area of at least 32x32px around a small control, without changing how
-   it looks: the invisible ::after is part of the element, so it takes the tap.
-   WCAG 2.2 asks for 24px; the "done" checkboxes (20px) and the 13px-tall sort
-   buttons were under it. */
+/* A tap area of at least 24x24px (the WCAG 2.2 minimum) around a small
+   control, without changing how it looks: the invisible ::after is part of the
+   element, so it takes the tap. The "done" checkboxes (20px) and the 13px-tall
+   sort buttons were under it. No bigger: in a wrapped line of small links
+   (the source credits) a larger area reaches into the next line, and the
+   later link, drawn on top, would take taps meant for the one above. */
 .tap-target { position: relative; }
 .tap-target::after {
   content: "";
   position: absolute;
   left: 50%;
   top: 50%;
-  width: max(100%, 32px);
-  height: max(100%, 32px);
+  width: max(100%, 24px);
+  height: max(100%, 24px);
   transform: translate(-50%, -50%);
 }
 
@@ -335,6 +343,9 @@ button:disabled,
 @media (pointer: coarse) {
   .text-\[9px\],
   .text-\[10px\] { font-size: 11px; }
+  /* Except table headings: the ballistics columns are 44-80px wide, and at
+     11px "Recoil" and "Accuracy" ran into each other. */
+  th .text-\[9px\] { font-size: 9px; }
 }
 
 /* Number field without the native spinner arrows (PMC level readout). */

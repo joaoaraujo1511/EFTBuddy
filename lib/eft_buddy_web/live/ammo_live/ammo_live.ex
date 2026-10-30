@@ -396,7 +396,7 @@ defmodule EftBuddyWeb.AmmoLive.Index do
                 <div class="flex items-center gap-2.5 min-w-0">
                   <.item_tile :if={a.item} item={a.item} size="w-7 h-7 sm:w-9 sm:h-9" />
                   <div class="min-w-0">
-                    <div class="text-fog-100 font-medium leading-snug sm:truncate">
+                    <div class="text-fog-100 font-medium leading-snug wrap-anywhere sm:truncate">
                       {ammo_name(a)}
                     </div>
                     <div
@@ -669,7 +669,7 @@ defmodule EftBuddyWeb.AmmoLive.Index do
                 <div class="flex items-center gap-2.5 min-w-0">
                   <.item_tile :if={p.item} item={p.item} size="w-7 h-7 sm:w-9 sm:h-9" />
                   <div class="min-w-0">
-                    <div class="text-fog-100 font-medium leading-snug sm:truncate">
+                    <div class="text-fog-100 font-medium leading-snug wrap-anywhere sm:truncate">
                       {plate_name(p)}
                     </div>
                     <div

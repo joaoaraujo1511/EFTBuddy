@@ -110,19 +110,20 @@
            here means every heading lands on its column. `pr-12` matches the
            right padding the rows reserve for the watchlist toggle.
 
-           Between `sm` and `lg` the nested grid is a fixed template instead of
-           11 equal columns: there the 11 columns left the task and trader
-           names a few characters each while Level had room to spare. --%>
+           Between `sm` and `xl` the nested grid is a fixed template instead of
+           11 equal columns: there (including 1024px, beside the rail) the 11
+           columns left the task and trader names a few characters each while
+           Level had room to spare. --%>
       <div class="hidden sm:grid grid-cols-12 px-5 pr-12 py-3 t-label text-[9px] text-fog-500 border-b border-line">
         <div class="col-span-1">Done</div>
-        <div class="col-span-11 grid grid-cols-[minmax(0,1fr)_7.5rem_3.5rem_7.5rem] lg:grid-cols-11 items-center gap-x-4">
+        <div class="col-span-11 grid grid-cols-[minmax(0,1fr)_7.5rem_3.5rem_7.5rem] xl:grid-cols-11 items-center gap-x-4">
           <.sort_header
             col="name"
             label="Task"
             sort={@sort}
             asc={:name_asc}
             desc={:name_desc}
-            class="lg:col-span-5"
+            class="xl:col-span-5"
           />
           <.sort_header
             col="trader"
@@ -130,7 +131,7 @@
             sort={@sort}
             asc={:trader_asc}
             desc={:trader_desc}
-            class="lg:col-span-2"
+            class="xl:col-span-2"
           />
           <.sort_header
             col="level"
@@ -138,14 +139,14 @@
             sort={@sort}
             asc={:level_asc}
             desc={:level_desc}
-            class="lg:col-span-2"
+            class="xl:col-span-2"
           />
           <%!-- Status is the one heading that can't just be right-aligned: the
                row puts a fixed-width pill AND a chevron in this cell. Reusing
                the row's `justify-end gap-2` with a chevron-sized spacer, and
                centring the label in a box the same width as the pill, parks
                "Status" dead centre over the pill. --%>
-          <div class="lg:col-span-2 flex items-center justify-end gap-2">
+          <div class="xl:col-span-2 flex items-center justify-end gap-2">
             <span class="min-w-24 text-center">Status</span>
             <span class="w-4 shrink-0" aria-hidden="true"></span>
           </div>
@@ -181,19 +182,19 @@
               phx-click="toggle_expand"
               phx-value-id={task.id}
               aria-expanded={if task.expanded?, do: "true", else: "false"}
-              class="col-span-10 sm:col-span-11 grid grid-cols-[minmax(0,1fr)_auto] sm:grid-cols-[minmax(0,1fr)_7.5rem_3.5rem_7.5rem] lg:grid-cols-11 items-center gap-x-4 text-left cursor-pointer"
+              class="col-span-10 sm:col-span-11 grid grid-cols-[minmax(0,1fr)_auto] sm:grid-cols-[minmax(0,1fr)_7.5rem_3.5rem_7.5rem] xl:grid-cols-11 items-center gap-x-4 text-left cursor-pointer"
             >
-              <div class="lg:col-span-5 flex items-center gap-2.5 min-w-0">
+              <div class="xl:col-span-5 flex items-center gap-2.5 min-w-0">
                 <%!-- Quest banner thumbnail. Lives on the collapsed row (not
                      the detail panel) so the list is scannable at a glance.
                      The banners are much wider than they are tall, so the
                      fixed 112x48 box crops them with `object-cover` rather
                      than letting a full-width banner inflate every row. The
                      box renders even when there's no banner, so the quest
-                     names stay aligned down the column. Hidden below `lg`:
-                     on tablets its 112px left the task and trader names a few
-                     characters each. --%>
-                <span class="hidden lg:block shrink-0 w-28 h-12 overflow-hidden border border-line bg-ink-950">
+                     names stay aligned down the column. Hidden below `xl`:
+                     on tablets and at 1024px beside the rail its 112px left
+                     the task and trader names a few characters each. --%>
+                <span class="hidden xl:block shrink-0 w-28 h-12 overflow-hidden border border-line bg-ink-950">
                   <img
                     :if={task.banner_url}
                     src={task.banner_url}
@@ -241,7 +242,7 @@
                   </div>
                 </div>
               </div>
-              <div class="hidden sm:flex lg:col-span-2 items-center gap-2 text-sm text-fog-500 min-w-0">
+              <div class="hidden sm:flex xl:col-span-2 items-center gap-2 text-sm text-fog-500 min-w-0">
                 <img
                   :if={src = task.trader_image}
                   src={src}
@@ -252,12 +253,12 @@
                 <span class="truncate">{task.trader}</span>
               </div>
               <div class={[
-                "hidden sm:block lg:col-span-2 t-num text-sm",
+                "hidden sm:block xl:col-span-2 t-num text-sm",
                 level_class(task.level, @pmc_level)
               ]}>
                 {if task.level, do: "Lvl #{task.level}", else: "-"}
               </div>
-              <div class="lg:col-span-2 text-right flex items-center justify-end gap-2">
+              <div class="xl:col-span-2 text-right flex items-center justify-end gap-2">
                 <%!-- Fixed width from `sm` up so the pills form a straight
                      column instead of a ragged edge, and so the "Status"
                      heading has a known box to centre itself over. On phones
