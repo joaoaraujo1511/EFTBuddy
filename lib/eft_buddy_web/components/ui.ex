@@ -295,7 +295,7 @@ defmodule EftBuddyWeb.UI do
       aria-label={"Sort by #{String.downcase(@label)}"}
       title={"Sort by #{String.downcase(@label)}"}
       class={[
-        "inline-flex items-center gap-1 t-label text-[9px] transition-colors hud-focus",
+        "inline-flex items-center gap-1 t-label text-[9px] transition-colors hud-focus tap-target",
         (@align == "right" && "justify-end text-right") || "text-left",
         (@sort in [@asc, @desc] && "text-amber") || "text-fog-500 hover:text-fog-100",
         @class
@@ -369,9 +369,13 @@ defmodule EftBuddyWeb.UI do
     ~H"""
     <%!-- Content-sized (w-auto) so the bar hugs its tabs and stays centered by
          the parent instead of stretching full-width with dead space; scrolls
-         horizontally only when the tabs overflow the available width. --%>
+         horizontally only when the tabs overflow the available width.
+
+         On phones the tabs wrap instead: scrolled, the last visible tab was
+         simply cut ("LOC", "ARMOR F") with nothing showing there were more,
+         and a 320px phone showed two of five. --%>
     <div class={[
-      "flex items-stretch overflow-x-auto hud-panel border-line w-auto max-w-full",
+      "flex max-sm:flex-wrap items-stretch overflow-x-auto hud-panel border-line w-auto max-w-full",
       @class
     ]}>
       <.tab_item :for={item <- @items} item={item} active={@active} />
@@ -412,7 +416,7 @@ defmodule EftBuddyWeb.UI do
         type="button"
         phx-click={Map.get(@item, :event)}
         phx-value-filter={@value}
-        aria-pressed={@active?}
+        aria-pressed={if @active?, do: "true", else: "false"}
         class={tab_classes(@active?)}
       >
         <.icon :if={Map.get(@item, :icon)} name={@item.icon} class="w-4 h-4 shrink-0" />
@@ -431,7 +435,7 @@ defmodule EftBuddyWeb.UI do
 
   defp tab_classes(active?) do
     [
-      "t-label text-xs inline-flex items-center justify-center gap-2 px-4 sm:px-5 py-3 shrink-0 transition-colors border-b-2 hud-focus",
+      "t-label text-xs inline-flex items-center justify-center gap-2 px-4 sm:px-5 py-3 shrink-0 max-sm:flex-auto transition-colors border-b-2 hud-focus",
       if(active?,
         do: "text-amber border-amber bg-amber/5",
         else: "text-fog-500 border-transparent hover:text-fog-100 hover:bg-ink-800"
@@ -490,7 +494,7 @@ defmodule EftBuddyWeb.UI do
         type="button"
         phx-click={Map.get(@item, :event)}
         {chip_phx_value(@item, @value)}
-        aria-pressed={@active?}
+        aria-pressed={if @active?, do: "true", else: "false"}
         class={chip_classes(@active?)}
       >
         {@item.label}
@@ -581,7 +585,7 @@ defmodule EftBuddyWeb.UI do
 
   def action(%{rest: rest} = assigns) do
     classes = [
-      "t-label text-xs inline-flex items-center justify-center gap-2 px-4 py-2.5 border transition-colors hud-focus",
+      "t-label text-xs inline-flex items-center justify-center gap-2 px-4 py-2.5 border whitespace-nowrap transition-colors hud-focus",
       action_variant(assigns.variant),
       assigns.class
     ]

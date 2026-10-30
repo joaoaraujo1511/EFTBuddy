@@ -11,7 +11,7 @@
   <div class="max-w-2xl mx-auto px-4 sm:px-6 py-10">
     <.link
       navigate={~p"/"}
-      class="inline-flex items-center gap-1.5 t-label text-[11px] text-fog-500 hover:text-amber transition-colors mb-6"
+      class="inline-flex items-center gap-1.5 t-label text-[11px] text-fog-500 hover:text-amber transition-colors mb-6 tap-target"
     >
       <.icon name="hero-arrow-left" class="w-4 h-4" /> Back to base
     </.link>
@@ -64,7 +64,9 @@
           placeholder="What happened? What did you expect? Steps to reproduce, the page you were on, and anything else that helps."
         />
 
-        <div class="flex items-center justify-end gap-3 pt-2">
+        <%!-- Wraps rather than squeezing: on a 320px phone "Submit report"
+             broke across two lines. --%>
+        <div class="flex flex-wrap items-center justify-end gap-3 pt-2">
           <.action navigate={~p"/"}>Cancel</.action>
           <.action
             type="submit"

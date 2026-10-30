@@ -101,7 +101,7 @@
             <button
               type="button"
               aria-label={"Toggle watchlist for #{event.name}"}
-              aria-pressed={event.watchlisted?}
+              aria-pressed={if event.watchlisted?, do: "true", else: "false"}
               title={if event.watchlisted?, do: "Remove from watchlist", else: "Add to watchlist"}
               phx-click={JS.push("toggle_watchlist", value: %{slug: event.slug})}
               class={[
@@ -146,7 +146,9 @@
                   type="button"
                   phx-click="toggle_quest"
                   phx-value-id={quest.id}
-                  aria-expanded={MapSet.member?(@expanded_ids, quest.id)}
+                  aria-expanded={
+                    if MapSet.member?(@expanded_ids, quest.id), do: "true", else: "false"
+                  }
                   class="w-full flex items-center justify-between gap-2 px-3 py-2.5 text-left text-sm text-fog-200 hover:text-amber transition-colors"
                 >
                   <span class="truncate">{quest.name}</span>

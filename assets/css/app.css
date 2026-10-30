@@ -49,7 +49,9 @@
   --color-fog-300: #bcb9a6;
   --color-fog-400: #9d9b86;
   --color-fog-500: #8f8c78;
-  --color-fog-600: #82806d;
+  /* 600 lifted again (#82806d -> #8c8a76): it is used on the panels too, not
+     only the page, and measured 3.9-4.4:1 on ink-850 / ink-800. */
+  --color-fog-600: #8c8a76;
   --color-fog-700: #4c4a3d;
 
   /* EFT gold - primary accent (active states, key actions, focus).
@@ -262,6 +264,89 @@ button:disabled,
    horizontal tab strips so they never sprout a stray scrollbar). */
 .no-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
 .no-scrollbar::-webkit-scrollbar { display: none; }
+
+/* The left rail's scroll area. The scrollbar used to be hidden, so a menu cut
+   off by a short screen (a 720px laptop, a landscape phone) gave no sign that
+   it continued: a thin scrollbar plus a fade over the bottom edge. The bottom
+   padding is the same height as the fade, so at the end of the scroll the
+   last entry is fully clear of it. */
+.rail-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-line-strong) transparent;
+  padding-bottom: 2rem;
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 2rem), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 2rem), transparent);
+}
+
+/* Phones: a wide table scrolled sideways with nothing showing that it did.
+   Fade the right edge, and pad it by the fade's width so the last column is
+   clear of the fade once scrolled to the end. */
+@media (width < 40rem) {
+  .scroll-fade-x {
+    padding-right: 1.5rem;
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 1.5rem), transparent);
+    mask-image: linear-gradient(to right, #000 calc(100% - 1.5rem), transparent);
+  }
+}
+
+/* Phones: the top bar has no room for a usable search box (the placeholder
+   read "Sear…" and at 320px the icon sat on the Backup button), so the box
+   leaves the row and the search button opens it as a full-width bar under the
+   top bar. `#main-content` moves down by the bar's height (a 42px input, 16px
+   of padding and the border) while it is open. The input is 16px there:
+   iOS zooms the page into any focused input under 16px. */
+@media (width < 40rem) {
+  .top-search { display: none; }
+  .is-search-open .top-search {
+    display: flex;
+    position: fixed;
+    top: 3.5rem;
+    left: 0;
+    right: 0;
+    z-index: 39;
+    padding: 0.5rem 0.75rem;
+    background: var(--color-ink-900);
+    border-bottom: 1px solid var(--color-line);
+  }
+  .is-search-open .top-search > form { max-width: none; }
+  .is-search-open .top-search input { font-size: 1rem; }
+  body:has(.is-search-open) #main-content { padding-top: 3.75rem; }
+}
+
+/* The map toolbar spans the map so it can wrap on a phone, and lets drags
+   through to the map; only its buttons take input. */
+.tac-bar > * { pointer-events: auto; }
+/* Stacked under the map, the option buttons sit in a grid of ~120px cells, so
+   a long label ("Stationary weapons") wraps instead of spilling into the next. */
+.tac-stacked button { white-space: normal !important; }
+
+/* A tap area of at least 24x24px (the WCAG 2.2 minimum) around a small
+   control, without changing how it looks: the invisible ::after is part of the
+   element, so it takes the tap. The "done" checkboxes (20px) and the 13px-tall
+   sort buttons were under it. No bigger: in a wrapped line of small links
+   (the source credits) a larger area reaches into the next line, and the
+   later link, drawn on top, would take taps meant for the one above. */
+.tap-target { position: relative; }
+.tap-target::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: max(100%, 24px);
+  height: max(100%, 24px);
+  transform: translate(-50%, -50%);
+}
+
+/* Touch screens: the 9-10px labels (status pills, table units, tab counters)
+   are hard to read on a phone. Raised to 11px where the primary pointer is a
+   finger; desktop keeps the denser HUD type. */
+@media (pointer: coarse) {
+  .text-\[9px\],
+  .text-\[10px\] { font-size: 11px; }
+  /* Except table headings: the ballistics columns are 44-80px wide, and at
+     11px "Recoil" and "Accuracy" ran into each other. */
+  th .text-\[9px\] { font-size: 9px; }
+}
 
 /* Number field without the native spinner arrows (PMC level readout). */
 .no-spin { -moz-appearance: textfield; appearance: textfield; }

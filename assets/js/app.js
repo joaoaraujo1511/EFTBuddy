@@ -177,6 +177,11 @@ function writePrefs(prefs) {
 
 const Hud = {
   mounted() {
+    // The app layout is shared with plain controller pages (/privacy), where
+    // there is no LiveView and so no server session to seed: the push below
+    // threw "unable to push hook event. LiveView not connected" on every load.
+    if (!this.el.closest("[data-phx-session]")) return
+
     // Hand the local progress slice (localStorage) up to the server. The
     // server can never read localStorage itself, so this is how progress
     // enters a fresh operator session.
@@ -610,7 +615,7 @@ const TacMap = {
     this.el.style.background = HUD.ink950
 
     // Created first so flex-row puts it on the left without needing `order`.
-    // It stays in this position in the DOM in both docked and overlay modes;
+    // It stays in this position in the DOM in both docked and stacked modes;
     // only its styles change (see layout()).
     this.leftStack = document.createElement("div")
     Object.assign(this.leftStack.style, {
@@ -708,16 +713,22 @@ const TacMap = {
     this.stylePanel(p)
     return p
   },
-  // Floating, the panels need their own translucent card to read against the
-  // map. Docked in an opaque column they don't — the chrome is just noise.
+  // Docked in the opaque column the panels need no chrome of their own. Stacked
+  // under the map, each is a bordered card whose buttons form a grid, so a
+  // phone shows two per row instead of one long column.
   stylePanel(p) {
     const docked = this._docked
-    Object.assign(p.style, {
-      background: docked ? "transparent" : HUD_PANEL_BG,
-      border: docked ? "none" : `1px solid ${HUD.line}`,
-      backdropFilter: docked ? "none" : "blur(2px)",
-      padding: docked ? "0 0 6px" : "7px",
-    })
+    Object.assign(p.style, docked
+      ? {
+        display: "flex", gridTemplateColumns: "", background: "transparent",
+        border: "none", padding: "0 0 6px",
+      }
+      : {
+        display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(118px, 1fr))",
+        background: HUD_PANEL_BG, border: `1px solid ${HUD.line}`, padding: "8px",
+      })
+    const heading = p.firstElementChild
+    if (heading) heading.style.gridColumn = docked ? "" : "1 / -1"
   },
   // Width at which the options column docks beside the map instead of floating
   // over it. Measured on the *host*, not the window: the map panel sits inside
@@ -727,38 +738,63 @@ const TacMap = {
   DOCK_MIN: 720,
   DOCK_WIDTH: 200,
 
+  // Below DOCK_MIN the options go UNDER the map rather than over it. They used
+  // to float over the map's top-left corner, and on a phone the Floors and
+  // Markers cards covered more than half of it and pushed the art into a strip
+  // on the right. Stacked, the map keeps the host's full width at a fixed
+  // height and the page scrolls on to the options. The host's own height
+  // classes (h-[72vh] etc.) only fit the side-by-side layout, so they are
+  // overridden inline here and handed back when it docks again.
+  STACKED_MAP_HEIGHT: "min(60vh, 460px)",
+
   layout() {
     if (!this.leftStack || !this.viewport) return
     const docked = this.el.clientWidth >= this.DOCK_MIN
     if (docked === this._docked) return
     this._docked = docked
 
+    Object.assign(this.el.style, docked
+      ? { flexDirection: "", height: "", minHeight: "", maxHeight: "" }
+      : { flexDirection: "column", height: "auto", minHeight: "0", maxHeight: "none" })
+
+    Object.assign(this.viewport.style, docked
+      ? { flex: "1 1 auto", height: "", minHeight: "" }
+      : { flex: "0 0 auto", height: this.STACKED_MAP_HEIGHT, minHeight: "320px" })
+
     Object.assign(this.leftStack.style, docked
       ? {
-        position: "static", top: "", left: "", flex: `0 0 ${this.DOCK_WIDTH}px`,
-        width: `${this.DOCK_WIDTH}px`, maxHeight: "100%", padding: "10px 8px",
-        background: HUD.ink950, borderRight: `1px solid ${HUD.line}`,
+        order: "", flex: `0 0 ${this.DOCK_WIDTH}px`,
+        width: `${this.DOCK_WIDTH}px`, maxHeight: "100%", overflowY: "auto", padding: "10px 8px",
+        background: HUD.ink950, borderRight: `1px solid ${HUD.line}`, borderTop: "none",
         // The column is a real scroll container now, so it must opt back in to
         // touch scrolling: the viewport's `touch-action: none` no longer
         // covers it, but an inherited value from an ancestor still would.
         touchAction: "pan-y",
       }
       : {
-        position: "absolute", top: "10px", left: "10px", flex: "",
-        width: "", maxHeight: "calc(100% - 20px)", padding: "0",
-        background: "transparent", borderRight: "none", touchAction: "pan-y",
+        order: "2", flex: "0 0 auto", width: "auto", maxHeight: "none", overflowY: "visible",
+        padding: "10px", background: HUD.ink950, borderRight: "none",
+        borderTop: `1px solid ${HUD.line}`, touchAction: "pan-y",
       })
 
+    this.leftStack.classList.toggle("tac-stacked", !docked)
     ;(this.hudPanels || []).forEach((p) => this.stylePanel(p))
     this.refit()
   },
 
   toolbar() {
     const bar = document.createElement("div")
+    // `left` + wrap: on a 320px phone the mode toggle and the zoom buttons
+    // don't fit one row, and without them the row ran out past the map's
+    // left edge ("Interactive" read "ractive").
     Object.assign(bar.style, {
-      position: "absolute", top: "10px", right: "10px",
-      display: "flex", gap: "4px", zIndex: "5",
+      position: "absolute", top: "10px", right: "10px", left: "10px",
+      display: "flex", flexWrap: "wrap", justifyContent: "flex-end", gap: "4px", zIndex: "5",
+      pointerEvents: "none",
     })
+    // The bar spans the map now, so it lets drags through; its buttons opt back
+    // in (app.css `.tac-bar > *`), including the mode toggle added later.
+    bar.className = "tac-bar"
     const zin = hudIconButton("zoom-in", "Zoom in")
     const zout = hudIconButton("zoom-out", "Zoom out")
     const reset = hudIconButton("reset", "Reset view")
@@ -1508,9 +1544,13 @@ const TacMap = {
     }, opts)
 
     if (typeof ResizeObserver !== "undefined") {
-      // Observes the host, not the viewport: the host's box is set entirely by
-      // its parent and never by our own mutations, so re-styling the column
-      // inside the callback can't feed back into another observation.
+      // Observes the host, not the viewport. Docked, the host's box is set
+      // entirely by its parent. Stacked, its HEIGHT follows our own content
+      // (`height: auto`; the Markers panel arrives later and grows it), so a
+      // callback can follow our own mutation - which is harmless only because
+      // layout() switches on the host's WIDTH and returns early when the mode
+      // is unchanged, and refit() never resizes the host. Keep it that way:
+      // anything here that changes the host's width would loop.
       this.ro = new ResizeObserver(() => { this.layout(); this.refit() })
       this.ro.observe(this.el)
       this.abort.signal.addEventListener("abort", () => this.ro.disconnect())

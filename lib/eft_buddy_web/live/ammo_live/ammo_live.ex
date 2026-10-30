@@ -235,15 +235,20 @@ defmodule EftBuddyWeb.AmmoLive.Index do
         <span class="h-px flex-1 hud-rule"></span>
         <span class="t-label text-[9px] text-fog-500">{length(@rows)} rounds</span>
       </div>
-      <div class="overflow-x-auto">
-        <table class="w-full text-sm border-collapse table-fixed min-w-312.5">
+      <div class="overflow-x-auto scroll-fade-x">
+        <table class="w-full text-sm border-collapse table-fixed min-w-[1106px] sm:min-w-312.5">
           <%!-- Ammo-name column widened (260 -> 300) and the two Bleeding
                columns trimmed (96 -> 80) to give the name + its label pills
                (Subsonic / tracer) room to sit on a single line. The Bleeding
                headers already wrap to two lines at this width, so trimming
-               them costs nothing. C1-C6 stay at 44px. --%>
+               them costs nothing. C1-C6 stay at 44px.
+
+               On phones the sticky name column is 150px and the name wraps:
+               at 300px it filled the whole screen, and Damage and Penetration
+               were always scrolled out of view. The table's minimum width
+               drops by the same 150px. --%>
           <colgroup>
-            <col class="w-[300px]" />
+            <col class="w-[150px] sm:w-[300px]" />
             <col class="w-[66px]" />
             <col class="w-[60px]" />
             <col class="w-[74px]" />
@@ -259,7 +264,7 @@ defmodule EftBuddyWeb.AmmoLive.Index do
 
           <thead>
             <tr class="border-b border-line">
-              <th class="text-left px-5 py-2 sticky left-0 z-20 bg-ink-850 border-r border-line">
+              <th class="text-left px-2.5 sm:px-5 py-2 sticky left-0 z-20 bg-ink-850 border-r border-line">
                 <.sort_header
                   label="Ammo"
                   col="name"
@@ -387,18 +392,24 @@ defmodule EftBuddyWeb.AmmoLive.Index do
               :for={a <- @rows}
               class="border-b border-line/60 bg-ink-850 hover:bg-ink-900 transition-colors"
             >
-              <td class="px-5 py-2 sticky left-0 z-10 bg-inherit border-r border-line">
+              <td class="px-2.5 sm:px-5 py-2 sticky left-0 z-10 bg-inherit border-r border-line">
                 <div class="flex items-center gap-2.5 min-w-0">
-                  <.item_tile :if={a.item} item={a.item} size="w-9 h-9" />
+                  <.item_tile :if={a.item} item={a.item} size="w-7 h-7 sm:w-9 sm:h-9" />
                   <div class="min-w-0">
-                    <div class="text-fog-100 font-medium truncate">{ammo_name(a)}</div>
+                    <div class="text-fog-100 font-medium leading-snug wrap-anywhere sm:truncate">
+                      {ammo_name(a)}
+                    </div>
                     <div
                       :if={(a.item && a.item.short_name) || subsonic?(a) || a.tracer}
-                      class="flex items-center gap-1.5 mt-1"
+                      class="flex flex-wrap items-center gap-1.5 mt-1"
                     >
+                      <%!-- `max-w-full`: a flex item won't shrink below its text,
+                           so in the 150px phone column a long short name
+                           ("SIGNAL FLARE (BLUE)") ran into the Damage cell
+                           instead of truncating. --%>
                       <span
                         :if={a.item && a.item.short_name}
-                        class="t-label text-[9px] text-fog-500 truncate"
+                        class="t-label text-[9px] text-fog-500 truncate max-w-full"
                       >
                         {a.item.short_name}
                       </span>
@@ -500,10 +511,11 @@ defmodule EftBuddyWeb.AmmoLive.Index do
         <span class="h-px flex-1 hud-rule"></span>
         <span class="t-label text-[9px] text-fog-500">{length(@plates)} plates</span>
       </div>
-      <div class="overflow-x-auto">
-        <table class="w-full text-sm border-collapse table-fixed min-w-286">
+      <div class="overflow-x-auto scroll-fade-x">
+        <%!-- Phones get a 150px plate column, as the ammo tables do. --%>
+        <table class="w-full text-sm border-collapse table-fixed min-w-[1034px] sm:min-w-286">
           <colgroup>
-            <col class="w-[260px]" />
+            <col class="w-[150px] sm:w-[260px]" />
             <col class="w-[112px]" />
             <col class="w-[108px]" />
             <col class="w-[96px]" />
@@ -518,7 +530,7 @@ defmodule EftBuddyWeb.AmmoLive.Index do
           </colgroup>
           <thead>
             <tr class="border-b border-line">
-              <th class="text-left px-5 py-2 sticky left-0 z-20 bg-ink-850 border-r border-line">
+              <th class="text-left px-2.5 sm:px-5 py-2 sticky left-0 z-20 bg-ink-850 border-r border-line">
                 <.sort_header
                   label="Plate"
                   col="plate"
@@ -657,11 +669,13 @@ defmodule EftBuddyWeb.AmmoLive.Index do
               :for={p <- @plates}
               class="border-b border-line/60 bg-ink-850 hover:bg-ink-900 transition-colors"
             >
-              <td class="px-5 py-2 sticky left-0 z-10 bg-inherit border-r border-line">
+              <td class="px-2.5 sm:px-5 py-2 sticky left-0 z-10 bg-inherit border-r border-line">
                 <div class="flex items-center gap-2.5 min-w-0">
-                  <.item_tile :if={p.item} item={p.item} size="w-9 h-9" />
+                  <.item_tile :if={p.item} item={p.item} size="w-7 h-7 sm:w-9 sm:h-9" />
                   <div class="min-w-0">
-                    <div class="text-fog-100 font-medium truncate">{plate_name(p)}</div>
+                    <div class="text-fog-100 font-medium leading-snug wrap-anywhere sm:truncate">
+                      {plate_name(p)}
+                    </div>
                     <div
                       :if={p.item && p.item.short_name}
                       class="t-label text-[9px] text-fog-500 truncate mt-1"
