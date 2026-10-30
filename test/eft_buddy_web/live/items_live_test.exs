@@ -18,6 +18,22 @@ defmodule EftBuddyWeb.ItemsLiveTest do
     assert html =~ "Salewa First Aid Kit"
   end
 
+  # The pills used to share the name's line as non-shrinking siblings, and an
+  # item used in three or four places had pills wider than the column: on a
+  # phone the name truncated to nothing. They now wrap on the short-name line.
+  test "an item's pills sit on the short-name line, never on the name's", %{conn: conn} do
+    cat = category()
+    filter = item(%{name: "Military power filter", short_name: "MPF", category_id: cat.id})
+    level = station_level(%{station_id: station().id})
+    item_requirement(%{level_id: level.id, item_id: filter.id})
+
+    {:ok, view, _html} = live(conn, ~p"/items")
+
+    assert has_element?(view, "#items-list div.truncate", ~r/^\s*Military power filter\s*$/)
+    assert has_element?(view, "#items-list div.flex-wrap", "MPF")
+    assert has_element?(view, "#items-list div.flex-wrap", "HIDEOUT")
+  end
+
   test "search narrows the listing via a URL patch", %{conn: conn} do
     cat = category()
     item(%{name: "Salewa", category_id: cat.id})

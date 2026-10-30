@@ -65,12 +65,12 @@ defmodule EftBuddyWeb.OperatorStateTest do
 
       {:ok, view, _html} = live(conn_for(conn, token), ~p"/tasks")
 
-      # `aria-pressed={@active}` renders as a boolean attribute, so the active
-      # toggle simply *has* the attribute and the inactive one omits it.
-      assert has_element?(view, ~s{button[phx-value-mode="pve"][aria-pressed]})
-      assert has_element?(view, ~s{button[phx-value-faction="bear"][aria-pressed]})
-      refute has_element?(view, ~s{button[phx-value-mode="pvp"][aria-pressed]})
-      refute has_element?(view, ~s{button[phx-value-faction="usec"][aria-pressed]})
+      # An explicit "true"/"false": HEEx renders `aria-pressed={true}` as a bare
+      # attribute, which assistive technology does not read as pressed.
+      assert has_element?(view, ~s{button[phx-value-mode="pve"][aria-pressed="true"]})
+      assert has_element?(view, ~s{button[phx-value-faction="bear"][aria-pressed="true"]})
+      assert has_element?(view, ~s{button[phx-value-mode="pvp"][aria-pressed="false"]})
+      assert has_element?(view, ~s{button[phx-value-faction="usec"][aria-pressed="false"]})
     end
 
     test "renders the current scav karma", %{conn: conn} do
@@ -223,7 +223,7 @@ defmodule EftBuddyWeb.OperatorStateTest do
         |> live(~p"/tasks")
 
       assert level_field(view) =~ ~s(value="33")
-      assert has_element?(view, ~s{button[phx-value-faction="bear"][aria-pressed]})
+      assert has_element?(view, ~s{button[phx-value-faction="bear"][aria-pressed="true"]})
     end
 
     test "a missing prefs cookie clears a previously bridged copy from the session",
@@ -265,7 +265,7 @@ defmodule EftBuddyWeb.OperatorStateTest do
       view |> element(~s{button[phx-click="set_mode"][phx-value-mode="pve"]}) |> render_click()
 
       assert level_field(view) =~ ~s(value="1")
-      assert has_element?(view, ~s{button[phx-value-faction="usec"][aria-pressed]})
+      assert has_element?(view, ~s{button[phx-value-faction="usec"][aria-pressed="true"]})
 
       view
       |> element(~s{form[phx-change="set_pmc_level"]})
@@ -275,7 +275,7 @@ defmodule EftBuddyWeb.OperatorStateTest do
       view |> element(~s{button[phx-click="set_mode"][phx-value-mode="pvp"]}) |> render_click()
 
       assert level_field(view) =~ ~s(value="42")
-      assert has_element?(view, ~s{button[phx-value-faction="bear"][aria-pressed]})
+      assert has_element?(view, ~s{button[phx-value-faction="bear"][aria-pressed="true"]})
 
       prefs = OperatorSessions.snapshot(token).prefs
       assert Operator.mode_slice(prefs, :pvp).pmc_level == 42

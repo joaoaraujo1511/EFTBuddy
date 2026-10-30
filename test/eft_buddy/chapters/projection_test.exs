@@ -53,8 +53,61 @@ defmodule EftBuddy.Chapters.ProjectionTest do
 
   describe "project/1" do
     test "drops the lead/infobox section but keeps the real sections in order" do
-      slugs = Projection.project(manifest()).content_sections |> Enum.map(& &1.slug)
-      assert slugs == ["description", "guide"]
+      sections = [
+        %{
+          "slug" => "lead",
+          "level" => 0,
+          "index" => "0",
+          "heading" => "(lead / infobox)",
+          "wikitext" => "x",
+          "files" => []
+        },
+        %{
+          "slug" => "history",
+          "level" => 2,
+          "index" => "1",
+          "heading" => "History",
+          "wikitext" => "Long ago.",
+          "files" => []
+        },
+        %{
+          "slug" => "guide",
+          "level" => 2,
+          "index" => "2",
+          "heading" => "Guide",
+          "wikitext" => "Head north.",
+          "files" => []
+        }
+      ]
+
+      slugs =
+        Projection.project(manifest(%{"sections" => sections})).content_sections
+        |> Enum.map(& &1.slug)
+
+      assert slugs == ["history", "guide"]
+    end
+
+    # The summary IS the Description's quote, shown under the chapter title, so
+    # a Description holding only that quote printed the paragraph twice.
+    test "drops a Description section that only repeats the summary" do
+      projected = Projection.project(manifest())
+
+      assert projected.summary == "A cold and unforgiving place."
+      assert Enum.map(projected.content_sections, & &1.slug) == ["guide"]
+    end
+
+    test "keeps a Description section that says more than the summary" do
+      [lead, description, guide] = manifest()["sections"]
+
+      description = %{
+        description
+        | "wikitext" =>
+            "{{quote|A cold and unforgiving place.|Narrator}}\nThe chapter opens at dawn."
+      }
+
+      projected = Projection.project(manifest(%{"sections" => [lead, description, guide]}))
+
+      assert Enum.map(projected.content_sections, & &1.slug) == ["description", "guide"]
     end
 
     test "extracts the infobox banner url, or nil when absent" do

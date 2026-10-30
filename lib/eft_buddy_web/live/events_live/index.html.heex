@@ -101,7 +101,7 @@
             <button
               type="button"
               aria-label={"Toggle watchlist for #{event.name}"}
-              aria-pressed={event.watchlisted?}
+              aria-pressed={if event.watchlisted?, do: "true", else: "false"}
               title={if event.watchlisted?, do: "Remove from watchlist", else: "Add to watchlist"}
               phx-click={JS.push("toggle_watchlist", value: %{slug: event.slug})}
               class={[

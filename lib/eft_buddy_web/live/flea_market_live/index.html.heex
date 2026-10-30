@@ -97,15 +97,20 @@
       noun="items"
     />
 
+    <%!-- Columns come from a minimum card width, not breakpoints: the
+         breakpoint counts ignored the rail, so at 1024px (3 columns beside it)
+         and 1280px (4) the price ran into its percentage change and names
+         wrapped onto five lines. 270px is the narrowest card that holds the
+         price line. --%>
     <div
       :if={(@total_flea_count || 0) > 0 and @items_loaded > 0}
       id="flea-items"
-      class="grid sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4"
+      class="grid grid-cols-[minmax(0,1fr)] sm:grid-cols-[repeat(auto-fill,minmax(270px,1fr))] gap-4"
       phx-update="stream"
       phx-viewport-bottom={!@end_of_items? && "load_more"}
       phx-page-loading
     >
-      <div :for={{dom_id, item} <- @streams.items} id={dom_id}>
+      <div :for={{dom_id, item} <- @streams.items} id={dom_id} class="min-w-0">
         <% group_id = group_id_for_category(item.category) %>
         <% pct = price_change_pct(item) %>
         <% trend = change_trend(pct) %>
@@ -122,7 +127,7 @@
           <button
             type="button"
             aria-label={"Toggle watchlist for #{item.name}"}
-            aria-pressed={fav?}
+            aria-pressed={if fav?, do: "true", else: "false"}
             title={if fav?, do: "Remove from watchlist", else: "Add to watchlist"}
             phx-click={
               JS.push("toggle_favorite", value: %{slug: item.normalized_name})

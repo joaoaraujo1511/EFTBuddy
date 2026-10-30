@@ -89,7 +89,8 @@ defmodule EftBuddy.Chapters.Projection do
   @spec project(map()) :: chapter()
   def project(manifest) when is_map(manifest) do
     sections = manifest["sections"] || []
-    content_sections = build_content_sections(sections)
+    summary = extract_summary(sections)
+    content_sections = sections |> build_content_sections() |> drop_repeated_summary(summary)
     counts = counts(content_sections)
 
     %{
@@ -106,7 +107,7 @@ defmodule EftBuddy.Chapters.Projection do
       # Infobox banner CDN url, or nil if it wasn't resolved.
       banner: extract_banner(manifest["banner"]),
       # Lore blurb pulled from the Description section's {{quote}}.
-      summary: extract_summary(sections),
+      summary: summary,
       # Every non-file wikilink the chapter references, as
       # `[%{title, slug}]`. The LiveView intersects these slugs with
       # real task slugs to render cross-links into the tasks tab.
@@ -197,6 +198,21 @@ defmodule EftBuddy.Chapters.Projection do
     end)
     |> Enum.reject(fn s -> s.slug == "lead" or s.blocks == [] or s.heading == "" end)
   end
+
+  # The summary is the Description section's quote, shown under the chapter
+  # title. When that quote is all the section holds, rendering the section too
+  # printed the same paragraph twice, one under the other. A Description with
+  # anything more (extra prose, a list, images) is kept whole.
+  defp drop_repeated_summary(sections, nil), do: sections
+
+  defp drop_repeated_summary(sections, summary) do
+    Enum.reject(sections, fn s ->
+      s.slug == "description" and Enum.all?(s.blocks, &(&1.kind == :prose)) and
+        squish(Enum.map_join(s.blocks, " ", & &1.text)) == squish(summary)
+    end)
+  end
+
+  defp squish(text), do: text |> String.replace(~r/\s+/, " ") |> String.trim()
 
   # The wiki links a conditional objective block to the endings it leads
   # to by putting their icons in the block's own heading:

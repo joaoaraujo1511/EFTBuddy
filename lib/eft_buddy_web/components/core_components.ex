@@ -209,12 +209,15 @@ defmodule EftBuddyWeb.CoreComponents do
       aria-checked={to_string(@checked)}
       aria-label={@label}
       title={@label}
-      class={[
-        "w-5 h-5 shrink-0 border flex items-center justify-center cursor-pointer transition-colors hud-focus",
-        (@checked && "bg-go/15 border-go/50 text-go") ||
-          "bg-ink-950 border-line-strong text-transparent hover:border-fog-500",
-        @class
-      ]}
+      class={
+        [
+          # `tap-target`: a 32px tap area around the 20px box (app.css).
+          "w-5 h-5 shrink-0 border flex items-center justify-center cursor-pointer transition-colors hud-focus tap-target",
+          (@checked && "bg-go/15 border-go/50 text-go") ||
+            "bg-ink-950 border-line-strong text-transparent hover:border-fog-500",
+          @class
+        ]
+      }
       {@rest}
     >
       <.icon name="hero-check" class="w-3.5 h-3.5" />
@@ -541,7 +544,7 @@ defmodule EftBuddyWeb.CoreComponents do
         <button
           :if={@popup?}
           type="button"
-          phx-click={JS.toggle(to: "##{@popup_id}", display: "block")}
+          phx-click={JS.toggle(to: "##{@popup_id}, ##{@popup_id}-sheet", display: "block")}
           aria-controls={@popup_id}
           class="t-label text-[9px] px-1.5 py-0.5 border border-amber/35 bg-amber/10 text-amber hover:border-amber hover:bg-amber/20 transition-colors hud-focus"
         >
@@ -552,43 +555,70 @@ defmodule EftBuddyWeb.CoreComponents do
         </button>
       </p>
 
-      <div
+      <%!-- Two copies of the popup, one per screen size; the chip toggles both
+           and CSS shows one. From `sm` up it opens above the chip. On phones it
+           opened off the top of the screen, under the top bar, so there it is a
+           bottom sheet - teleported to <body>, because the cards the credit sits
+           in are clipped (`hud-notch`) and would cut a fixed element off.
+           `!hidden` beats the inline `display: block` the toggle sets. --%>
+      <.credits_popup
         :if={@popup?}
         id={@popup_id}
-        class="hidden absolute z-50 bottom-full mb-2 left-0 w-[380px] max-w-[92vw] bg-ink-900 border border-line-strong shadow-xl"
-        phx-click-away={JS.hide(to: "##{@popup_id}")}
-        phx-window-keydown={JS.hide(to: "##{@popup_id}")}
-        phx-key="escape"
-      >
-        <div class="h-px bg-amber"></div>
-        <div class="p-4 space-y-2.5">
-          <p class="t-label text-[9px] text-fog-600">Written by these wiki contributors</p>
+        preview={@preview}
+        class="hidden max-sm:!hidden absolute z-50 bottom-full mb-2 left-0 w-[380px] max-w-[92vw]"
+      />
+      <.portal :if={@popup?} id={@popup_id <> "-portal"} target="body">
+        <.credits_popup
+          id={@popup_id <> "-sheet"}
+          preview={@preview}
+          class="hidden sm:!hidden fixed z-[60] inset-x-2.5 bottom-2.5 max-h-[60vh] overflow-y-auto"
+        />
+      </.portal>
+    </div>
+    """
+  end
 
-          <ul class="grid grid-cols-2 gap-x-3 gap-y-1.5">
-            <.contributor_item :for={name <- @preview.shown} name={name} />
-          </ul>
+  attr :id, :string, required: true
+  attr :preview, :map, required: true
+  attr :class, :string, required: true
 
-          <%!-- The remainder is rendered up front and hidden, then revealed by a
-               JS class toggle. The names are already in assigns, so expanding in
-               place costs nothing and keeps the reader on the page they are
-               reading — the previous version sent them to a separate roster to
-               finish a credit, which is a poor thing to make someone do. --%>
-          <ul
-            :if={@preview.remaining > 0}
-            id={@popup_id <> "-rest"}
-            class="hidden grid grid-cols-2 gap-x-3 gap-y-1.5"
-          >
-            <.contributor_item :for={name <- @preview.rest} name={name} />
-          </ul>
+  defp credits_popup(assigns) do
+    ~H"""
+    <div
+      id={@id}
+      class={[@class, "bg-ink-900 border border-line-strong shadow-xl"]}
+      phx-click-away={JS.hide(to: "##{@id}")}
+      phx-window-keydown={JS.hide(to: "##{@id}")}
+      phx-key="escape"
+    >
+      <div class="h-px bg-amber"></div>
+      <div class="p-4 space-y-2.5">
+        <p class="t-label text-[9px] text-fog-600">Written by these wiki contributors</p>
 
-          <.show_all_toggle
-            :if={@preview.remaining > 0}
-            id={@popup_id <> "-more"}
-            target={"##{@popup_id}-rest"}
-            controls={@popup_id <> "-rest"}
-            total={@preview.total}
-          />
-        </div>
+        <ul class="grid grid-cols-2 gap-x-3 gap-y-1.5">
+          <.contributor_item :for={name <- @preview.shown} name={name} />
+        </ul>
+
+        <%!-- The remainder is rendered up front and hidden, then revealed by a
+             JS class toggle. The names are already in assigns, so expanding in
+             place costs nothing and keeps the reader on the page they are
+             reading — the previous version sent them to a separate roster to
+             finish a credit, which is a poor thing to make someone do. --%>
+        <ul
+          :if={@preview.remaining > 0}
+          id={@id <> "-rest"}
+          class="hidden grid grid-cols-2 gap-x-3 gap-y-1.5"
+        >
+          <.contributor_item :for={name <- @preview.rest} name={name} />
+        </ul>
+
+        <.show_all_toggle
+          :if={@preview.remaining > 0}
+          id={@id <> "-more"}
+          target={"##{@id}-rest"}
+          controls={@id <> "-rest"}
+          total={@preview.total}
+        />
       </div>
     </div>
     """
@@ -614,7 +644,7 @@ defmodule EftBuddyWeb.CoreComponents do
   end
 
   defp credit_link_class do
-    "text-fog-500 hover:text-amber underline decoration-line hover:decoration-amber/60 underline-offset-2 transition-colors"
+    "text-fog-500 hover:text-amber underline decoration-line hover:decoration-amber/60 underline-offset-2 transition-colors tap-target"
   end
 
   @doc """

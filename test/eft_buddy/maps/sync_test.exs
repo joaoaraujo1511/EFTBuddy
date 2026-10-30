@@ -67,6 +67,23 @@ defmodule EftBuddy.Maps.SyncTest do
     end
   end
 
+  describe "readable_name/1" do
+    # Upstream shipped the Halloween 2026 boss with its raw id as its name, and
+    # it was shown verbatim in the boss chips and the enemy tags.
+    test "turns a camelCase id into words" do
+      assert Sync.readable_name("infectedScreamer") == "Infected Screamer"
+      assert Sync.readable_name("bossKnight") == "Boss Knight"
+    end
+
+    test "leaves real names alone" do
+      for name <- ["Reshala", "Cultist Priest", "Black Div.", "Knight", "BTR", "scavs", "PMC"] do
+        assert Sync.readable_name(name) == name
+      end
+
+      assert Sync.readable_name(nil) == nil
+    end
+  end
+
   describe "classify_spawn/1" do
     test "the boss category wins outright" do
       assert Sync.classify_spawn(%{"categories" => ["bot", "boss"], "sides" => ["scav"]}) ==

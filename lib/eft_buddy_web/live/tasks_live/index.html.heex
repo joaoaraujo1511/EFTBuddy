@@ -108,17 +108,21 @@
            the row's columns the further right you go, which is why the Status
            heading never sat over the status pills. Same nesting + same gap
            here means every heading lands on its column. `pr-12` matches the
-           right padding the rows reserve for the watchlist toggle. --%>
+           right padding the rows reserve for the watchlist toggle.
+
+           Between `sm` and `lg` the nested grid is a fixed template instead of
+           11 equal columns: there the 11 columns left the task and trader
+           names a few characters each while Level had room to spare. --%>
       <div class="hidden sm:grid grid-cols-12 px-5 pr-12 py-3 t-label text-[9px] text-fog-500 border-b border-line">
         <div class="col-span-1">Done</div>
-        <div class="col-span-11 grid grid-cols-11 items-center gap-x-4">
+        <div class="col-span-11 grid grid-cols-[minmax(0,1fr)_7.5rem_3.5rem_7.5rem] lg:grid-cols-11 items-center gap-x-4">
           <.sort_header
             col="name"
             label="Task"
             sort={@sort}
             asc={:name_asc}
             desc={:name_desc}
-            class="col-span-5"
+            class="lg:col-span-5"
           />
           <.sort_header
             col="trader"
@@ -126,7 +130,7 @@
             sort={@sort}
             asc={:trader_asc}
             desc={:trader_desc}
-            class="col-span-2"
+            class="lg:col-span-2"
           />
           <.sort_header
             col="level"
@@ -134,14 +138,14 @@
             sort={@sort}
             asc={:level_asc}
             desc={:level_desc}
-            class="col-span-2"
+            class="lg:col-span-2"
           />
           <%!-- Status is the one heading that can't just be right-aligned: the
                row puts a fixed-width pill AND a chevron in this cell. Reusing
                the row's `justify-end gap-2` with a chevron-sized spacer, and
                centring the label in a box the same width as the pill, parks
                "Status" dead centre over the pill. --%>
-          <div class="col-span-2 flex items-center justify-end gap-2">
+          <div class="lg:col-span-2 flex items-center justify-end gap-2">
             <span class="min-w-24 text-center">Status</span>
             <span class="w-4 shrink-0" aria-hidden="true"></span>
           </div>
@@ -177,18 +181,19 @@
               phx-click="toggle_expand"
               phx-value-id={task.id}
               aria-expanded={if task.expanded?, do: "true", else: "false"}
-              class="col-span-10 sm:col-span-11 grid grid-cols-10 sm:grid-cols-11 items-center gap-x-4 text-left cursor-pointer"
+              class="col-span-10 sm:col-span-11 grid grid-cols-[minmax(0,1fr)_auto] sm:grid-cols-[minmax(0,1fr)_7.5rem_3.5rem_7.5rem] lg:grid-cols-11 items-center gap-x-4 text-left cursor-pointer"
             >
-              <div class="col-span-7 sm:col-span-5 flex items-center gap-2.5 min-w-0">
+              <div class="lg:col-span-5 flex items-center gap-2.5 min-w-0">
                 <%!-- Quest banner thumbnail. Lives on the collapsed row (not
                      the detail panel) so the list is scannable at a glance.
                      The banners are much wider than they are tall, so the
                      fixed 112x48 box crops them with `object-cover` rather
                      than letting a full-width banner inflate every row. The
                      box renders even when there's no banner, so the quest
-                     names stay aligned down the column. Hidden on mobile,
-                     where the name column is already tight. --%>
-                <span class="hidden sm:block shrink-0 w-28 h-12 overflow-hidden border border-line bg-ink-950">
+                     names stay aligned down the column. Hidden below `lg`:
+                     on tablets its 112px left the task and trader names a few
+                     characters each. --%>
+                <span class="hidden lg:block shrink-0 w-28 h-12 overflow-hidden border border-line bg-ink-950">
                   <img
                     :if={task.banner_url}
                     src={task.banner_url}
@@ -198,28 +203,45 @@
                     class="w-full h-full object-cover"
                   />
                 </span>
-                <span class={[
-                  "font-medium truncate",
-                  if(task.status == :completed,
-                    do: "text-fog-600 line-through",
-                    else: "text-fog-100"
-                  )
-                ]}>
-                  {task.name}
-                </span>
-                <.badge :if={task.kappa?} variant={:purple} class="shrink-0">Kappa</.badge>
-                <.badge :if={task.lightkeeper?} variant={:signal} class="shrink-0">
-                  Lightkeeper
-                </.badge>
-                <span
-                  :if={task.has_wiki?}
-                  title="Walkthrough available"
-                  class="shrink-0 inline-flex"
-                >
-                  <.icon name="hero-photo" class="w-3.5 h-3.5 text-amber/70" />
-                </span>
+                <%!-- On phones the name gets a line of its own and the status
+                     pill moves under it with the Kappa / Lightkeeper badges:
+                     beside the name the pill was wider than its cell and was
+                     drawn over the name. From `sm` up both wrappers are
+                     `contents`, so it is one line again. --%>
+                <div class="min-w-0 flex-1 flex flex-col gap-1 sm:flex-row sm:items-center sm:gap-2.5">
+                  <div class="min-w-0 flex items-center gap-2 sm:contents">
+                    <span class={[
+                      "font-medium truncate",
+                      if(task.status == :completed,
+                        do: "text-fog-600 line-through",
+                        else: "text-fog-100"
+                      )
+                    ]}>
+                      {task.name}
+                    </span>
+                    <span
+                      :if={task.has_wiki?}
+                      title="Walkthrough available"
+                      class="shrink-0 inline-flex sm:order-last"
+                    >
+                      <.icon name="hero-photo" class="w-3.5 h-3.5 text-amber/70" />
+                    </span>
+                  </div>
+                  <div class="flex flex-wrap items-center gap-1.5 sm:contents">
+                    <span class={[
+                      "sm:hidden t-label text-[9px] px-2 py-1 border text-center",
+                      status_classes(task.status)
+                    ]}>
+                      {status_label(task.status)}
+                    </span>
+                    <.badge :if={task.kappa?} variant={:purple} class="shrink-0">Kappa</.badge>
+                    <.badge :if={task.lightkeeper?} variant={:signal} class="shrink-0">
+                      Lightkeeper
+                    </.badge>
+                  </div>
+                </div>
               </div>
-              <div class="hidden sm:flex sm:col-span-2 items-center gap-2 text-sm text-fog-500 min-w-0">
+              <div class="hidden sm:flex lg:col-span-2 items-center gap-2 text-sm text-fog-500 min-w-0">
                 <img
                   :if={src = task.trader_image}
                   src={src}
@@ -230,19 +252,19 @@
                 <span class="truncate">{task.trader}</span>
               </div>
               <div class={[
-                "hidden sm:block sm:col-span-2 t-num text-sm",
+                "hidden sm:block lg:col-span-2 t-num text-sm",
                 level_class(task.level, @pmc_level)
               ]}>
                 {if task.level, do: "Lvl #{task.level}", else: "-"}
               </div>
-              <div class="col-span-3 sm:col-span-2 text-right flex items-center justify-end gap-2">
+              <div class="lg:col-span-2 text-right flex items-center justify-end gap-2">
                 <%!-- Fixed width from `sm` up so the pills form a straight
                      column instead of a ragged edge, and so the "Status"
-                     heading has a known box to centre itself over. Natural
-                     width on mobile, where this cell is far too narrow for
-                     it. --%>
+                     heading has a known box to centre itself over. On phones
+                     the pill is under the task name instead (above), and this
+                     cell holds only the chevron. --%>
                 <span class={[
-                  "t-label text-[9px] px-2 py-1 border sm:min-w-24 text-center",
+                  "hidden sm:inline-block t-label text-[9px] px-2 py-1 border min-w-24 text-center",
                   status_classes(task.status)
                 ]}>
                   {status_label(task.status)}
@@ -265,7 +287,7 @@
             <button
               type="button"
               aria-label={"Toggle watchlist for #{task.name}"}
-              aria-pressed={task.watchlisted?}
+              aria-pressed={if task.watchlisted?, do: "true", else: "false"}
               title={if task.watchlisted?, do: "Remove from watchlist", else: "Add to watchlist"}
               phx-click={
                 JS.push("toggle_watchlist", value: %{slug: task.normalized_name})

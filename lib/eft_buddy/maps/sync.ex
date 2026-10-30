@@ -629,7 +629,7 @@ defmodule EftBuddy.Maps.Sync do
           id: Ecto.UUID.generate(),
           map_id: map_id,
           game_mode: game_mode,
-          enemies: List.wrap(m["enemies"]),
+          enemies: readable_names(m["enemies"]),
           raid_duration: m["raidDuration"],
           players: m["players"],
           min_player_level: m["minPlayerLevel"],
@@ -765,7 +765,7 @@ defmodule EftBuddy.Maps.Sync do
       min_player_level: payload["minPlayerLevel"],
       max_player_level: payload["maxPlayerLevel"],
       description: payload["description"],
-      enemies: List.wrap(payload["enemies"]),
+      enemies: readable_names(payload["enemies"]),
       inserted_at: now,
       updated_at: now
     }
@@ -815,7 +815,7 @@ defmodule EftBuddy.Maps.Sync do
       map_id: map_id,
       variant_id: variant_id,
       external_id: boss["id"],
-      name: boss["name"],
+      name: readable_name(boss["name"]),
       normalized_name: boss["normalizedName"],
       image_portrait_link: boss["imagePortraitLink"],
       spawn_chance: to_float(b["spawnChance"]),
@@ -870,7 +870,7 @@ defmodule EftBuddy.Maps.Sync do
         |> Enum.map(fn a -> %{"count" => a["count"], "chance" => to_float(a["chance"])} end)
 
       %{
-        "name" => boss["name"],
+        "name" => readable_name(boss["name"]),
         "normalized_name" => boss["normalizedName"],
         # Escorts get cards of their own alongside the bosses they serve.
         "image_portrait_link" => boss["imagePortraitLink"],
@@ -880,6 +880,29 @@ defmodule EftBuddy.Maps.Sync do
   end
 
   defp normalize_escorts(_), do: []
+
+  @doc false
+  # Public for testing. Upstream occasionally ships a mob with no translated
+  # name, and the raw camelCase id stands in for it: the Halloween 2026 boss
+  # arrived as "infectedScreamer" and was shown verbatim in boss chips and as
+  # "INFECTEDSCREAMER" in the map's enemy tags. Such an id becomes words
+  # ("Infected Screamer"); any real name - which starts with a capital or
+  # contains a space - passes through untouched.
+  def readable_name(name) when is_binary(name) do
+    if Regex.match?(~r/^[a-z]+(?:[A-Z][a-z0-9]*)+$/, name) do
+      name
+      |> String.split(~r/(?<=[a-z0-9])(?=[A-Z])/)
+      |> Enum.map_join(" ", &upcase_first/1)
+    else
+      name
+    end
+  end
+
+  def readable_name(name), do: name
+
+  defp upcase_first(<<first::utf8, rest::binary>>), do: String.upcase(<<first::utf8>>) <> rest
+
+  defp readable_names(names), do: names |> List.wrap() |> Enum.map(&readable_name/1)
 
   # The Cultist Priest only ever spawns at night, but the API leaves its
   # `spawnTrigger` null on every map it appears on (Customs, Woods, Shoreline,
