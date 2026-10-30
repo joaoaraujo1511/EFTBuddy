@@ -232,7 +232,11 @@ defmodule EftBuddyWeb.StorylineComponents do
         <li :for={item <- @items} class="flex items-center gap-2 min-w-0">
           <%= case Map.get(@item_index, item.page) do %>
             <% nil -> %>
-              <span class="text-sm text-fog-300 truncate" title={item.name}>{item.name}</span>
+              <%!-- Wraps on phones instead of truncating: beside a FiR badge and
+                   an amount, a 320px screen left a name three letters. --%>
+              <span class="text-sm text-fog-300 min-w-0 leading-snug sm:truncate" title={item.name}>
+                {item.name}
+              </span>
             <% db -> %>
               <.link
                 navigate={~p"/items?#{[q: item.page]}"}
@@ -240,7 +244,9 @@ defmodule EftBuddyWeb.StorylineComponents do
                 title={item.name}
               >
                 <.item_tile item={db} size="w-8 h-8" link={false} />
-                <span class="text-sm text-amber group-hover:underline truncate">{item.name}</span>
+                <span class="text-sm text-amber group-hover:underline min-w-0 leading-snug sm:truncate">
+                  {item.name}
+                </span>
               </.link>
           <% end %>
 

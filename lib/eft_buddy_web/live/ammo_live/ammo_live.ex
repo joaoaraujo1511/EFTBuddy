@@ -403,9 +403,13 @@ defmodule EftBuddyWeb.AmmoLive.Index do
                       :if={(a.item && a.item.short_name) || subsonic?(a) || a.tracer}
                       class="flex flex-wrap items-center gap-1.5 mt-1"
                     >
+                      <%!-- `max-w-full`: a flex item won't shrink below its text,
+                           so in the 150px phone column a long short name
+                           ("SIGNAL FLARE (BLUE)") ran into the Damage cell
+                           instead of truncating. --%>
                       <span
                         :if={a.item && a.item.short_name}
-                        class="t-label text-[9px] text-fog-500 truncate"
+                        class="t-label text-[9px] text-fog-500 truncate max-w-full"
                       >
                         {a.item.short_name}
                       </span>
