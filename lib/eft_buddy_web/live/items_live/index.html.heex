@@ -183,7 +183,10 @@
                      coloured to match the scope tabs, share the short-name line
                      and wrap. They used to share the name's line as `shrink-0`
                      pills, and an item used in three or four places had pills
-                     wider than the column: the name truncated to nothing. --%>
+                     wider than the column: the name truncated to nothing.
+                     `max-w-full flex-wrap` lets a two-sided pill ("QUEST REWARD
+                     & REQUIREMENT") break onto two lines on a 320px phone
+                     instead of running under the chevron and watchlist toggle. --%>
                 <div
                   :if={
                     (row.item && row.item.short_name) || item_category_pills(row.categories) != []
@@ -196,6 +199,7 @@
                   <.badge
                     :for={pill <- item_category_pills(row.categories)}
                     variant={pill.variant}
+                    class="max-w-full flex-wrap"
                     title={pill.tooltip}
                   >
                     <span>{pill.main}</span>

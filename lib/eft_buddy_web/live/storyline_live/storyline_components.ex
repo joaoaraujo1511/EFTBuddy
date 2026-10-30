@@ -229,7 +229,9 @@ defmodule EftBuddyWeb.StorylineComponents do
       <h4 :if={@title} class="t-label text-[10px] text-amber">{@title}</h4>
 
       <ul class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2">
-        <li :for={item <- @items} class="flex items-center gap-2 min-w-0">
+        <%!-- Wraps, so on a 320px phone the amount and the FiR / Optional
+             badges drop under a long name rather than squeezing it. --%>
+        <li :for={item <- @items} class="flex flex-wrap items-center gap-x-2 gap-y-1 min-w-0">
           <%= case Map.get(@item_index, item.page) do %>
             <% nil -> %>
               <%!-- Wraps on phones instead of truncating: beside a FiR badge and
