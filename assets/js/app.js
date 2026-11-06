@@ -1238,7 +1238,7 @@ const TacMap = {
   // A vendored SVG (same origin) is fetched and inlined, which is what lets a
   // floor highlight its `<g>` layers. A map we have not vendored points at the
   // upstream host, and `fetch()` there is blocked by the CSP's
-  // `connect-src 'self'`, so those maps never loaded at all (audit M16). They
+  // `connect-src 'self'`, so those maps never loaded at all. They
   // load as an `<img>` instead, which `img-src` allows: the map and its markers
   // work, only the SVG floor highlighting waits until the file is vendored.
   loadSvg() {
@@ -2402,7 +2402,7 @@ const liveSocket = new LiveSocket("/live", Socket, {
   // How long a WebSocket upgrade may take before the client falls back to
   // long-polling. At 2.5 s, 74% of connections on the Pi ended up long-polling:
   // the upgrade through the Cloudflare tunnel is routinely slower than that, and
-  // a client that falls back stays on long-poll for the session (audit M27).
+  // a client that falls back stays on long-poll for the session.
   longPollFallbackMs: 8000,
   params: { _csrf_token: csrfToken },
   hooks: {

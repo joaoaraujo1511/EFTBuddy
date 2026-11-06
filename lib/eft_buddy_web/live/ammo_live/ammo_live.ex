@@ -926,7 +926,7 @@ defmodule EftBuddyWeb.AmmoLive.Index do
   # the scale from reading as a swatch jumping brighter or duller than its
   # neighbours: the old equal-HSL-lightness ramp made the yellows the
   # brightest, and their white rating digits fell to 3.2:1. At equal luminance
-  # every digit is 4.6:1 and every swatch 3.6:1 against the page (audit L30).
+  # every digit is 4.6:1 and every swatch 3.6:1 against the page.
   # `PEN_SCALE` in app.js repeats these for the hover key.
   def rating_color(6), do: "#277c38"
   def rating_color(5), do: "#427926"

@@ -81,7 +81,7 @@ defmodule EftBuddyWeb.TasksLiveTest do
     end
   end
 
-  describe "with no tarkov.dev tasks for the mode (audit M18)" do
+  describe "with no tarkov.dev tasks for the mode" do
     test "wiki quests are not all shown as WIP; the page waits for the Tasks sync",
          %{conn: conn} do
       # A fresh database, or a failing Tasks sync: nothing to match the wiki

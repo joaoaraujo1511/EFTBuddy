@@ -1,6 +1,6 @@
 defmodule EftBuddy.Items.PricePointsTest do
   @moduledoc """
-  Price history as one `item_price_points` row per price change (audit M2).
+  Price history as one `item_price_points` row per price change.
 
   It used to be a JSONB array on every `item_prices` row that each ten-minute
   tick read back and rewrote in full: about 6.5 GB a day of writes to the

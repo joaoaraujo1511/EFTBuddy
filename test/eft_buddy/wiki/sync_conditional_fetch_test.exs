@@ -176,7 +176,7 @@ defmodule EftBuddy.Wiki.SyncConditionalFetchTest do
       assert Repo.aggregate(QuestPage, :count, :id) == 2
     end
 
-    test "a keep-set that would drop most of the table is refused (audit H12)" do
+    test "a keep-set that would drop most of the table is refused" do
       # A category listing that came back short — the failed second page of
       # `Category:Quests` used to look exactly like this.
       ExUnit.CaptureLog.capture_log(fn ->

@@ -6,7 +6,7 @@ defmodule EftBuddy.Wiki.Url do
   requires, so a broken one breaks the attribution. Five places built them by
   replacing spaces with underscores and nothing more, which leaves `?`, `#`, `&`
   and `%` in a title as URL syntax: a quest titled "Are you going to eat
-  that?" linked to the page "Are_you_going_to_eat_that" (audit M20).
+  that?" linked to the page "Are_you_going_to_eat_that".
 
   `page/1` is the one encoder. `normalize/1` repairs a link stored before it
   existed: the projections run every stored link through it, because the quest

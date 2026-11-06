@@ -46,7 +46,7 @@ end
 # is `nil`, so the caller's default applies: compose hands a container
 # `NAME=` for anything listed in `.env` without a value, and
 # `String.to_integer("")` used to crash the boot with a bare ArgumentError that
-# named no variable (audit L16). Anything that is not a whole number still stops
+# named no variable. Anything that is not a whole number still stops
 # the boot, now saying which variable and what it held: a typo'd limit that fell
 # back to the default silently is how a box ends up without the headroom it was
 # configured for.

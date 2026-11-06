@@ -65,15 +65,7 @@ node_modules/
 
 # ── Must never reach the public repository ────────────────────────────────────
 #
-# `private/` holds the engineering audit: `private/audit/ENGINEERING_DUE_DILIGENCE.md`
-# is a prioritised map of every known weakness in this codebase, including a worked
-# exploit chain, plus the prompt that produced it.
-#
-# It lives behind an ignore rule rather than a note-to-self on purpose. The plan for
-# going public is a FRESH repository with one squashed commit, i.e. `git init &&
-# git add .` — so anything merely "remembered" to be excluded ships. An ignored
-# directory is a mechanism; a comment is a hope. Keep audit material in here and
-# the publication step cannot leak it.
+# `private/` holds internal notes that stay out of the repository.
 private/
 
 # The rest are generated / editor-local. These are currently TRACKED in this

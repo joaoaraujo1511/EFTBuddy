@@ -7,7 +7,7 @@ defmodule EftBuddy.Wiki.PageGaps do
   storing), but must not then record the page as current. `EftBuddy.Wiki.Sync`
   skips any page whose stored revision matches the wiki's, so a page stamped
   with its revision after a transient failure stayed incomplete until an editor
-  next touched it, which can be months (audit H11). A page with gaps is stored
+  next touched it, which can be months. A page with gaps is stored
   without a revision instead, which already means "scrape it again next run".
 
   One page is scraped at a time, start to finish, in the sync's own process

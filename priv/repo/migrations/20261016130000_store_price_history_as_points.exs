@@ -1,7 +1,7 @@
 defmodule EftBuddy.Repo.Migrations.StorePriceHistoryAsPoints do
   @moduledoc """
   Flea price history moves from a JSONB array on each `item_prices` row to an
-  append-only table with one row per price change (audit M2).
+  append-only table with one row per price change.
 
   Every ten-minute tick used to read every row's array back (about 1.5 s per
   mode) and rewrite all of them, about 11k rows of up to 192 points. Measured on

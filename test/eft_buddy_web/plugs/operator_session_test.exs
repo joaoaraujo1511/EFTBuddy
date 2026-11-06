@@ -16,7 +16,7 @@ defmodule EftBuddyWeb.Plugs.OperatorSessionTest do
 
   describe "a hostile eft_prefs cookie never takes the page down" do
     test "an absurd scav karma is clamped, not raised on", %{conn: conn} do
-      # REGRESSION (audit H4): `round(1.0e308 * 100)` raised on every request.
+      # REGRESSION: `round(1.0e308 * 100)` raised on every request.
       raw = encoded(%{"modes" => %{"pvp" => %{"scav_karma" => 1.0e308}}})
 
       conn = conn |> with_prefs_cookie(raw) |> get(~p"/tasks")
@@ -48,7 +48,7 @@ defmodule EftBuddyWeb.Plugs.OperatorSessionTest do
     end
   end
 
-  describe "the session cookie (audit L24)" do
+  describe "the session cookie" do
     @session_cookie "_eft_buddy_key"
 
     test "is not rewritten on a request that changed nothing", %{conn: conn} do

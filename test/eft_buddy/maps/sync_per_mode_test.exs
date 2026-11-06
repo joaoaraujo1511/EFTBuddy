@@ -1,6 +1,6 @@
 defmodule EftBuddy.Maps.SyncPerModeTest do
   @moduledoc """
-  Map data per game mode (audit M13). tarkov.dev publishes a maps document per
+  Map data per game mode. tarkov.dev publishes a maps document per
   mode and PVE differs (boss chances, enemies, extracts, spawns, keys, raid
   length); only the PVP document used to be synced, so PVE players saw PVP
   numbers. Runs the real `EftBuddy.Maps.Sync` on trimmed live documents.

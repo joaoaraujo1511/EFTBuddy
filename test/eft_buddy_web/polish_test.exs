@@ -1,5 +1,5 @@
 defmodule EftBuddyWeb.PolishTest do
-  @moduledoc "Audit L31: the link-preview image, the footer build id and chapter icons."
+  @moduledoc "The link-preview image, the footer build id and chapter icons."
   use EftBuddyWeb.ConnCase, async: false
 
   alias EftBuddyWeb.StorylineComponents

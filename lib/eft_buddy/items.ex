@@ -207,8 +207,8 @@ defmodule EftBuddy.Items do
   # (`:quest`), hideout requirements (`:hideout`), barters and crafts. Keyed on
   # ItemsSync alone, the badges were rebuilt five seconds after the items step,
   # before barters and crafts committed, and kept that count for the 26h TTL:
-  # on a fresh database "BARTER ITEMS (0)" over a tab listing hundreds (audit
-  # H7). Shared with the warmer's spec so the two cannot drift.
+  # on a fresh database "BARTER ITEMS (0)" over a tab listing hundreds.
+  # Shared with the warmer's spec so the two cannot drift.
   @scope_count_sources ~w(ItemsSync QuestItemsSync TasksSync HideoutSync BartersSync CraftsSync)
 
   @doc false

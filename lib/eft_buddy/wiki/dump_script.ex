@@ -7,7 +7,7 @@ defmodule EftBuddy.Wiki.DumpScript do
 
   The name is historical: this began as the support module for the offline
   dump scripts the syncs replaced. Their CLI parsing and console output went
-  with them (audit L5).
+  with them.
   """
 
   # MediaWiki's user-agent policy asks automated clients to identify
@@ -104,7 +104,7 @@ defmodule EftBuddy.Wiki.DumpScript do
   # MediaWiki reports a failed request as HTTP 200 with an `error` body
   # (`missingtitle`, `ratelimited`, `internal_api_error_*`). Those used to count
   # as successful empty results, and the licence lookup then cached "this file
-  # declares no licence" for seven days (audit M19). Decided once, here, so no
+  # declares no licence" for seven days. Decided once, here, so no
   # caller has to remember to look.
   defp interpret({:ok, %{status: 200, body: body}}) when is_binary(body) do
     case Jason.decode(body) do

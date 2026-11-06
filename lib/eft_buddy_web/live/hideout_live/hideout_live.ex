@@ -809,7 +809,8 @@ defmodule EftBuddyWeb.HideoutLive.Index do
   #
   # Do not reintroduce a per-module fetch. 26 stations x (one query for the
   # level plus one per preloaded association) came to 155 queries and 7.1
-  # SECONDS against a hosted database ~76ms away. Locally, against Postgres on
+  # SECONDS against the hosted database this app used to run on, ~76ms away.
+  # Locally, against Postgres on
   # the same machine, the identical code costs ~50ms and looks perfectly fine —
   # which is precisely why it survived twice. `build_initial_modules/0` was
   # fixed the first time; `apply_hideout_levels/2` kept its own copy and was
@@ -1039,7 +1040,7 @@ defmodule EftBuddyWeb.HideoutLive.Index do
   end
 
   # Every change to the module list goes through here, so the lists the template
-  # shows are assigns rather than template-local computations (audit M17): a
+  # shows are assigns rather than template-local computations: a
   # local disables change tracking for everything below it, and this page re-ran
   # its search and four status filters on every render.
   defp assign_modules(socket, modules) do

@@ -30,7 +30,7 @@ defmodule EftBuddyWeb.Router do
            "style-src 'self' 'unsafe-inline'",
            "script-src 'self'",
            "connect-src 'self'",
-           # Forms submit only to this site (L29). Every form here is a LiveView
+           # Forms submit only to this site. Every form here is a LiveView
            # form or `POST /session/reset`; nothing posts elsewhere.
            "form-action 'self'"
          ],

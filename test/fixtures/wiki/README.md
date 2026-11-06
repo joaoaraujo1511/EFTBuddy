@@ -2,7 +2,7 @@
 
 Trimmed copies of live responses from the
 [Escape from Tarkov Wiki](https://escapefromtarkov.fandom.com/wiki/Escape_from_Tarkov_Wiki)
-MediaWiki API, captured on 2026-10-18, for the scraper parser tests (audit M24).
+MediaWiki API, captured on 2026-10-18, for the scraper parser tests.
 
 - `events_page.wikitext`: the [Events](https://escapefromtarkov.fandom.com/wiki/Events)
   page's wikitext, cut down to its preamble and eight events chosen for the

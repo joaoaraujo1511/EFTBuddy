@@ -1,6 +1,6 @@
 defmodule EftBuddy.Repo.Migrations.MakeMapDataPerGameMode do
   @moduledoc """
-  Map data per game mode (audit M13).
+  Map data per game mode.
 
   tarkov.dev publishes a maps document per mode, and PVE differs: boss spawn
   chances on 16 of 17 maps (Reshala 60% PVP, 75% PVE), PMC bots in the enemy

@@ -95,10 +95,10 @@ defmodule EftBuddy.Hideout do
   N+1, and on a remote database that is the difference between a page that loads
   and one that does not. The hideout grid mounts 26 stations; each call cost one
   query for the level plus one per preloaded association, so the connected mount
-  issued **155 queries and took 7.1 seconds** against a hosted database at ~76ms
-  round-trip. Batched, the association preloads run once for the whole set
-  instead of once per station, so the query count stops scaling with the number
-  of stations.
+  issued **155 queries and took 7.1 seconds** against the hosted database this app
+  used to run on, at ~76ms round-trip. Batched, the association preloads run once
+  for the whole set instead of once per station, so the query count stops scaling
+  with the number of stations.
 
   The cost of a round trip is what makes this matter, not the cost of the query:
   every one of those 155 queries was individually trivial. Against a database on

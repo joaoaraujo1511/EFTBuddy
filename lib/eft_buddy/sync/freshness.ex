@@ -9,7 +9,7 @@ defmodule EftBuddy.Sync.Freshness do
   Every other thing that can go wrong with this app is invisible to that: the site
   has no user-authored content, so if a sync stops or truncates, the pages keep
   rendering perfectly and simply show **stale or missing game data as fact**. The
-  audit's blunt version — "the app's most dangerous property is that it silently
+  blunt version — "the app's most dangerous property is that it silently
   presents wrong data, and it is the one thing none of its instrumentation can
   detect".
 

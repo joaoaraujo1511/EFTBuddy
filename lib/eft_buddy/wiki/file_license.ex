@@ -161,7 +161,7 @@ defmodule EftBuddy.Wiki.FileLicense do
             # here would turn one transient 503 into a week of missing
             # credits on those files, which is the opposite of the point.
             # That includes an HTTP 200 carrying an API error, which
-            # `DumpScript.api_get/2` now reports as an error (audit M19).
+            # `DumpScript.api_get/2` now reports as an error.
             {acc, failed + 1}
         end
       end)
@@ -310,7 +310,7 @@ defmodule EftBuddy.Wiki.FileLicense do
 
   The table must belong to a process that outlives the scrapes. It used to be
   created by whichever caller asked first, and an ETS table dies with its
-  owner: on a cold start that was the `:temporary` Bootstrap task (audit M26),
+  owner: on a cold start that was the `:temporary` Bootstrap task,
   and since every sync runs in a short-lived process, it was every run. The
   seven-day cache then never survived to a second run.
   """

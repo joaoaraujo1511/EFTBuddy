@@ -160,14 +160,14 @@ defmodule EftBuddy.Items.DatasetEqualityTest do
     end
 
     test "the order follows the database's collation, not Elixir's byte order" do
-      # THE LOCAL AND PRODUCTION DATABASES DO NOT SORT THE SAME WAY, and that is
+      # DATABASES DO NOT ALL SORT THE SAME WAY, and that is
       # the whole reason this layer never sorts. Measured against the previous
       # hosted database: it put ".300 Blackout AP" first, because its collation
       # ignored leading punctuation for primary weight. A stock local Postgres puts
       # "\"Negotiation\" room key" first, agreeing with byte order.
       #
       # So an implementation that sorted in Elixir would pass a local test suite
-      # and be wrong in production — the same "invisible locally" trap that hid
+      # and be wrong on another database — the same "invisible locally" trap that hid
       # the hideout N+1 for months. Asserting equality WITH THE DATABASE is the
       # only assertion that holds in both places.
       sql = Items.list_all_items(sort: :name_asc, limit: 100) |> Enum.map(& &1.name)

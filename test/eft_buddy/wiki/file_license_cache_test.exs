@@ -1,6 +1,6 @@
 defmodule EftBuddy.Wiki.FileLicenseCacheTest do
   @moduledoc """
-  The seven-day licence cache must outlive the scrape that fills it (audit M26).
+  The seven-day licence cache must outlive the scrape that fills it.
 
   It used to be created by whichever caller asked first, and an ETS table dies
   with its owner. Every sync now runs in a short-lived process

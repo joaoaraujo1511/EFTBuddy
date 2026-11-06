@@ -284,7 +284,7 @@ defmodule EftBuddy.Chapters do
     # already-warm list removes the key rather than trying to guard it.
     #
     # Reading `list_chapters/0` copies every chapter's projection out of ETS
-    # into the caller just to keep one (audit L25). So each chapter gets its own
+    # into the caller just to keep one. So each chapter gets its own
     # entry, built from that list, but only for slugs that exist: the guard is
     # what keeps the path param from becoming a key space again.
     if MapSet.member?(chapter_slugs(), slug) do
@@ -316,7 +316,7 @@ defmodule EftBuddy.Chapters do
 
   # `%{normalized item name => [%{slug, title}]}`, in narrative order. One small
   # cached index instead of copying and scanning every chapter projection on
-  # every item panel that opens (audit L25).
+  # every item panel that opens.
   defp item_chapters do
     Cache.fetch({__MODULE__, :item_chapters}, ["ChaptersSync"], fn ->
       for chapter <- list_chapters(),

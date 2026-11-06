@@ -1,11 +1,10 @@
 import Config
 
-# TLS to the dev database, VERIFIED — same reasoning as config/runtime.exs, and
-# for the same database. This used to be a flat `[verify: :verify_none]`, which
-# negotiates TLS and then checks nothing: no confirmation that the peer holding
-# the certificate is the host that was asked for. Dev credentials are real
-# credentials and this connection leaves the machine, so "it's only dev" does not
-# make an unauthenticated peer acceptable.
+# TLS to a non-local dev database, VERIFIED — same reasoning as config/runtime.exs.
+# This used to be a flat `[verify: :verify_none]`, which negotiates TLS and then
+# checks nothing: no confirmation that the peer holding the certificate is the
+# host that was asked for. A connection that leaves the machine carries real
+# credentials, so "it's only dev" does not make an unauthenticated peer acceptable.
 #
 # A pinned CA is not hardening, it is what makes verification possible at all
 # against a provider running its own PKI, whose root is in no OS trust store. Set
@@ -237,10 +236,10 @@ config :phoenix_live_view,
   # Enable helpful, but potentially expensive runtime checks
   enable_expensive_runtime_checks: true
 
-# Read cache OFF in development. In production it is what keeps every page from
-# paying ~76ms per query to a database in another region; locally the database is
-# on this machine, so it buys nothing and actively gets in the way — a syncer run
-# or a manual `Repo.insert` would not show up until the entry expired.
+# Read cache OFF in development. In production it spares the database repeat
+# queries for data that only changes when a sync runs; in development that saving
+# doesn't matter and the cache actively gets in the way — a syncer run or a manual
+# `Repo.insert` would not show up until the entry expired.
 #
 # Set `CACHE_ENABLED=1` to exercise it locally.
 config :eft_buddy, cache_enabled: System.get_env("CACHE_ENABLED") in ~w(1 true)
@@ -248,10 +247,10 @@ config :eft_buddy, cache_enabled: System.get_env("CACHE_ENABLED") in ~w(1 true)
 # The background sync, on by default in dev (a fresh local database populates
 # itself), but switchable OFF.
 #
-# The case that needs it: pointing dev at the HOSTED database to reproduce
-# something that only happens at 75ms of latency. Reads against it are harmless,
-# but the syncers write — so a dev instance left on its defaults would start
-# writing to production from a laptop, and `:global` locks do not span
+# The case that needs it: pointing dev at a remote database to reproduce something
+# that only happens with latency. Reads against it are harmless, but the syncers
+# write — so a dev instance left on its defaults would start writing to that
+# database from a laptop, and `:global` locks do not span
 # un-clustered nodes, so it would not even notice the real instance doing the
 # same thing.
 #

@@ -3,7 +3,7 @@ defmodule EftBuddyWeb.ForgedEventsTest do
   Every `phx-value-*` arrives from the client and can be anything. A handler
   that trusts it either crashes the LiveView (which then remounts, often into
   the same push) or keeps the value in socket state for the life of the
-  socket. Regression tests for audit L15 / F7.
+  socket. Regression tests for both.
   """
   use EftBuddyWeb.ConnCase
 

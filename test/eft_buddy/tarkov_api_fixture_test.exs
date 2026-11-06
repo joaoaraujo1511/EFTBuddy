@@ -21,7 +21,7 @@ defmodule EftBuddy.TarkovApiFixtureTest do
 
   describe "tasks/1" do
     test "task skill rewards and objectives carry the translated skill name" do
-      # Audit H9: these used to pass through as raw enum keys ("Sniper").
+      # These used to pass through as raw enum keys ("Sniper").
       for mode <- ["regular", "pve"] do
         en = locale(mode, "tasks_en")
         raw = TarkovFixtures.doc(mode, "tasks")["data"]["tasks"]
@@ -53,7 +53,6 @@ defmodule EftBuddy.TarkovApiFixtureTest do
     end
 
     test "objectives no longer carry the untranslated fields nothing read" do
-      # Audit L7.
       {:ok, tasks} = TarkovApi.tasks("regular")
 
       for t <- tasks, o <- t["objectives"] do
@@ -65,7 +64,7 @@ defmodule EftBuddy.TarkovApiFixtureTest do
 
   describe "crafts/1" do
     test "quest-item ingredients are part of the recipe" do
-      # Audit H10: `requiredQuestItems` used to be dropped, so these crafts were
+      # `requiredQuestItems` used to be dropped, so these crafts were
       # shown as complete without their quest item.
       raw = TarkovFixtures.doc("regular", "crafts")["data"]
       {:ok, crafts} = TarkovApi.crafts("regular")
@@ -124,7 +123,7 @@ defmodule EftBuddy.TarkovApiFixtureTest do
     end
 
     test "every item category belongs to a filter group, and every caliber is labelled" do
-      # Audit L19/L20: unknown categories matched no filter at all, and unknown
+      # Unknown categories matched no filter at all, and unknown
       # calibers sorted below grenades with a raw label.
       for mode <- ["regular", "pve"] do
         {:ok, items} = TarkovApi.items(mode)
@@ -159,7 +158,6 @@ defmodule EftBuddy.TarkovApiFixtureTest do
 
   describe "traders/1" do
     test "returns every upstream trader, not only those a station or task mentions" do
-      # Audit L21.
       raw = TarkovFixtures.doc("regular", "traders")["data"]
       {:ok, traders} = TarkovApi.traders("regular")
 
@@ -170,7 +168,7 @@ defmodule EftBuddy.TarkovApiFixtureTest do
 
   describe "with_run_cache/1" do
     test "fetches each document once per run", %{fixtures: fixtures} do
-      # Audit M10: one full Items run downloaded the items document three times
+      # One full Items run downloaded the items document three times
       # and the traders documents five times.
       TarkovApi.with_run_cache(fn ->
         {:ok, _} = TarkovApi.items("regular")

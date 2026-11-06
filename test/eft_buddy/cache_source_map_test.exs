@@ -61,7 +61,7 @@ defmodule EftBuddy.CacheSourceMapTest do
     end
   end
 
-  describe "reads that count or join across feeds (audit H7)" do
+  describe "reads that count or join across feeds" do
     test "the item tab badges are dropped by every feed whose rows they count" do
       # Keyed on ItemsSync alone, the warmer rebuilt them seconds after the items
       # step, before barters and crafts committed, and kept that for 26 hours.
@@ -101,7 +101,7 @@ defmodule EftBuddy.CacheSourceMapTest do
     end
   end
 
-  describe "the map detail read (audit L23)" do
+  describe "the map detail read" do
     test "is cached, and dropped by both feeds whose rows it preloads" do
       Fixtures.game_map(%{name: "Customs", normalized_name: "customs"})
 
@@ -127,7 +127,7 @@ defmodule EftBuddy.CacheSourceMapTest do
     end
   end
 
-  describe "chapter lookups (audit L25)" do
+  describe "chapter lookups" do
     setup do
       content = %{
         "normalized_name" => "boreas",

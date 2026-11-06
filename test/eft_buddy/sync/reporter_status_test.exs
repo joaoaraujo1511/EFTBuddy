@@ -120,7 +120,7 @@ defmodule EftBuddy.Sync.ReporterStatusTest do
     end
   end
 
-  describe "the freshness gauge (audit L17)" do
+  describe "the freshness gauge" do
     defp gauges do
       ref = make_ref()
       test = self()

@@ -1,6 +1,6 @@
 defmodule EftBuddy.Items.SyncRetryTest do
   @moduledoc """
-  A failed Items cold start used to wait out the full twelve hours (audit H6):
+  A failed Items cold start used to wait out the full twelve hours:
   `Items.Sync` is hand-rolled, so it never got the scheduler's short fallback,
   and its barter/craft step returned `{:ok, _}` whatever happened inside, so
   Bootstrap released it a full interval out with an empty table.

@@ -722,7 +722,7 @@ defmodule EftBuddy.Sync.Reporter do
 
   Pages subscribe through `EftBuddyWeb.SyncAware`, so one waiting on a feed
   that is still syncing fills in when the feed finishes instead of sitting in
-  standby until reloaded (audit L18), and its "updated N min ago" line moves.
+  standby until reloaded, and its "updated N min ago" line moves.
   """
   @spec sync_topic() :: String.t()
   def sync_topic, do: @sync_topic

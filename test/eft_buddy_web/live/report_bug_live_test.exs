@@ -38,7 +38,7 @@ defmodule EftBuddyWeb.ReportBugLiveTest do
   end
 
   test "a NUL character is stripped instead of crashing the page", %{conn: conn} do
-    # REGRESSION (audit L14). Postgres `text` rejects 0x00, so `Repo.insert`
+    # REGRESSION. Postgres `text` rejects 0x00, so `Repo.insert`
     # raised and the LiveView crashed, losing the report.
     {:ok, view, _html} = live(conn, ~p"/report-bug")
 

@@ -80,7 +80,7 @@ defmodule EftBuddy.Chapters.Sync do
   # `{:error, reason}`. `run/0` (from `EftBuddy.Sync.Scheduler`) wraps this in the
   # cluster-wide lock.
   #
-  # The enumeration runs inside the Reporter run (audit H14). Outside it, a
+  # The enumeration runs inside the Reporter run. Outside it, a
   # failed enumeration was a log line and never a recorded failed run, so
   # `/health/sync` could not see it.
   def do_run do

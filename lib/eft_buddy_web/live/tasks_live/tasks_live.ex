@@ -208,7 +208,7 @@ defmodule EftBuddyWeb.TasksLive.Index do
     # No tarkov.dev tasks for this mode (a fresh database, or the Tasks sync
     # failing) means nothing to match the wiki quests against, so every one of
     # them would render as a WIP quest "recently added to the wiki", and the
-    # page would report itself loaded over that list (audit M18). It shows the
+    # page would report itself loaded over that list. It shows the
     # standby state instead, resolved from the Tasks sync like any empty feed.
     if db_tasks != [] do
       game_mode = socket.assigns.mode

@@ -462,7 +462,7 @@ defmodule EftBuddy.Sync.SchedulerTest do
     end
   end
 
-  describe "each run executes in its own process (audit M4)" do
+  describe "each run executes in its own process" do
     setup do
       Reporter.reset_status()
 

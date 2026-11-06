@@ -317,7 +317,7 @@ defmodule EftBuddy.CacheTest do
     end
   end
 
-  describe "a sync that lands while a value is being computed (audit M7)" do
+  describe "a sync that lands while a value is being computed" do
     test "the value is returned but not stored" do
       # The race: computed from data read before a sync committed, written after
       # that sync's invalidation. It would stand for the entry's whole TTL.

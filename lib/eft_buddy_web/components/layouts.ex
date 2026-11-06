@@ -45,7 +45,7 @@ defmodule EftBuddyWeb.Layouts do
     default: false,
     doc:
       "the page renders its own <h1>, so the top bar shows the title as plain text " <>
-        "(one <h1> per page; audit L30)"
+        "(one <h1> per page)"
 
   attr :search_query, :string, default: nil
   attr :search_placeholder, :string, default: nil
@@ -65,8 +65,8 @@ defmodule EftBuddyWeb.Layouts do
 
     ~H"""
     <%!-- First thing a keyboard reaches: otherwise every page starts with the
-         whole rail (operator controls and nine nav links) before its content
-         (audit L30). Visible only while focused. --%>
+         whole rail (operator controls and nine nav links) before its content.
+         Visible only while focused. --%>
     <a
       href="#main-content"
       class="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-[60] focus:px-3 focus:py-2 bg-ink-900 border border-amber text-amber t-label text-xs"
@@ -121,7 +121,7 @@ defmodule EftBuddyWeb.Layouts do
           "fixed top-0 left-0 bottom-0 z-50 lg:z-40 flex flex-col bg-ink-900 border-r border-line",
           "transition-[translate,visibility] duration-200 ease-out -translate-x-full lg:translate-x-0",
           # Off-canvas is not hidden: the closed mobile rail's links stayed in the
-          # tab order, so a keyboard walked through invisible nav (audit L30).
+          # tab order, so a keyboard walked through invisible nav.
           # `invisible` takes it out; the Shell hook shows it while open, and the
           # visibility transition holds it visible until the slide-out finishes.
           "invisible lg:visible",
@@ -863,8 +863,8 @@ defmodule EftBuddyWeb.Layouts do
 
   # The commit the image was built from, as `/health` reports it. The app's
   # `vsn` was here before and has said 0.1.0 for every build there has ever
-  # been, so it told a reader nothing about which code they were looking at
-  # (audit L31). Short form: a footer is not where anyone needs all forty.
+  # been, so it told a reader nothing about which code they were looking at.
+  # Short form: a footer is not where anyone needs all forty.
   defp build_id, do: EftBuddy.BuildInfo.sha() |> String.slice(0, 7)
 
   # ── Shared marks / emblems ─────────────────────────────────────────

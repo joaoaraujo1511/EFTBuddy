@@ -1,7 +1,7 @@
 defmodule EftBuddyWeb.LongPollCapTest do
   @moduledoc """
-  The long-poll transport now has the same per-request cap as a WebSocket frame
-  (audit M27). It used to accept about 8 MB per POST, up to 100 messages, while
+  The long-poll transport now has the same per-request cap as a WebSocket frame.
+  It used to accept about 8 MB per POST, up to 100 messages, while
   the endpoint's comment said the 1 MB `max_frame_size` bounded what an
   unauthenticated client could push, and most clients on the Pi long-poll.
   """

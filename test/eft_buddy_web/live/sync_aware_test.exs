@@ -1,7 +1,7 @@
 defmodule EftBuddyWeb.SyncAwareTest do
   @moduledoc """
-  Pages follow the syncs that feed them (audit L18), and their load state is an
-  assign rather than a template-local variable (audit M17).
+  Pages follow the syncs that feed them, and their load state is an
+  assign rather than a template-local variable.
 
   A page that mounted before its feed had synced used to sit in standby until the
   visitor reloaded it by hand, and a database outage on the Maps page looked

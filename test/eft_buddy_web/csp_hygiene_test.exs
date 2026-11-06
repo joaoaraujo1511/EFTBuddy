@@ -1,6 +1,6 @@
 defmodule EftBuddyWeb.CspHygieneTest do
   @moduledoc """
-  CSP hygiene (audit L29).
+  CSP hygiene.
 
   The policy keeps `style-src 'unsafe-inline'` only for genuinely dynamic values
   (progress-bar widths, mask URLs); a fixed style belongs in a class, so that one

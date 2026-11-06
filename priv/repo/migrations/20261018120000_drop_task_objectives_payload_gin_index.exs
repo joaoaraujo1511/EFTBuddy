@@ -2,7 +2,7 @@ defmodule EftBuddy.Repo.Migrations.DropTaskObjectivesPayloadGinIndex do
   use Ecto.Migration
 
   @moduledoc """
-  Drops the GIN index on `task_objectives.payload` (audit L9).
+  Drops the GIN index on `task_objectives.payload`.
 
   It was added for `payload @> ...` containment and `payload ? 'questItem'`
   queries. None exist: every query on the column extracts with `->`, `->>`,

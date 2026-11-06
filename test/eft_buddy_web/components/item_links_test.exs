@@ -1,6 +1,6 @@
 defmodule EftBuddyWeb.ItemLinksTest do
   @moduledoc """
-  Item links must survive the characters item names actually contain (audit M14).
+  Item links must survive the characters item names actually contain.
 
   `"/items?q=" <> URI.encode(name)` keeps reserved characters as they are, so
   "#FireKlean gun lube" became a URL fragment and linked to the unfiltered

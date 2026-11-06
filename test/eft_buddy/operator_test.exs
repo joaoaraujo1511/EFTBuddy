@@ -48,7 +48,7 @@ defmodule EftBuddy.OperatorTest do
     end
 
     test "clamps values far outside the range instead of raising" do
-      # REGRESSION (audit H4). These used to be scaled before they were clamped,
+      # REGRESSION. These used to be scaled before they were clamped,
       # and `round(1.0e308 * 100)` raises. One such value in the prefs cookie or an
       # imported backup made every page 500 for that browser.
       assert Operator.parse(:scav_karma, 1.0e308) == 600
