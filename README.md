@@ -59,12 +59,6 @@ edited by hand.
 Comments in the code usually explain *why* something is done a certain way. Read
 them before changing the code.
 
-## Hosting
-
-[eftbuddy.app](https://eftbuddy.app) is the project's own instance. The licence
-allows you to run your own, but this isn't supported. For reference, see
-[how eftbuddy.app runs](docs/DEPLOYMENT.md).
-
 ## Licence
 
 [GNU AGPL v3](LICENSE). Game names, images and other material belong to their

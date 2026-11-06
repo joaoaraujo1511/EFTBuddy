@@ -9,9 +9,8 @@ the in-site bug report form for this either: reports there are stored in the
 app's database, not sent to a private channel.
 
 Include what you found, how to reproduce it, and what an attacker could do with
-it. A proof of concept against your own local copy is welcome; please do not
-test against the live site in a way that affects other visitors or its data
-sources.
+it. Please do not test against the live site in a way that affects other visitors
+or its data sources.
 
 ## What to expect
 

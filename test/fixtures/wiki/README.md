@@ -15,12 +15,12 @@ MediaWiki API, captured on 2026-10-18, for the scraper parser tests.
   as the app shows them in its credits.
 - `file_pages.json`: a `prop=revisions` response for three file pages: one
   declaring `{{Copyright CC-BY-NC-SA 4.0}}`, one empty, one with only a category.
+- `the_ticket_sections.json`: three sections of
+  [The Ticket](https://escapefromtarkov.fandom.com/wiki/The_Ticket) (the shared
+  objectives, one conditional block, and the block shared by all endings), each
+  cut to its heading and first lines, for the endgame keep-rule.
 
 The wiki's text is licensed under
 [CC BY-NC-SA 3.0](https://creativecommons.org/licenses/by-nc-sa/3.0/) by its
 contributors; these excerpts are used under that licence. To refresh them, re-run
 the same API queries (see `EftBuddy.Wiki.Api`) and trim them the same way.
-- `the_ticket_sections.json`: three sections of
-  [The Ticket](https://escapefromtarkov.fandom.com/wiki/The_Ticket) (the shared
-  objectives, one conditional block, and the block shared by all endings), each
-  cut to its heading and first lines, for the endgame keep-rule.
