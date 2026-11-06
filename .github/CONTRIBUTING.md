@@ -16,7 +16,8 @@ Thanks for helping. Bug reports, fixes and improvements are all welcome.
 
 The [README](../README.md) covers running the app and the tests. In short: the
 Erlang and Elixir versions in `.tool-versions`, a local PostgreSQL, then
-`mix setup` and `mix phx.server`.
+`mix setup` and `mix phx.server`. See the
+[architecture overview](../docs/ARCHITECTURE.md) for how the app fits together.
 
 ## Making a change
 
