@@ -299,7 +299,7 @@ defmodule EftBuddy.Tasks do
 
   Any other option raises. `:trader_slug`, `:faction` and `:order_by` existed
   with no caller, and `:faction` dropped every neutral task, because real
-  rows say `"Any"` rather than `nil` (audit L8).
+  rows say `"Any"` rather than `nil`.
   """
   # Two owners. The tasks are TasksSync's; the `:trader` preload resolves against
   # `EftBuddy.Hideout.Trader`, which HideoutSync writes.
@@ -413,7 +413,7 @@ defmodule EftBuddy.Tasks do
   end
 
   # The rows are `EftBuddy.Hideout.Trader`s, which the hideout sync writes, joined
-  # to tasks (audit H7). Shared with the warmer's spec.
+  # to tasks. Shared with the warmer's spec.
   @doc false
   def traders_with_tasks_sources, do: ["TasksSync", "HideoutSync"]
 

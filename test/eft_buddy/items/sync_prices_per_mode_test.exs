@@ -1,6 +1,6 @@
 defmodule EftBuddy.Items.SyncPricesPerModeTest do
   @moduledoc """
-  The price tick fetches and writes each game mode on its own (audit M11).
+  The price tick fetches and writes each game mode on its own.
   Both fetches used to share one `with`, so a PVE document that failed to
   download also skipped the PVP write, though PVP had arrived fine.
   """

@@ -1,7 +1,7 @@
 defmodule EftBuddy.Repo.Migrations.DropUnreadPriceCopies do
   @moduledoc """
   Drops two copies of price data that were written on every sync and read by
-  nothing (audit L2):
+  nothing:
 
     * `sell_for`: trader sell offers, about 30k rows per mode deleted and
       re-inserted every 12 hours;

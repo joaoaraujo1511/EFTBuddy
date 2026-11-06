@@ -4,17 +4,16 @@ defmodule EftBuddy.Cache do
 
   ## Why this exists
 
-  Every query to the hosted database costs about 76ms, because that is the
-  round-trip time to the region it runs in. The query itself is trivial; the
-  distance is not. A page issuing twenty queries therefore spends about a second
-  waiting on the network before it renders anything, and the VM sits at 2% CPU
-  the whole time — the app is not slow, it is *far away*.
+  This was built when every query went to a hosted database and cost about 76ms,
+  the round-trip time to the region it ran in. A page issuing twenty queries spent
+  about a second waiting on the network before it rendered anything. The database
+  now runs next to the app, so that cost is far smaller, but the reasoning below
+  still holds.
 
   Almost nothing this app serves is per-request data. Items, tasks, hideout
   stations, maps, ammo and the wiki scrapes change only when a syncer runs, which
-  is every few hours for most feeds. Re-reading them across the internet on every
-  page view pays the full latency to return bytes that have not changed since the
-  last sync.
+  is every few hours for most feeds. Re-reading them on every page view repeats work
+  to return bytes that have not changed since the last sync.
 
   ## Freshness is not traded away
 
@@ -157,7 +156,7 @@ defmodule EftBuddy.Cache do
   A value is not stored if one of its sources invalidated while `fun` ran: it may
   have been read before that sync committed, and stored after the invalidation it
   would stand for the entry's whole TTL (2-52h) as if it were current, and keep
-  the warmer from rebuilding it (audit M7). The caller still gets the value; the
+  the warmer from rebuilding it. The caller still gets the value; the
   next read computes a fresh one.
   """
   def fetch(key, sources, fun, opts \\ []) when is_list(sources) and is_function(fun, 0) do

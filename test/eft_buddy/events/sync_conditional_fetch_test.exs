@@ -1,7 +1,7 @@
 defmodule EftBuddy.Events.SyncConditionalFetchTest do
   @moduledoc """
   The events scrape only re-fetches event quest pages edited since it last
-  stored them (audit M22). It used to fetch all ~250 every twelve hours: 14-16
+  stored them. It used to fetch all ~250 every twelve hours: 14-16
   minutes and ~1,700 requests per run against a wiki that rate-limits.
   """
   use EftBuddy.DataCase, async: false

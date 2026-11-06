@@ -205,7 +205,7 @@ defmodule EftBuddyWeb.MapsLive.Index do
 
   # The grid for `mode`. A database error leaves it empty AND says so: it used to
   # be rescued into an empty list, which looks exactly like "still syncing", so a
-  # database outage showed the standby spinner forever with no Retry (audit L18).
+  # database outage showed the standby spinner forever with no Retry.
   defp assign_maps(socket, mode), do: assign_maps_result(socket, load_maps(mode))
 
   defp assign_maps_result(socket, {maps, counts, db_error?}) do

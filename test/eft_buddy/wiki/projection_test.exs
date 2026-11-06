@@ -45,7 +45,7 @@ defmodule EftBuddy.Wiki.ProjectionTest do
     assert p.objectives_text == [%{index: 1, text: "Find the key"}]
 
     # Extracted from, not carried: the raw sections' wikitext was held in every
-    # cached projection and read by nothing (audit M23).
+    # cached projection and read by nothing.
     refute Map.has_key?(p, :sections)
   end
 

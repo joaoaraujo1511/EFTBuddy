@@ -42,7 +42,7 @@ defmodule EftBuddy.Tasks.SyncFixtureTest do
   end
 
   test "tasks swapping names upstream no longer abort the run" do
-    # REGRESSION (audit H8). The Punisher quests swapped names upstream, and the
+    # REGRESSION. The Punisher quests swapped names upstream, and the
     # plain unique index on (normalized_name, game_mode) rejected the first
     # renamed row, rolling back every run for that mode.
     assert {:ok, _} = Sync.do_run()
@@ -71,7 +71,7 @@ defmodule EftBuddy.Tasks.SyncFixtureTest do
   end
 
   test "a map whose id upstream rotated doesn't abort the run" do
-    # REGRESSION (audit M9). Seeding maps keyed only on external_id still hit
+    # REGRESSION. Seeding maps keyed only on external_id still hit
     # the slug index for a map whose id had rotated.
     # A map a fixture task references, so the task sync seeds it.
     tasks = TarkovFixtures.doc("regular", "tasks")["data"]["tasks"] |> Map.values()
@@ -90,7 +90,7 @@ defmodule EftBuddy.Tasks.SyncFixtureTest do
   end
 
   test "task skills are stored translated, and orphaned raw-enum skills are removed" do
-    # Audit H9: rows like "sniper" were created from untranslated enum keys.
+    # Rows like "sniper" were created from untranslated enum keys.
     stale = Repo.insert!(%Skill{name: "Sniper", normalized_name: "sniper"})
 
     assert {:ok, _} = Sync.do_run()

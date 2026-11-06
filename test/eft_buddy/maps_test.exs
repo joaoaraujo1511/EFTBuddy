@@ -154,7 +154,7 @@ defmodule EftBuddy.MapsTest do
     end
 
     test "counts only the requested mode's tasks" do
-      # REGRESSION (audit H5). Tasks are stored once per mode, and counting every
+      # REGRESSION. Tasks are stored once per mode, and counting every
       # row put each quest on the badge twice, in either mode.
       map = Fixtures.game_map(%{normalized_name: "customs"})
 

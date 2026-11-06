@@ -3,11 +3,10 @@ defmodule EftBuddy.Wiki.ScrapeOutcomesTest do
   The three Fandom scrapes run end to end against a fake wiki
   (`EftBuddy.WikiStub`), with failures injected where they happen in production.
 
-  Each test pins an audit finding: a page stored as current after a failed
-  section (H11), a short category listing treated as complete (H12), a run
-  reporting ok whatever failed (H14), an API error read as an empty success
-  (M19), a failed quest page wiping its walkthrough (M21), and one bad event row
-  aborting the run (M25).
+  Each test pins a past bug: a page stored as current after a failed section, a
+  short category listing treated as complete, a run reporting ok whatever
+  failed, an API error read as an empty success, a failed quest page wiping its
+  walkthrough, and one bad event row aborting the run.
   """
   use EftBuddy.DataCase, async: false
 
@@ -58,7 +57,7 @@ defmodule EftBuddy.Wiki.ScrapeOutcomesTest do
   defp row(slug), do: Repo.get_by(QuestPage, normalized_name: slug)
 
   describe "the API client" do
-    test "an HTTP 200 carrying an API error is an error, not an empty success (M19)" do
+    test "an HTTP 200 carrying an API error is an error, not an empty success" do
       WikiStub.serve(%{pages: %{}, api_error: fn _ -> true end})
 
       assert {:error, {:api, "ratelimited", "slow down"}} = Api.section_list("Anything")
@@ -76,7 +75,7 @@ defmodule EftBuddy.Wiki.ScrapeOutcomesTest do
       assert Api.category_members("Category:Quests") == {:ok, ~w(A B C D E)}
     end
 
-    test "a category whose later page fails is an error, not the first page alone (H12)" do
+    test "a category whose later page fails is an error, not the first page alone" do
       WikiStub.serve(%{
         categories: %{"Category:Quests" => ~w(A B C D E)},
         page_size: 2,
@@ -86,7 +85,7 @@ defmodule EftBuddy.Wiki.ScrapeOutcomesTest do
       assert {:error, {:http, 503, _}} = Api.category_members("Category:Quests")
     end
 
-    test "a licence lookup answered with an API error is not cached as 'no licence' (M19)" do
+    test "a licence lookup answered with an API error is not cached as 'no licence'" do
       WikiStub.serve(%{
         files: %{"File:Map.png" => %{page: "{{Copyright CC-BY-NC-SA 4.0}}"}},
         api_error: &(&1["rvprop"] == "content")
@@ -102,7 +101,7 @@ defmodule EftBuddy.Wiki.ScrapeOutcomesTest do
     end
   end
 
-  describe "the quest scrape stamps a revision only on a complete page (H11)" do
+  describe "the quest scrape stamps a revision only on a complete page" do
     test "a page whose section failed is stored without one, then retried and stamped" do
       WikiStub.serve(quest_wiki(["Golden Swag"], fail: &(&1["section"] == "1")))
 
@@ -135,7 +134,7 @@ defmodule EftBuddy.Wiki.ScrapeOutcomesTest do
     end
   end
 
-  describe "a quest scrape's outcome (H14)" do
+  describe "a quest scrape's outcome" do
     test "is an error when more than 10% of its pages failed" do
       titles = for i <- 1..10, do: "Quest #{i}"
       WikiStub.serve(quest_wiki(titles, fail: &(&1["page"] in ["Quest 1", "Quest 2"])))
@@ -152,7 +151,7 @@ defmodule EftBuddy.Wiki.ScrapeOutcomesTest do
       assert {:ok, %{processed: 9, failed: 1}} = run_quietly(&WikiSync.do_run/0)
     end
 
-    test "is an error, keeping every row, when the category cannot be listed whole (H12)" do
+    test "is an error, keeping every row, when the category cannot be listed whole" do
       titles = for i <- 1..6, do: "Quest #{i}"
       WikiStub.serve(quest_wiki(titles))
       run_quietly(&WikiSync.do_run/0)
@@ -189,7 +188,7 @@ defmodule EftBuddy.Wiki.ScrapeOutcomesTest do
 
     defp event_quest(slug), do: Repo.get_by!(EventQuest, normalized_name: slug)
 
-    test "a quest page that fails keeps its stored walkthrough (M21)" do
+    test "a quest page that fails keeps its stored walkthrough" do
       WikiStub.serve(events_wiki())
       assert {:ok, _} = run_quietly(&EventsSync.do_run/0)
       assert inspect(event_quest("cold-feet").content) =~ "Stay warm."
@@ -201,7 +200,7 @@ defmodule EftBuddy.Wiki.ScrapeOutcomesTest do
              "a transient failure must not overwrite the walkthrough with %{}"
     end
 
-    test "one event row that cannot be written does not abort the rest (M25)" do
+    test "one event row that cannot be written does not abort the rest" do
       page = "==(25 June 2026)==\n* Quest [[Cold Feet]] has been added.\n" <> @events_page
       WikiStub.serve(events_wiki(events_page: page))
 
@@ -210,7 +209,7 @@ defmodule EftBuddy.Wiki.ScrapeOutcomesTest do
       assert Repo.get_by(Event, normalized_name: "frost-bite-10-january-2026")
     end
 
-    test "is an error when most of its quest pages failed (H14)" do
+    test "is an error when most of its quest pages failed" do
       WikiStub.serve(events_wiki(fail: &(&1["page"] in ["Cold Feet", "Wild Wild Woods"])))
 
       assert {:error, {:pages_failed, 2, 2, _}} = run_quietly(&EventsSync.do_run/0)
@@ -218,7 +217,7 @@ defmodule EftBuddy.Wiki.ScrapeOutcomesTest do
   end
 
   describe "the chapters scrape" do
-    test "a failed enumeration is a recorded failed run, not just a log line (H14)" do
+    test "a failed enumeration is a recorded failed run, not just a log line" do
       WikiStub.serve(%{categories: %{}, fail: &(&1["list"] == "categorymembers")})
 
       assert {:error, {:enumeration_failed, _}} = run_quietly(&ChaptersSync.do_run/0)

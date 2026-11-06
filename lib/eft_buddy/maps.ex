@@ -221,7 +221,7 @@ defmodule EftBuddy.Maps do
   """
   def get_map_by_slug(slug, game_mode \\ GameMode.default())
 
-  # Cached (audit L23): the map page needs the map on its static first render
+  # Cached: the map page needs the map on its static first render
   # (title, a 404 for an unknown slug, content a crawler can read) and again on
   # the live mount, and this is a twelve-association preload. The preload pulls
   # item rows (keys, transfer items) as well as map rows, hence both sources.
@@ -269,7 +269,7 @@ defmodule EftBuddy.Maps do
   """
   #
   # Per game mode: tasks are stored once per mode, so counting every row counted
-  # each quest twice (audit H5) whichever mode the visitor was in.
+  # each quest twice whichever mode the visitor was in.
   def quest_counts(game_mode \\ GameMode.default()) do
     mode = GameMode.to_db(game_mode)
 

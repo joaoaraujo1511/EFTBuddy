@@ -99,7 +99,7 @@ defmodule EftBuddy.Events.Sync do
 
   # When a quest page failed to scrape this run there is no manifest, and the
   # stored walkthrough is the best copy there is: only the fields the Events page
-  # itself gives are refreshed (audit M21). It used to be overwritten with `%{}`,
+  # itself gives are refreshed. It used to be overwritten with `%{}`,
   # so one transient failure blanked the walkthrough for twelve hours.
   @event_quest_listing_only [:name, :position, :updated_at]
 
@@ -163,7 +163,7 @@ defmodule EftBuddy.Events.Sync do
 
           # One event the parser got wrong (a heading like `==(25 June 2026)==`
           # yields an empty name) used to raise a MatchError here and abort the
-          # whole sync on every run (audit M25). It is counted and skipped.
+          # whole sync on every run. It is counted and skipped.
           {:error, changeset} ->
             Reporter.silent_warn(
               "[#{prefix()}] event #{inspect(event.name)} not written: #{inspect(changeset.errors)}"
@@ -291,7 +291,7 @@ defmodule EftBuddy.Events.Sync do
   # `%{processed, failed, unchanged}` counts. A quest absent from the map failed
   # to scrape this run.
   #
-  # Only pages edited since their stored revision are scraped (audit M22). The
+  # Only pages edited since their stored revision are scraped. The
   # events scrape used to fetch all ~250 quest pages every twelve hours, 14-16
   # minutes and ~1,700 requests per run against a wiki that rate-limits; one
   # batched revision probe per fifty pages now decides, as in `EftBuddy.Wiki.Sync`.
@@ -381,7 +381,7 @@ defmodule EftBuddy.Events.Sync do
   end
 
   # The revision is stamped only when every part of the page was fetched, as in
-  # `EftBuddy.Wiki.Sync` (audit H11): a page with a gap would otherwise be
+  # `EftBuddy.Wiki.Sync`: a page with a gap would otherwise be
   # skipped, incomplete, until an editor touched it.
   defp walkthrough(quest, manifest, rosters, revisions) do
     roster = Map.get(rosters, quest.wiki_title)

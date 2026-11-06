@@ -222,7 +222,7 @@ defmodule EftBuddyWeb.ClientBridgeTest do
 
     test "after a reset the surviving tab reloads instead of writing over the import",
          %{conn: conn} do
-      # REGRESSION (audit H2). This test used to assert the bug. The surviving tab
+      # REGRESSION. This test used to assert the bug. The surviving tab
       # adopted an empty client state and kept writing, so its next click pushed a
       # one-item list for that key, and the browser merge replaced the whole
       # imported list with it: import a backup in one tab, tick one quest in
@@ -303,7 +303,7 @@ defmodule EftBuddyWeb.ClientBridgeTest do
   end
 
   describe "a mode switch" do
-    # REGRESSION (audit M5). `:mode` flips at once, but pages reload their
+    # REGRESSION. `:mode` flips at once, but pages reload their
     # per-mode lists only when the `{:sidebar_state_changed, :mode, _}` ping
     # arrives. A click already waiting in the mailbox ran in between, edited the
     # OLD mode's list, and was written into the NEW mode, replacing that mode's

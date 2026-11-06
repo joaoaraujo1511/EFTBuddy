@@ -253,8 +253,8 @@ defmodule EftBuddy.Items.Dataset do
           # item with no price at all.
           #
           # This used to empty `@prices` for both modes first and query second. A
-          # dropped database connection — the hosted pooler does this in short
-          # windows — then raised out of `Items.price_rows/1` with the table
+          # dropped database connection — the hosted pooler this app used to run on
+          # did this in short windows — then raised out of `Items.price_rows/1` with the table
           # already empty, `build/2`'s `after` cleared `:building`, and
           # `prices_built_at` still held the PREVIOUS run's timestamp, comfortably
           # inside the 60-minute bound. So `ready?/1` answered TRUE over nothing:

@@ -261,7 +261,7 @@ defmodule EftBuddyWeb.RuntimeConfigTest do
     end
   end
 
-  describe "optional numeric variables (audit L16)" do
+  describe "optional numeric variables" do
     @numeric ~w(POOL_SIZE MAX_OPERATOR_SESSIONS CACHE_MAX_ENTRIES ITEM_DETAILS_MAX_MB
                 ADMIN_DASHBOARD_PORT)
 

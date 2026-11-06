@@ -121,7 +121,7 @@
           #
           {Credo.Check.Refactor.Apply, []},
           {Credo.Check.Refactor.CondStatements, []},
-          # Tuned to this codebase (audit L34), and CI fails on anything over it.
+          # Tuned to this codebase, and CI fails on anything over it.
           # Credo's defaults (complexity 9, nesting 2) flagged 74 functions; most
           # are the `Enum.reduce(fn -> case ...)` shape the sync pipelines are made
           # of. The limits below pass everything except the files listed, which are

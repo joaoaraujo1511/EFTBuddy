@@ -1,7 +1,7 @@
 defmodule EftBuddy.Wiki.EventQuestBlacklistTest do
   @moduledoc """
   The quest scrape leaves event quests to the events scrape, but only the ones
-  that would show as WIP (audit H13).
+  that would show as WIP.
 
   It used to drop every event-page title, including 24 that tarkov.dev serves as
   real tasks, so those tasks had no wiki guide on the Tasks tab.

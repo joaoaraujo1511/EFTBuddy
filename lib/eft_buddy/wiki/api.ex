@@ -4,8 +4,8 @@ defmodule EftBuddy.Wiki.Api do
   one section's (or a whole page's) wikitext, image info, revision ids and a
   category's members.
 
-  Each scraper used to carry its own copy of these, and the copies had drifted
-  (audit L28): only one checked the API's `error` body, and they disagreed on
+  Each scraper used to carry its own copy of these, and the copies had drifted:
+  only one checked the API's `error` body, and they disagreed on
   whether a failed section was an error or an empty string. Every function here
   answers with an explicit `{:ok, _} | {:error, _}`, or for the batched lookups a
   count of failed batches, so the caller decides what a failure costs instead of
@@ -107,8 +107,7 @@ defmodule EftBuddy.Wiki.Api do
   All or nothing. It used to return whatever it had collected when a
   continuation request failed, and `Category:Quests` spans two pages: a failed
   second page returned the first 500 titles as if they were the whole category,
-  and the prune that follows deleted every quest after "Night of The Cult"
-  (audit H12).
+  and the prune that follows deleted every quest after "Night of The Cult".
   """
   @spec category_members(String.t()) :: {:ok, [String.t()]} | {:error, term()}
   def category_members(category), do: category_members(category, nil, MapSet.new())
@@ -162,7 +161,7 @@ defmodule EftBuddy.Wiki.Api do
 
   All three scrapes used to report `{:ok, _}` once enumeration worked, however
   many pages failed, so `/health/sync` stayed green over a summary reading
-  `failed: 210` (audit H14). A run where more than 10% of its pages failed is now
+  `failed: 210`. A run where more than 10% of its pages failed is now
   `{:error, {:pages_failed, failed, attempted, summary}}`: it gets the
   scheduler's one quick retry and counts toward the two-failures readiness rule.
   Below that it is `{:ok, summary}`, and the failed pages are fetched again next
@@ -184,10 +183,10 @@ defmodule EftBuddy.Wiki.Api do
 
   The guard measures overlap, how many existing rows `keep` still names, not raw
   sizes or `updated_at`: an unchanged wiki page is skipped rather than rewritten,
-  so its timestamp says nothing about whether it was seen (the lesson of audit
-  H1). Enumeration is already all or nothing; this is the second line, for a
-  category or page that comes back structurally smaller. Returns the number of
-  rows deleted (0 when refused, which `cleanup_safe?/3` reports itself).
+  so its timestamp says nothing about whether it was seen. Enumeration is already
+  all or nothing; this is the second line, for a category or page that comes back
+  structurally smaller. Returns the number of rows deleted (0 when refused, which
+  `cleanup_safe?/3` reports itself).
   """
   @spec prune(module(), [String.t()]) :: non_neg_integer()
   def prune(_schema, []), do: 0

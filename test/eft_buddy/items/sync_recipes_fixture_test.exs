@@ -4,8 +4,8 @@ defmodule EftBuddy.Items.SyncRecipesFixtureTest do
   documents (test/fixtures/tarkov), then renders the result on the Items page.
 
   Pins three things upstream sends that used to be lost: fractional ingredient
-  counts (audit M8), quest-item ingredients upstream doesn't define yet, and a
-  craft's game-edition lock (L27).
+  counts, quest-item ingredients upstream doesn't define yet, and a
+  craft's game-edition lock.
   """
   use EftBuddyWeb.ConnCase, async: false
 

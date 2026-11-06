@@ -22,7 +22,7 @@ import Config
 # of them and runs entirely on the fallbacks (.github/workflows/ci.yml).
 # AND THE PREFIX IS NOT ENOUGH ON ITS OWN. It stops an ambient `DB_*` reaching
 # this repo, but it cannot stop `TEST_DB_HOSTNAME` from being filled in with a
-# hosted database by hand — which is exactly what happened, and is the reason
+# remote database by hand — which is exactly what happened, and is the reason
 # this guard exists rather than another paragraph of comment.
 #
 # What the suite does to whatever this points at, in order: `ecto.create`,

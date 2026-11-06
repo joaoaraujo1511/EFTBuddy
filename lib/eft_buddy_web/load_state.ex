@@ -53,7 +53,7 @@ defmodule EftBuddyWeb.LoadState do
   # `db_error?` is true when the page's own read failed (the database is
   # unreachable). That is an error with a Retry, not "still syncing": the Maps
   # page rescued exactly that into an empty list, so a database outage showed the
-  # standby spinner forever with no way to retry (audit L18).
+  # standby spinner forever with no way to retry.
   @spec resolve(boolean(), atom() | [binary()], boolean()) :: t()
   def resolve(has_data?, feed, db_error? \\ false)
   def resolve(true, _feed, _db_error?), do: :loaded
@@ -66,7 +66,7 @@ defmodule EftBuddyWeb.LoadState do
   @doc """
   Assign `:load_state` for a page, so templates read `@load_state` instead of
   computing it in a template-local variable, which disables LiveView's change
-  tracking for everything below it (audit M17).
+  tracking for everything below it.
   """
   @spec assign_load_state(Phoenix.LiveView.Socket.t(), boolean(), atom() | [binary()], boolean()) ::
           Phoenix.LiveView.Socket.t()

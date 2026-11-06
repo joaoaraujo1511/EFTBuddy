@@ -172,7 +172,7 @@ defmodule EftBuddy.Sync.Scheduler do
 
   A run decodes documents of up to ~17 MB, and a long-lived GenServer that does
   that work itself keeps the heap afterwards: measured on the Pi, `Items.Sync`
-  sat at 291 MB and `Armor.Sync` at 70 MB between runs (audit M4). A process
+  sat at 291 MB and `Armor.Sync` at 70 MB between runs. A process
   that exits gives everything back. The caller waits for it, so locking,
   scheduling and the one-run-at-a-time guarantee are unchanged, and `$callers`
   carries test sandbox access across.

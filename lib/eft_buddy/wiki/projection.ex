@@ -54,7 +54,7 @@ defmodule EftBuddy.Wiki.Projection do
       # The wiki page this guide was captured from. Stored by the scraper
       # but dropped here until now, which is why nothing in the UI could
       # link back to the source — see `EftBuddyWeb.CoreComponents.source_credit/1`.
-      # Re-encoded on read: stored before links were encoded (audit M20), and an
+      # Re-encoded on read: stored before links were encoded, and an
       # unchanged page is not rescraped, so the stored copy can be broken.
       wiki_link: EftBuddy.Wiki.Url.normalize(manifest["wiki_link"]),
       # The people who wrote this page, captured by `EftBuddy.Wiki.Contributors`.
@@ -70,7 +70,7 @@ defmodule EftBuddy.Wiki.Projection do
       given_by: manifest["given_by"],
       # The raw sections are NOT carried into the projection: every field the UI
       # reads is extracted from them above, and keeping each section's wikitext
-      # alongside cost memory in every cached projection for nothing (audit M23).
+      # alongside cost memory in every cached projection for nothing.
       guide: extract_guide(sections),
       objectives_text: extract_objectives_text(sections),
       objective_images: extract_objective_images(sections),

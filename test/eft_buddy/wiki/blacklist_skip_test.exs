@@ -1,7 +1,7 @@
 defmodule EftBuddy.Wiki.BlacklistSkipTest do
   @moduledoc """
   Blacklisted quest pages (Ref quests, `{{Historical content}}`) are not
-  re-fetched while their revision is unchanged (audit finding N2).
+  re-fetched while their revision is unchanged.
 
   They get no `wiki_quests` row, so there was no stored revision to compare and
   every run fetched all ~197 of them again, only to skip them. The verdict

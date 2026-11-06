@@ -89,7 +89,7 @@ defmodule EftBuddyWeb.HealthController do
   Public, through the tunnel, so it says only what a monitor needs: the overall
   status, and each feed family's state and age. It used to publish every feed
   label, its run times and durations, the read cache's size and hit rate and the
-  names of its warm specs to anyone (audit §9). The full payload is
+  names of its warm specs to anyone. The full payload is
   `sync_detail/2`, on the loopback-only admin endpoint. The HTTP status is the
   same in both.
   """

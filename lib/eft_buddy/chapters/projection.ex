@@ -114,7 +114,7 @@ defmodule EftBuddy.Chapters.Projection do
       related_links: normalize_related(manifest["related_links"]),
       # The raw sections are not carried: nothing read them (search uses
       # `content_sections`), and each held its full wikitext in every cached
-      # projection (audit M23).
+      # projection.
       # The walkthrough, rendered faithfully: every non-lead section
       # parsed into ordered heading/prose/list/gallery/items blocks.
       content_sections: content_sections,

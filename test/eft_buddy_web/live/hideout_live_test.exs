@@ -77,7 +77,7 @@ defmodule EftBuddyWeb.HideoutLiveTest do
   end
 
   describe "saving a station level never drops another station's saved level" do
-    # REGRESSION (audit H3). Each change used to write the whole board, rebuilt
+    # REGRESSION. Each change used to write the whole board, rebuilt
     # from the stations currently in the catalogue. A saved level for a station
     # the catalogue no longer had was dropped by the next click on any other
     # station, and the browser merge stored that shorter map for good. The Tasks

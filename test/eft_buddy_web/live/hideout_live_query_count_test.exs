@@ -12,7 +12,7 @@ defmodule EftBuddyWeb.HideoutLiveQueryCountTest do
   It survived because `EftBuddy.Hideout.get_level_requirements/2` was not cached
   at all, so no warming or invalidation mechanism could see it, and because
   against a local Postgres 26 extra round trips cost ~50ms and look fine. At
-  ~76ms to a hosted database they are seconds.
+  ~76ms to a remote database they are seconds.
 
   These tests therefore run with the **cache off** (the test env default). That
   is the point: they must prove the read is genuinely batched, not that a cache

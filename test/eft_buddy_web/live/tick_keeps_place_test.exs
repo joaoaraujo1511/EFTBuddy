@@ -5,7 +5,7 @@ defmodule EftBuddyWeb.TickKeepsPlaceTest do
 
   Every tick used to go through the same reset as a new filter or search, so a
   reader 120 rows down was sent back to the first page with everything
-  collapsed after each click (audit §9, "list behaviour").
+  collapsed after each click.
   """
   use EftBuddyWeb.ConnCase, async: false
 

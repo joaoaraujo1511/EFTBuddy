@@ -12,8 +12,7 @@ defmodule EftBuddy.Ammo do
 
   Where a round can be bought (trader, flea, barter, craft) used to be derived
   here too, from four `buy_for`/recipe queries rebuilt on every ten-minute price
-  tick, and warmed 144 times a day. Nothing ever displayed it, so it is gone
-  (audit L1).
+  tick, and warmed 144 times a day. Nothing ever displayed it, so it is gone.
   """
 
   import Ecto.Query

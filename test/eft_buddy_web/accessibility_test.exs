@@ -1,6 +1,6 @@
 defmodule EftBuddyWeb.AccessibilityTest do
   @moduledoc """
-  The accessibility fixes from audit L30, pinned on the rendered HTML.
+  Accessibility fixes, pinned on the rendered HTML.
 
   None of these break anything a sighted mouse user would see, which is
   exactly why they regressed unnoticed before: a label that lost its `for`, a

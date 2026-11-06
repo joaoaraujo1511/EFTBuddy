@@ -227,7 +227,7 @@ defmodule EftBuddyWeb.CoreComponents do
 
   # A field's errors, in a container the field names with `aria-describedby`, so
   # a screen reader announces them with the field rather than leaving them as
-  # unrelated text after it (audit L30). The label's `for` does the same for
+  # unrelated text after it. The label's `for` does the same for
   # the label.
   attr :id, :any, required: true
   attr :errors, :list, required: true

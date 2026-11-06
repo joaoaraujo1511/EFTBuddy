@@ -205,7 +205,7 @@ defmodule EftBuddy.Wiki.Sync do
   # ONLY the ones that would be WIP. The blacklist used to remove every event-page
   # title, including 24 that tarkov.dev serves as real tasks (Icebreaker: Stick
   # to It, Saving Private Roman, the Labyrinth quests), so their Tasks rows had no
-  # guide, objective images or karma requirement (audit H13). A quest matched to
+  # guide, objective images or karma requirement. A quest matched to
   # a real task is not WIP, so it keeps its wiki guide, keyed by the task's slug,
   # and still appears on the Events tab as well.
   #
@@ -226,8 +226,8 @@ defmodule EftBuddy.Wiki.Sync do
     # skipped without fetching a single section.
     revisions = current_revision_ids(all_quests)
 
-    # Pages judged blacklisted at their current revision are not fetched at all
-    # (audit N2); the verdict depends only on the page itself.
+    # Pages judged blacklisted at their current revision are not fetched at all;
+    # the verdict depends only on the page itself.
     {still_blacklisted, candidates} = split_known_blacklisted(all_quests, revisions)
     {quests, unchanged} = partition_by_revision(candidates, revisions)
 
@@ -304,8 +304,7 @@ defmodule EftBuddy.Wiki.Sync do
   # parsed for a WIP or a real quest (`Dump.parse_raw_section/2`). Comparing
   # revisions alone kept a quest that tarkov.dev had since added stored as WIP,
   # unmatched, until someone happened to edit its wiki page; 143 rows sat like
-  # that in a dev database, every one of them a live task (found verifying audit
-  # H13).
+  # that in a dev database, every one of them a live task.
   #
   # `wip`, not `task_id`: every quest has one task row per game mode under the
   # same slug, and the index adopts whichever sorts first, so the stored id can
@@ -490,7 +489,7 @@ defmodule EftBuddy.Wiki.Sync do
   #
   # And only when every part of the page was fetched. A section, image or roster
   # that failed was stored empty, and a stamped revision would make the next runs
-  # skip the page until an editor touched it (audit H11). `nil` means "scrape it
+  # skip the page until an editor touched it. `nil` means "scrape it
   # again", which is what an incomplete page needs.
   defp revision_to_stamp(quest, revisions) do
     case PageGaps.gaps() do

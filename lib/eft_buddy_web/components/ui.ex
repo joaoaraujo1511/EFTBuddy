@@ -54,7 +54,7 @@ defmodule EftBuddyWeb.UI do
   Every item link goes through here. Building them as `"/items?q=" <>
   URI.encode(name)` left `#`, `&` and `+` unescaped, because `URI.encode/1`
   keeps reserved characters: "#FireKlean gun lube" became a fragment and
-  linked to the unfiltered catalogue (audit M14).
+  linked to the unfiltered catalogue.
 
       iex> EftBuddyWeb.UI.item_search_url("#FireKlean gun lube")
       "/items?q=%23FireKlean+gun+lube"

@@ -3,8 +3,8 @@ defmodule EftBuddy.Wiki.LiveSnapshotsTest do
   The wiki parsers and clients against trimmed copies of what the live wiki
   returned on 2026-10-18 (test/fixtures/wiki, see its README).
 
-  All of these worked against the markup of the day and nothing guarded that
-  (audit M24): the Events parser, contributor rosters, file licences, credit
+  All of these worked against the markup of the day and nothing guarded that:
+  the Events parser, contributor rosters, file licences, credit
   links, and the endgame chapter's keep-rule (26d0a10). A wiki edit that changes
   the shape they depend on now fails here instead of silently on the site.
   """

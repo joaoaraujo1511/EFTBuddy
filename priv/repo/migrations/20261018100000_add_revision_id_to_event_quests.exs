@@ -1,6 +1,6 @@
 defmodule EftBuddy.Repo.Migrations.AddRevisionIdToEventQuests do
   @moduledoc """
-  The wiki revision each event quest's walkthrough was scraped at (audit M22).
+  The wiki revision each event quest's walkthrough was scraped at.
 
   The events scrape re-fetched all ~250 event quest pages every twelve hours,
   14-16 minutes and about 1,700 requests per run against a wiki that

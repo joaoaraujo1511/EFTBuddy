@@ -133,7 +133,7 @@ defmodule EftBuddyWeb.OperatorState do
   # `<.count_pill>` consumers and orphaned the producer, so for its whole remaining
   # life it was six round trips per navigation for a value nothing rendered.
   #
-  # The audit prescribed caching it in `:persistent_term` with invalidation off the
+  # The first plan was caching it in `:persistent_term` with invalidation off the
   # sync telemetry. Deleting it removes the same cost with no cache, no invalidation
   # hook and no cold-read semantics to reason about — and it retired the inverted
   # `is_quest_item` partial index finding along with it, since `nav_counts/0` was

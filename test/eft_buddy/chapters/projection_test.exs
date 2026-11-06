@@ -131,7 +131,7 @@ defmodule EftBuddy.Chapters.ProjectionTest do
       assert projected.objective_count == 0
     end
 
-    test "passes identity fields through, and not the raw sections (audit M23)" do
+    test "passes identity fields through, and not the raw sections" do
       projected = Projection.project(manifest())
       assert projected.normalized_name == "boreas"
       assert projected.chapter_name == "Boreas"

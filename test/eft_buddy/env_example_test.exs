@@ -1,6 +1,6 @@
 defmodule EftBuddy.EnvExampleTest do
   @moduledoc """
-  `.env.example` documents every variable the deployment reads (audit L12).
+  `.env.example` documents every variable the deployment reads.
 
   It had fallen behind: compose required `TUNNEL_TOKEN` and `runtime.exs` read
   eight variables it never mentioned, so a contributor following setup hit a

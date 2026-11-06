@@ -12,7 +12,7 @@ defmodule EftBuddyWeb.SyncAware do
     * if the finished feed is one of this page's and the page is still waiting
       for data (`@load_state != :loaded`), the page is sent `:reload_after_sync`
       and reloads. A page that mounted before its first sync used to sit in
-      standby until the visitor reloaded it by hand (audit L18).
+      standby until the visitor reloaded it by hand.
 
   A page that already shows data is not reloaded under the reader; only its age
   line moves. Pages with no standby state are left alone: the bug report form,

@@ -1,7 +1,7 @@
 defmodule EftBuddyWeb.LongPollCap do
   @moduledoc """
   Caps what a client can POST to the LiveView long-poll transport at the same
-  size the WebSocket transport allows per frame (audit M27).
+  size the WebSocket transport allows per frame.
 
   `max_frame_size` bounds a single WebSocket frame, but long-poll has no such
   option: `Phoenix.Transports.LongPoll` reads each request body with Plug's

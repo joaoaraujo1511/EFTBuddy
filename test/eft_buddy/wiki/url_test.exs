@@ -2,7 +2,7 @@ defmodule EftBuddy.Wiki.UrlTest do
   @moduledoc """
   Wiki source links are the "URI to the material" CC BY-NC-SA attribution
   requires. They were built by replacing spaces and nothing else, so five live
-  quest titles containing `?` linked to the wrong page (audit M20).
+  quest titles containing `?` linked to the wrong page.
   """
   use ExUnit.Case, async: true
 

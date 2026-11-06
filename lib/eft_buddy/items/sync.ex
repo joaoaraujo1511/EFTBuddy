@@ -260,7 +260,7 @@ defmodule EftBuddy.Items.Sync do
     # neither arrives, meaning Bootstrap died or is disabled, and then the
     # catalogue has not been synced at all. It used to be the full twelve hours,
     # so a failed Items cold start left items, prices, barters and crafts empty
-    # for half a day (audit H6). Fifteen minutes cannot race the sequence: Items'
+    # for half a day. Fifteen minutes cannot race the sequence: Items'
     # steps come first and finish in seconds.
     full_timer = arm(:full_sync, Scheduler.default_fallback_ms())
     arm(:price_sync, price_interval)
@@ -400,7 +400,7 @@ defmodule EftBuddy.Items.Sync do
   #
   # It used to return `{:ok, _}` whatever happened inside, so Bootstrap logged a
   # failed barter sync as "ok" and released the feed a full interval plus its
-  # stagger (14h) out, with an empty table (audit H6). A skip counts as not
+  # stagger (14h) out, with an empty table. A skip counts as not
   # done: it means a dependency (traders, station levels) is missing and nothing
   # was written, which is what Bootstrap's retry is for. Each sub-step still
   # reports under its own label, so `/health/sync` sees exactly which one.

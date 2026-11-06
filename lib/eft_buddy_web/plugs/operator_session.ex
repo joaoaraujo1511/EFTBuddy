@@ -101,7 +101,7 @@ defmodule EftBuddyWeb.Plugs.OperatorSession do
   # Written only when the value differs. Any `put_session`/`delete_session`
   # marks the session changed, and Plug then re-signs and re-sends the session
   # cookie, which it did on every single response because this ran
-  # unconditionally (audit L24).
+  # unconditionally.
   defp bridge_client_prefs(conn) do
     current = get_session(conn, prefs_key())
 

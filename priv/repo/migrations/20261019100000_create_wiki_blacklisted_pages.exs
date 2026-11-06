@@ -8,7 +8,7 @@ defmodule EftBuddy.Repo.Migrations.CreateWikiBlacklistedPages do
   Blacklisted pages get no `wiki_quests` row, so they had no stored revision and
   read as "changed" on every run: the quest scrape fetched the lead section of
   all ~197 of them every six hours, about 400 requests per run, only to skip
-  them again (audit finding N2). The verdict depends only on the page's own lead
+  them again. The verdict depends only on the page's own lead
   section, so it holds until the page is edited.
   """
 

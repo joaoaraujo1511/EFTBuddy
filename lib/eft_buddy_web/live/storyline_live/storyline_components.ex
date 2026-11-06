@@ -37,7 +37,7 @@ defmodule EftBuddyWeb.StorylineComponents do
 
   # The vendored icons, listed once per boot. This was a `File.exists?` per
   # chapter per render, a disk read on the Pi's SD card for every card on the
-  # storyline page (audit L31), for a set that only changes in a deploy.
+  # storyline page, for a set that only changes in a deploy.
   defp local_chapter_icons do
     case :persistent_term.get({__MODULE__, :chapter_icons}, nil) do
       nil ->
