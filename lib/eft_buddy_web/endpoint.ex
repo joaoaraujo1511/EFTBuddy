@@ -5,6 +5,9 @@ defmodule EftBuddyWeb.Endpoint do
   # come after `use Phoenix.Endpoint`; see `EftBuddyWeb.LongPollCap`.
   @before_compile EftBuddyWeb.LongPollCap
 
+  # Temporary: remove after 2026-11-20. See `EftBuddyWeb.TransportLog`.
+  @before_compile EftBuddyWeb.TransportLog
+
   # The session will be stored in the cookie and signed,
   # this means its contents can be read but not tampered with.
   # Set :encryption_salt if you would also like to encrypt it.
