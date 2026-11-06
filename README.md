@@ -40,12 +40,13 @@ edited by hand.
 You need Erlang/OTP and Elixir (versions in `.tool-versions`) and PostgreSQL.
 
 ```sh
-cp .env.example .env     # fill it in, then export it into your shell
-mix setup                # dependencies, database, assets
-mix phx.server           # http://localhost:$PORT
+cp .env.dev.example .env    # matches a stock local PostgreSQL
+set -a; . ./.env; set +a    # export it into your shell
+mix setup                   # dependencies, database, assets
+mix phx.server              # http://localhost:4000
 ```
 
-There is no dotenv loader, so export the variables yourself. `PORT` is required.
+The app fills its own database from public sources on first start.
 
 ### Tests
 
