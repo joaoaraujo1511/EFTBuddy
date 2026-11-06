@@ -14,10 +14,13 @@ Thanks for helping. Bug reports, fixes and improvements are all welcome.
 
 ## Setting up
 
-The [README](../README.md) covers running the app and the tests. In short: the
-Erlang and Elixir versions in `.tool-versions`, a local PostgreSQL, then
-`mix setup` and `mix phx.server`. See the
-[architecture overview](../docs/ARCHITECTURE.md) for how the app fits together.
+See the [architecture overview](../docs/ARCHITECTURE.md) for how the app fits
+together.
+
+The checks below need the Erlang and Elixir versions in `.tool-versions` and a
+local PostgreSQL. Run `mix deps.get` first. The test suite uses its own `TEST_DB_*`
+variables and refuses to run against a non-local database. If your local Postgres
+isn't the stock `postgres`/`postgres`, export `TEST_DB_PASSWORD` first.
 
 ## Making a change
 

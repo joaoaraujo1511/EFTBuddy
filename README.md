@@ -45,39 +45,6 @@ import or reset your progress.
 Background jobs re-sync everything on a schedule, so the catalogue is never
 edited by hand.
 
-## Run it locally
-
-You need Erlang/OTP and Elixir (versions in `.tool-versions`) and PostgreSQL.
-
-```sh
-cp .env.dev.example .env    # matches a stock local PostgreSQL
-set -a; . ./.env; set +a    # export it into your shell
-mix setup                   # dependencies, database, assets
-mix phx.server              # http://localhost:4000
-```
-
-The app fills its own database from public sources on first start.
-
-### Tests
-
-```sh
-mix test
-node --test "assets/js/*.test.mjs"
-```
-
-The suite uses its own `TEST_DB_*` variables and refuses to run against a
-non-local database. If your local Postgres isn't the stock `postgres`/`postgres`,
-export `TEST_DB_PASSWORD` first.
-
-### Before you push
-
-```sh
-mix precommit
-mix credo
-```
-
-CI runs the same checks, and they must pass before a merge.
-
 ## Project layout
 
 | Path | Contents |

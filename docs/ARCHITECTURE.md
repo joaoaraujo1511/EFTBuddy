@@ -63,8 +63,7 @@ There are no accounts, so the browser holds the durable record:
 ## Configuration
 
 Everything is read at runtime in `config/runtime.exs`, so one image runs in any
-environment. Local development settings are in `.env.dev.example`, and production
-ones in `.env.example`.
+environment. Production settings are in `.env.example`.
 
 ## Tests
 
