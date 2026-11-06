@@ -4,10 +4,20 @@ An unofficial companion web app for *Escape from Tarkov*: quests, items, the fle
 market, the hideout, ammo, maps, events and the storyline, kept current from
 public data sources.
 
-No accounts and no login. Your progress lives in your own browser.
+**Use it at [eftbuddy.app](https://eftbuddy.app).** No accounts and no login. Your
+progress lives in your own browser.
 
 > EFT Buddy is a non-commercial fan project and is **not affiliated with or
 > endorsed by Battlestate Games**. See [`NOTICE`](NOTICE).
+
+## Contributing
+
+This project is open source so that others can help maintain and improve it. Bug
+reports, fixes and ideas are all welcome.
+
+- [Contributing guide](.github/CONTRIBUTING.md)
+- [Architecture overview](docs/ARCHITECTURE.md)
+- [Open issues](https://github.com/joaoaraujo1511/EFTBuddy/issues)
 
 ## Features
 
@@ -52,93 +62,21 @@ The app fills its own database from public sources on first start.
 
 ```sh
 mix test
-```
-
-The suite uses its own `TEST_DB_*` variables, never the `DB_*` ones, and refuses
-to run against a non-local database. If your local Postgres isn't the stock
-`postgres`/`postgres`, export `TEST_DB_PASSWORD` first.
-
-The browser-side progress helpers have their own tests, run with Node's built-in
-runner (no `npm install`):
-
-```sh
 node --test "assets/js/*.test.mjs"
 ```
+
+The suite uses its own `TEST_DB_*` variables and refuses to run against a
+non-local database. If your local Postgres isn't the stock `postgres`/`postgres`,
+export `TEST_DB_PASSWORD` first.
 
 ### Before you push
 
 ```sh
 mix precommit
+mix credo
 ```
 
-This runs the dependency audits, a warnings-as-errors compile, the formatter
-check, Sobelow and the test suite.
-
-CI runs the same steps plus two more, and both block a merge: `mix credo`
-(against `.credo.exs`) and the JavaScript tests. Run them before pushing too.
-
-## Configuration
-
-All configuration is read at runtime, so one image runs anywhere.
-`.env.example` lists the variables. Three are easy to get wrong:
-
-- **`PHX_HOST`** must be a bare hostname (no scheme, port or slash). If it's
-  wrong, pages still load but every live connection is rejected.
-- **`SECRET_KEY_BASE`**: generate it with `mix phx.gen.secret`.
-- **`DB_PASSWORD`** is kept separate from `DATABASE_URL` so it never shows up
-  in logs.
-
-## Deploying
-
-The production setup is three containers in one Compose file, behind a
-Cloudflare Tunnel, so the host opens no inbound ports:
-
-```
-Browser → Cloudflare → cloudflared → app :4000 → db :5432
-```
-
-You need `TUNNEL_TOKEN` in `.env` for the `cloudflared` service; Compose
-refuses to start without it. Copy it from the tunnel's page in the Cloudflare
-Zero Trust dashboard, and treat it like a private key.
-
-```sh
-git pull
-GIT_SHA=$(git rev-parse --short HEAD) docker compose build app
-docker compose run --rm migrate < /dev/null
-docker compose up -d < /dev/null
-```
-
-- Build **before** `up -d`, and don't run `down` first. The old container keeps
-  serving while the new image builds.
-- Migrations run as their own one-shot container, not on app start.
-- Keep `< /dev/null` when scripting this over SSH. Compose reads stdin and will
-  otherwise swallow the rest of your script.
-
-### Is it healthy?
-
-| Endpoint | Meaning |
-|---|---|
-| `/health` | The app and database are up. `version` is the deployed commit, so check it after a deploy |
-| `/health/sync` | Every data feed is fresh. Returns 503 when any feed is stale, failing or blocked by a safety guard. Shows only each feed's state and age |
-
-Point an uptime monitor at `/health/sync`. Stale game data still renders fine,
-so this is the only place it shows.
-
-### Admin endpoint
-
-The full readiness detail (staleness budgets, next planned runs, refused prunes,
-run records, cache state) is on a separate endpoint that is off unless
-`ADMIN_DASHBOARD_PORT` is set. Compose publishes it to loopback only, so reach
-it over an SSH tunnel from your workstation:
-
-```sh
-ssh -N -L 4001:127.0.0.1:4001 user@host
-curl http://localhost:4001/health/sync
-```
-
-Your SSH key is the access control; there is no login. Phoenix LiveDashboard
-used to run here and is disabled for now: its pages are kept for a fuller
-dashboard that will replace it.
+CI runs the same checks, and they must pass before a merge.
 
 ## Project layout
 
@@ -151,11 +89,16 @@ dashboard that will replace it.
 | `test/` | Test suite |
 | `config/runtime.exs` | All runtime configuration |
 
-Comments in the code usually explain *why* something is done a certain way,
-often because the obvious alternative broke in production. Read them before
-changing the code.
+Comments in the code usually explain *why* something is done a certain way. Read
+them before changing the code.
+
+## Hosting
+
+[eftbuddy.app](https://eftbuddy.app) is the project's own instance. The licence
+allows you to run your own, but this isn't supported. For reference, see
+[how eftbuddy.app runs](docs/DEPLOYMENT.md).
 
 ## Licence
 
 [GNU AGPL v3](LICENSE). Game names, images and other material belong to their
-owners; see [`NOTICE`](NOTICE) for attribution and third-party terms.
+owners; see [`NOTICE`](NOTICE).
